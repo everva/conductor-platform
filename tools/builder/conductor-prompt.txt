@@ -46,16 +46,16 @@ result="fail" (or "blocked" if you cannot make progress) with the failing check 
 checks[]. A false-green (reporting pass while anything is red, or skipping a gate command) is
 the single worst outcome — ADR-0003 forbids it absolutely.
 
-== BRANCH + COMMIT (ADR-0004) ==
-- Work on a short-lived branch cut from fresh `develop`: `conductor/builder/<task_id>`
-  (or, if a per-task git worktree already exists for this task, work there). Never commit to
-  develop directly; never open a PR.
-- Only AFTER the full gate is green, make ONE commit. The commit subject MUST carry the
-  deterministic merge trailer so the reconciler can detect the landing:
+== BRANCH + COMMIT (ADR-0004 / ADR-0014) ==
+- You are ALREADY inside a per-task git worktree at repo_path, on the short-lived branch
+  `conductor/builder/<task_id>` (given as `branch:` in the scenario header) cut from fresh
+  develop. Work ONLY here. Never touch develop directly, never open a PR, and NEVER MERGE.
+  The builder tick re-runs the full gate INDEPENDENTLY and performs the squash-merge itself
+  (ADR-0014 / Rule#9) — your job ENDS at the commit on your branch.
+- Only AFTER your own full gate is green, make ONE commit ON YOUR BRANCH. The commit subject
+  MUST carry the deterministic trailer (the tick detects the landing by it):
       <type>(<scope>): <summary> [task:<task_id>] [agent:builder-performer]
-  Then squash-merge into develop and report the resulting develop commit_sha. (If you cannot
-  perform the merge in this environment, leave the commit on the branch and report its sha plus
-  branch; the reconciler/operator will complete the merge — but say so in summary.)
+  Report `branch` and the `commit_sha` of THAT commit. Do NOT merge; do NOT push develop.
 
 == OUTPUT: schema-forced Verdict JSON (ADR-0014, the LAST thing you print) ==
 Print exactly ONE JSON object as the final output, no prose around it, no markdown fence
@@ -64,8 +64,8 @@ required (the builder extracts the last balanced {...} that has a "result" key).
 {
   "task_id": "<the task_id you were given>",
   "result": "pass | fail | blocked",
-  "branch": "conductor/builder/<task_id> | develop | null",
-  "commit_sha": "<7-40 hex sha of the landed/staged commit> | null",
+  "branch": "conductor/builder/<task_id>",
+  "commit_sha": "<7-40 hex sha of your commit ON THAT BRANCH> | null",
   "checks": [
     {"name": "go build",        "result": "pass | fail", "evidence": "<short, e.g. exit 0 / first error>"},
     {"name": "go test",         "result": "pass | fail", "evidence": "ok: 12 pass / or first failing test"},
@@ -81,7 +81,7 @@ Rules for the Verdict:
 - result="pass" ONLY if every checks[] entry is pass AND a commit exists. Otherwise fail/blocked.
 - If you hit an auth wall ("Not logged in" / token expired) you cannot recover — stop; the
   builder detects that string and halts the whole tick (do not fake a verdict).
-- Facts only. No re-summarizing test logs into optimistic prose. emin değilsen blocked.
+- Facts only. No re-summarizing test logs into optimistic prose. If unsure, return blocked.
 
 Begin now: read the appended scenario, locate the package(s) under repo_path, write tests
 first, implement behind the frozen contracts, run the full gate, commit with the [task:] trailer,

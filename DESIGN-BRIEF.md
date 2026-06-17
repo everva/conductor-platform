@@ -50,6 +50,7 @@ Bu oturumda: **tasarım + çekirdek inşa.** Mevcut optiway FX/IC işleri ayrı 
    - **human-merge zorunlu:** auth/credential, destructive (DROP TABLE), migration, RBAC. (Risk-skorlama dosya-yoluna BAKMIYOR — bug; fix yerine 80/80 config + human-merge marker kullandık.)
    - **Yük yönetimi:** çok eşzamanlı CI/claude -p → load patlaması (load 41 yaşadık; remote-control daemon swap'i tüketip impl'i hang'letti). Platform host kaynağını throttle ETMELİ.
    - **PATH gotcha:** non-login shell'de `claude` (`~/.local/bin`) + `pnpm` (`~/.local/share/pnpm/bin`) PATH'te değil → unattended wrapper export etmeli.
+   - **Holdout heading gotcha:** DF inline-holdout'u YALNIZCA `^## Holdout Scenarios` (İngilizce, case-sensitive) eşliyor (`run-task.sh` awk strip+extract). Türkçe `## Holdout senaryoları` SESSİZCE YOK SAYILIR (impl'den strip edilmez + validator'a gitmez) → optiway IC spec'leri bu tuzağa düştü (holdout'ları kozmetikti). Platform scaffolder/spec-template bu başlığı ZORLAMALI + lint etmeli. (FX1-5 doğru başlıkla yazıldı.)
 
 ---
 
@@ -133,6 +134,22 @@ Bu oturumda: **tasarım + çekirdek inşa.** Mevcut optiway FX/IC işleri ayrı 
 - kakbet memory (bu session'ın geçmişi): `~/.claude/projects/-Users-atakan-Documents-GitHub-kakbet/memory/optiway-import-cache-task.md` + `conductor-sentinel-plan.md`. (Yeni oturum kakbet memory'sini OTO-YÜKLEMEZ — gerekirse elle oku.)
 
 ---
+
+## 8b. ENGINE-HARDENING BACKLOG (optiway conductor'da KANITLANARAK çıkarıldı, 2026-06-17)
+optiway conductor uçtan uca otonom self-merge KANITLANDI (IC1/2/3 + FX4 #924 + FX5 #925 — conductor kendi implement+holdout+ship+merge etti). Yol boyunca çıkan KANITLI fix'ler + KALAN sertleştirme (platform bunları jenerik motor/provisioner'a gömmeli):
+**KANITLI (davinci plugin/config'de canlı — platforma taşı):**
+- **holdout_timeout 300→1800**: holdout validator çok-senaryo doğruluyor (>8dk); 300 buffered-output'u kill edip 0-byte yapıyordu.
+- **holdout empty-retry (2→4 + backoff 20)**: transient/hızlı-empty `claude -p` dönüşlerine dayanıklılık.
+- **CI-gated self-merge (explicit poll)**: free-plan branch-protection yok → merge'i `gh pr checks` poll'üyle gate'le (yeşil değilse merge yok); `--auto` çalışmaz (allow_auto_merge=false).
+- **layer-from-backlog** (issue yoksa backlog `Layer` kolonu); **başla-exemption** (`DF_SESSION_ID` → conductor ön-yetkili, interaktif insan kapısı korunur); **FAZ 10.9 backlog-completion** (PR'a işle → chain ilerler); **FAZ 11b refs-sync self-resolve**.
+- **gh-token git push** (deploy-key read-only sorununa karşı `gh auth setup-git` + https origin).
+- **holdout heading**: SADECE İngilizce `^## Holdout Scenarios` eşleşiyor (Türkçe sessiz yok-sayılır).
+**KALAN (platform engine/env-hardening — YAPILACAK):**
+1. **Holdout stream-json robustluk** (asıl tam çözüm): holdout/satisfaction `claude -p`'yi `--output-format stream-json` yap → timeout/empty partial-output'u yok etmez + teşhis-edilebilir. (retry+timeout palyatif; bu kalıcı.)
+2. **Resource-governor / host-model**: davinci PAYLAŞILAN makine (başka proje rabbitmq/redis/node/CI yükü load'u 12-15'e çıkarıyor) → conductor holdout-empty + impl-jest-hang'i bundan. Per-conductor resource-isolation / scheduling / dedicated test-env GEREK. (Bu, residual-flakiness'in kökü.)
+3. **Backend test-env provisioning**: integration test'ler rabbitmq/redis/postgres'e ihtiyaç duyuyor; conductor run-context'inde güvenilir ayağa kalkmıyor → jest-hang (FX1/FX3 bu yüzden hold). Workspace-provisioner test-servisleri provision etmeli + jest-exit (`--forceExit`/teardown). 
+4. **sat_timeout 300→1800** (holdout gibi; şimdilik all-tier-CI-gate bloklamıyor ama yavaşlatıyor).
+5. **Plugin patch'leri version-control'e** (everva/dark-factory upstream) — şu an davinci-local, update'te kaybolur.
 
 ## 9. İlk oturum çıktısı (hedef)
 1. §6 açık kararları kapat (kullanıcıyla).

@@ -217,17 +217,42 @@ le["active"].append({"task": tid, "pid": pid, "started_at": int(time.time())})
 json.dump(le, open(lep, "w"), indent=2, ensure_ascii=False)
 PYEOF
 
+# ---- per-task git worktree (ADR-0017): isolate the performer from develop -----
+# The performer works ONLY inside this worktree, on a short-lived branch cut from
+# FRESH develop (ADR-0004). It commits here but does NOT merge. The tick merges
+# deterministically AFTER an INDEPENDENT gate re-run (ADR-0014 / Rule#9). This is
+# also the Faz-1a stand-in for ADR-0018: never trust the performer's self-report.
+BR="conductor/builder/$TASK_ID"
+WT="$RUNTIME/worktrees/$TASK_ID"
+cleanup_worktree() {
+  git -C "$REPO" worktree remove --force "$WT" 2>/dev/null || rm -rf "$WT"
+  git -C "$REPO" branch -D "$BR" 2>/dev/null || true
+}
+if ! git -C "$REPO" show-ref --verify --quiet refs/heads/develop; then
+  log "FATAL: no 'develop' branch in $REPO (bootstrap: git checkout -b develop) — skipping"
+  exit 0
+fi
+git -C "$REPO" worktree prune 2>/dev/null || true
+cleanup_worktree   # remove any stale worktree/branch from a crashed prior tick
+if ! git -C "$REPO" worktree add -B "$BR" "$WT" develop 2>>"$LOG"; then
+  log "FATAL: worktree add failed for $TASK_ID — skipping (will retry next fire)"
+  exit 0
+fi
+trap 'cleanup_worktree; rm -rf "$LOCK"' EXIT   # supersede the lock-only trap
+log "worktree ready: $WT (branch $BR from fresh develop)"
+
 # ---- build the performer stdin (ADR-0014 contract) ---------------------------
 # stdin = the performer prompt (instruction) + the scenario YAML (spec + public
 # acceptance tests + holdout pointer). The performer runs the FULL pipeline
-# (architect -> test-first -> dev -> self-heal -> gate -> commit) INSIDE itself
-# and prints a schema-forced Verdict JSON on stdout. Go does NOT orchestrate the
-# pipeline (ADR-0014).
+# (architect -> test-first -> dev -> self-heal -> gate -> commit) INSIDE itself,
+# IN THE WORKTREE, and prints a schema-forced Verdict JSON. It commits to its
+# branch but NEVER merges (the tick does, after re-verifying). ADR-0014.
 PERFORMER_INPUT="$(
   cat "$PROMPT_FILE"
   printf '\n\n===== TASK / SCENARIO (YAML) =====\n'
   printf 'task_id: %s\n' "$TASK_ID"
-  printf 'repo_path: %s\n' "$REPO"
+  printf 'repo_path: %s\n' "$WT"
+  printf 'branch: %s\n' "$BR"
   printf -- '---\n'
   cat "$SCEN_PATH"
 )"
@@ -421,10 +446,11 @@ else:
     task["commit_sha"] = verdict.get("commit_sha")
     res = (verdict.get("result") or "").lower()
     if res == "pass":
-        # the Go gate (build+test+vet+lint) ran and passed INSIDE the performer
-        # (ADR-0014/0019). Trust the deterministic Verdict; never re-judge.
-        task["status"] = "done"; task["blocked_reason"] = None
-        outcome = "DONE (verdict pass)"
+        # Rule#9 / ADR-0014: do NOT blindly trust the performer's self-reported
+        # pass (a false-green is the worst outcome — ADR-0003). Leave the task
+        # running; the bash layer below re-runs the FULL gate INDEPENDENTLY in the
+        # worktree and only then merges + marks done (or blocks on a false-green).
+        print("PASS"); sys.exit(0)
     else:
         task["retry_count"] = task.get("retry_count", 0) + 1
         br = verdict.get("blocked_reason") or f"verdict={res}"
@@ -442,6 +468,64 @@ PYEOF
 )"
 
 log "tick result task=$TASK_ID -> $RESULT (killed=${killed:-no}, rc=$rc)"
+
+# ---- PASS path: INDEPENDENT gate re-run + deterministic merge (Rule#9/ADR-0014)
+# The performer only committed to its branch in the worktree. We do NOT trust its
+# self-reported pass: re-run the FULL gate ourselves, in the worktree. Green ->
+# squash-merge into develop with the [task:<id>] trailer (ADR-0004), mark done.
+# Red -> the performer reported a FALSE-GREEN; never merge a red gate (ADR-0003).
+if [ "$RESULT" = "PASS" ]; then
+  log "verdict=pass; re-running gate INDEPENDENTLY in $WT (no blind trust — Rule#9)"
+  gate_ok=1
+  ( cd "$WT" && go build ./... ) >>"$LOG" 2>&1 || gate_ok=0
+  [ "$gate_ok" = 1 ] && { ( cd "$WT" && go test ./... ) >>"$LOG" 2>&1 || gate_ok=0; }
+  [ "$gate_ok" = 1 ] && { ( cd "$WT" && go vet ./...  ) >>"$LOG" 2>&1 || gate_ok=0; }
+  if [ "$gate_ok" = 1 ] && command -v golangci-lint >/dev/null 2>&1; then
+    ( cd "$WT" && golangci-lint run ) >>"$LOG" 2>&1 || gate_ok=0
+  fi
+  FINAL="BLOCKED"; FINAL_NOTE=""; MSHA=""
+  if [ "$gate_ok" = 1 ]; then
+    # tick owns the merge (deterministic), not the performer (ADR-0014/Rule#9).
+    if git -C "$REPO" checkout develop 2>>"$LOG" \
+       && git -C "$REPO" merge --squash "$BR" 2>>"$LOG" \
+       && git -C "$REPO" commit -q -m "build($TASK_LANE): $TASK_ID [task:$TASK_ID] [agent:builder-performer]" 2>>"$LOG"; then
+      MSHA="$(git -C "$REPO" rev-parse --short HEAD)"
+      git -C "$REPO" push -q origin develop 2>>"$LOG" || log "WARN: push develop failed (commit local; reconcile detects [task:$TASK_ID])"
+      FINAL="DONE"; FINAL_NOTE="independent gate green; squash-merged develop $MSHA"
+      log "MERGED task=$TASK_ID -> develop $MSHA (independent gate green)"
+    else
+      git -C "$REPO" merge --abort 2>/dev/null || true
+      FINAL_NOTE="merge-failed after green gate (conflict?)"
+      log "MERGE FAILED task=$TASK_ID after green gate — blocking/retry"
+    fi
+  else
+    FINAL_NOTE="FALSE-GREEN: performer reported pass but independent gate is RED"
+    log "FALSE-GREEN task=$TASK_ID — performer said pass, independent gate failed — NOT merging (Rule#9)"
+  fi
+  # finalize ledger + release lease (DONE, or retry/blocked on false-green/merge-fail)
+  "$PYTHON" - "$LEDGER" "$LEASES" "$JOURNAL_DIR" "$TASK_ID" "$FINAL" "$FINAL_NOTE" "${MSHA:-}" <<'PYEOF'
+import json, sys, time, os
+lp, lep, jdir, tid, final, note, sha = sys.argv[1:8]
+d = json.load(open(lp))
+t = next((x for x in d.get("tasks", []) if x["id"] == tid), None)
+if t is not None:
+    with open(os.path.join(jdir, f"{tid}.md"), "a") as f:
+        f.write(f"\n## tick-finalize @ {time.strftime('%Y-%m-%dT%H:%M:%S%z')}\n- {final}: {note}\n")
+    if final == "DONE":
+        t["status"] = "done"; t["commit_sha"] = sha or t.get("commit_sha"); t["last_verdict"] = "pass"; t["blocked_reason"] = None
+    else:
+        t["retry_count"] = t.get("retry_count", 0) + 1
+        if t["retry_count"] >= 2:
+            t["status"] = "blocked"; t["blocked_reason"] = note
+        else:
+            t["status"] = "ready"; t["blocked_reason"] = None
+    json.dump(d, open(lp, "w"), indent=2, ensure_ascii=False)
+le = json.load(open(lep)); le["active"] = [a for a in le.get("active", []) if a.get("task") != tid]
+json.dump(le, open(lep, "w"), indent=2, ensure_ascii=False)
+PYEOF
+  log "finalize task=$TASK_ID -> $FINAL ($FINAL_NOTE)"
+  git -C "$REPO" checkout develop 2>/dev/null || true   # leave repo on develop
+fi
 
 # refresh heartbeat (best-effort; reconcile + external alerter read it)
 "$PYTHON" "$HB_SCRIPT" 2>/dev/null || true
