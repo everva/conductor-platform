@@ -38,6 +38,7 @@ import (
 
 	"github.com/everva/conductor-platform/internal/conductor"
 	"github.com/everva/conductor-platform/internal/engine"
+	"github.com/everva/conductor-platform/internal/governor"
 	"github.com/everva/conductor-platform/internal/provisioner"
 	"github.com/everva/conductor-platform/internal/registry"
 	"github.com/everva/conductor-platform/internal/statestore"
@@ -84,6 +85,12 @@ type config struct {
 	once bool
 	// hostID identifies this host on the leases it acquires.
 	hostID string
+	// globalCap is the governor's max concurrent tasks across all projects
+	// (ADR-0008). The lease table is the live count; this caps it.
+	globalCap int
+	// loadCeiling is the governor's normalized-load ceiling (loadavg / NumCPU)
+	// above which new work is denied admission (ADR-0008 "host yük tavanı").
+	loadCeiling float64
 }
 
 // run parses argv, builds the daemon, and drives it once or in a loop. It is
@@ -136,6 +143,10 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 	timeout := fs.Duration("timeout", envDurationOr("CONDUCTOR_TIMEOUT", defaultTimeout), "per-develop subprocess timeout")
 	once := fs.Bool("once", envBoolOr("CONDUCTOR_ONCE", false), "run a single tick and exit (exit 0 on success)")
 	maxConc := fs.Int("max-concurrent", envIntOr("CONDUCTOR_MAX_CONCURRENT", 1), "max concurrent tasks (Faz-1a: must be 1)")
+	globalCap := fs.Int("global-cap", envIntOr("CONDUCTOR_GLOBAL_CAP", governor.DefaultGlobalCap),
+		"governor: max concurrent tasks across all projects (lease-derived; ADR-0008)")
+	loadCeiling := fs.Float64("load-ceiling", envFloatOr("CONDUCTOR_LOAD_CEILING", governor.DefaultLoadCeiling),
+		"governor: normalized 1-min load ceiling (loadavg/NumCPU) above which new work is denied")
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "conductor — Faz-1a tick daemon")
@@ -172,14 +183,16 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 	}
 
 	return config{
-		project:    *project,
-		rootDir:    *rootDir,
-		baseBranch: *baseBranch,
-		interval:   *interval,
-		timeout:    *timeout,
-		developCmd: cmd,
-		once:       *once,
-		hostID:     host,
+		project:     *project,
+		rootDir:     *rootDir,
+		baseBranch:  *baseBranch,
+		interval:    *interval,
+		timeout:     *timeout,
+		developCmd:  cmd,
+		once:        *once,
+		hostID:      host,
+		globalCap:   *globalCap,
+		loadCeiling: *loadCeiling,
 	}, nil
 }
 
@@ -231,6 +244,19 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		return cfg.rootDir + "/clones/" + projectID
 	})
 
+	// Resource-governor (ADR-0008, N-5): admission control consulted before each
+	// lease/develop. The global count is derived from the shared lease table
+	// (ListLeases), never a parallel counter; host load is read through the
+	// default system probe. Default config is permissive enough not to false-deny
+	// on a normal dev machine.
+	gov, err := governor.New(store, governor.SystemLoadProbe{}, governor.Config{
+		GlobalCap:   cfg.globalCap,
+		LoadCeiling: cfg.loadCeiling,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("governor: %w", err)
+	}
+
 	cond, err := conductor.New(conductor.Deps{
 		Store:       store,
 		Picker:      registry.NewRegistry(store),
@@ -242,7 +268,8 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 			{Name: "go build", Argv: []string{"go", "build", "./..."}},
 			{Name: "go test", Argv: []string{"go", "test", "./..."}},
 		}},
-		HostID: cfg.hostID,
+		HostID:   cfg.hostID,
+		Governor: gov,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("conductor: %w", err)
@@ -333,6 +360,9 @@ func (d *Daemon) tick(ctx context.Context) (conductor.TickResult, error) {
 	if res.MergeSHA != "" {
 		attrs = append(attrs, slog.String("merge_sha", res.MergeSHA))
 	}
+	if res.DenyReason != "" {
+		attrs = append(attrs, slog.String("deny_reason", string(res.DenyReason)))
+	}
 
 	if err != nil {
 		attrs = append(attrs, slog.String("err", err.Error()))
@@ -384,6 +414,16 @@ func envIntOr(key string, def int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
+		}
+	}
+	return def
+}
+
+// envFloatOr returns the float parsed from env var key, or def when unset/unparseable.
+func envFloatOr(key string, def float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
 		}
 	}
 	return def

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/everva/conductor-platform/internal/engine"
+	"github.com/everva/conductor-platform/internal/governor"
 	"github.com/everva/conductor-platform/internal/registry"
 	"github.com/everva/conductor-platform/internal/statestore"
 	"github.com/everva/conductor-platform/internal/verify"
@@ -371,6 +372,102 @@ func TestConductor_Tick_DonePersisted_SecondTickNoOp(t *testing.T) {
 	}
 	if h.merge.calls != 1 {
 		t.Fatalf("merge must happen exactly once across two ticks, got %d", h.merge.calls)
+	}
+}
+
+// fakeGovernor is a scripted Admitter: it returns a fixed Decision so the tick's
+// admission gate can be driven without a real lease table or load probe.
+type fakeGovernor struct {
+	dec   governor.Decision
+	err   error
+	calls int
+}
+
+func (f *fakeGovernor) Admit(context.Context, string) (governor.Decision, error) {
+	f.calls++
+	return f.dec, f.err
+}
+
+// TestConductor_Tick_GovernorDeny_NoOps proves a denied admission makes the tick
+// a clean no-op: no lease, no workspace, no develop, no merge — and the task
+// lifecycle is untouched (still ready), with the structured deny reason surfaced.
+func TestConductor_Tick_GovernorDeny_NoOps(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, engine.Verdict{Result: "pass"}, nil, "pass", nil)
+
+	gov := &fakeGovernor{dec: governor.Decision{Admit: false, Reason: governor.ReasonDenyGlobalCap}}
+	cond, err := New(Deps{
+		Store:       h.store,
+		Picker:      registry.NewRegistry(h.store),
+		Provisioner: h.prov,
+		Engine:      h.eng,
+		Verifier:    h.verf,
+		Merger:      h.merge,
+		HostID:      "host-1",
+		Governor:    gov,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	res, err := cond.Tick(ctx, projectID)
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if res.Outcome != OutcomeDenied {
+		t.Fatalf("outcome = %q, want denied", res.Outcome)
+	}
+	if res.DenyReason != governor.ReasonDenyGlobalCap {
+		t.Fatalf("deny reason = %q, want %q", res.DenyReason, governor.ReasonDenyGlobalCap)
+	}
+	if gov.calls != 1 {
+		t.Fatalf("governor consulted %d times, want 1", gov.calls)
+	}
+	// The denied tick touched nothing: no lease, no work, task unchanged.
+	if h.leaseHeld(t) {
+		t.Fatalf("denied tick must not take a lease")
+	}
+	if h.prov.wsCalls != 0 || h.eng.developed != 0 || h.merge.calls != 0 {
+		t.Fatalf("denied tick must do no work: ws=%d dev=%d merge=%d", h.prov.wsCalls, h.eng.developed, h.merge.calls)
+	}
+	if got := h.task(t).Status; got != registry.StatusReady {
+		t.Fatalf("task status = %q, want unchanged ready", got)
+	}
+}
+
+// TestConductor_Tick_GovernorAdmit_Proceeds proves an admit lets the green path
+// run exactly as without a governor (the gate is non-intrusive when it admits).
+func TestConductor_Tick_GovernorAdmit_Proceeds(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, engine.Verdict{Result: "pass"}, nil, "pass", nil)
+
+	gov := &fakeGovernor{dec: governor.Decision{Admit: true, Reason: governor.ReasonAdmit}}
+	cond, err := New(Deps{
+		Store:       h.store,
+		Picker:      registry.NewRegistry(h.store),
+		Provisioner: h.prov,
+		Engine:      h.eng,
+		Verifier:    h.verf,
+		Merger:      h.merge,
+		HostID:      "host-1",
+		Governor:    gov,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	res, err := cond.Tick(ctx, projectID)
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if res.Outcome != OutcomeMerged {
+		t.Fatalf("outcome = %q, want merged", res.Outcome)
+	}
+	if gov.calls != 1 {
+		t.Fatalf("governor consulted %d times, want 1", gov.calls)
+	}
+	if h.merge.calls != 1 {
+		t.Fatalf("admit must let the merge happen, got %d", h.merge.calls)
 	}
 }
 

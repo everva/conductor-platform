@@ -24,6 +24,7 @@ import (
 	"fmt"
 
 	"github.com/everva/conductor-platform/internal/engine"
+	"github.com/everva/conductor-platform/internal/governor"
 	"github.com/everva/conductor-platform/internal/statestore"
 	"github.com/everva/conductor-platform/internal/verify"
 )
@@ -52,6 +53,10 @@ const (
 	// OutcomeStopped means the tick stopped without touching the task's lifecycle
 	// because the engine hit an auth wall (ADR-0014); a human must intervene.
 	OutcomeStopped Outcome = "stopped"
+	// OutcomeDenied means admission control (the governor) denied starting new
+	// work this tick: a clean no-op that took no lease and did no develop. The
+	// denial reason is logged on the TickResult (ADR-0008 concurrency bounds).
+	OutcomeDenied Outcome = "denied"
 )
 
 // TickResult is the structured result of a single tick.
@@ -67,6 +72,9 @@ type TickResult struct {
 	Review engine.ReviewResult
 	// MergeSHA is the squash-merge commit on the base branch, set only on a merge.
 	MergeSHA string
+	// DenyReason is the governor's structured denial reason, set only when the
+	// Outcome is OutcomeDenied (admission control bounded concurrency this tick).
+	DenyReason governor.Reason
 }
 
 // Picker selects the next ready task and manages the repo-scoped lease. It is the
@@ -100,6 +108,15 @@ type Merger interface {
 	SquashMerge(ctx context.Context, project statestore.Project, task statestore.Task, ws engine.Workspace) (sha string, err error)
 }
 
+// Admitter is the resource-governor admission seam (ADR-0008, N-5): the tick
+// consults it BEFORE leasing/developing so global cap, repo-per-1, and host-load
+// bounds gate new work. It is narrowed to Admit so a fake can drive the tick;
+// governor.Governor satisfies it. The field is OPTIONAL on Deps — a nil Admitter
+// means admit-all (backward compatible), so existing wiring is unaffected.
+type Admitter interface {
+	Admit(ctx context.Context, projectID string) (governor.Decision, error)
+}
+
 // Recipe carries the per-project gate/holdout binding the tick hands to the
 // verifier (ADR-0009). It is injected, not a global.
 type Recipe struct {
@@ -119,6 +136,7 @@ type Conductor struct {
 	merger   Merger
 	recipe   Recipe
 	hostID   string
+	governor Admitter
 }
 
 // Deps bundles the injected collaborators so New has a single, named-field
@@ -140,6 +158,11 @@ type Deps struct {
 	Recipe Recipe
 	// HostID identifies this host on the leases it acquires.
 	HostID string
+	// Governor is the OPTIONAL admission controller (ADR-0008, N-5). When set,
+	// the tick consults it before leasing/developing and cleanly no-ops on a
+	// deny. A nil Governor means admit-all, keeping construction backward
+	// compatible (no resource bounds) — callers opt in by injecting one.
+	Governor Admitter
 }
 
 // New returns a Conductor wired from the injected collaborators. It errors if any
@@ -173,12 +196,13 @@ func New(d Deps) (*Conductor, error) {
 		merger:   d.Merger,
 		recipe:   d.Recipe,
 		hostID:   hostID,
+		governor: d.Governor,
 	}, nil
 }
 
 // Tick runs ONE fresh-context tick for the project (ADR-0001 sıralılık):
 //
-//	PickReady -> acquire lease -> Workspace -> Develop -> Verify
+//	PickReady -> admit (governor) -> acquire lease -> Workspace -> Develop -> Verify
 //	  -> (independent pass) squash-merge with [task:<id>] + mark done
 //	  -> (changes-requested) retry up to MaxRetries, then block
 //	  -> (malformed/no verdict) block, never fake-green
@@ -201,6 +225,21 @@ func (c *Conductor) Tick(ctx context.Context, projectID string) (TickResult, err
 			return TickResult{Outcome: OutcomeNoOp}, nil
 		}
 		return TickResult{}, fmt.Errorf("conductor: tick: pick ready: %w", err)
+	}
+
+	// Admission control (ADR-0008, N-5): consult the governor BEFORE taking a
+	// lease so global cap / repo-per-1 / host-load bounds gate new work. A deny is
+	// a clean no-op — no lease, no develop, no error, no fake work — surfaced as
+	// OutcomeDenied with the structured reason for the daemon to log. A nil
+	// governor means admit-all (backward compatible).
+	if c.governor != nil {
+		dec, derr := c.governor.Admit(ctx, projectID)
+		if derr != nil {
+			return TickResult{}, fmt.Errorf("conductor: tick: admission for %q: %w", projectID, derr)
+		}
+		if !dec.Admit {
+			return TickResult{Outcome: OutcomeDenied, TaskID: task.ID, DenyReason: dec.Reason}, nil
+		}
 	}
 
 	// Lease the repo BEFORE develop and release it in a defer so it is reclaimed
