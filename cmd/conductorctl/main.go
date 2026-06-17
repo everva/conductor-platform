@@ -182,12 +182,19 @@ func runIntake(ctx context.Context, a *app, args []string, stderr io.Writer) int
 		fs.Usage()
 		return 2
 	}
-	scenario, task, err := a.intake(ctx, *project, *file)
+	res, err := a.intake(ctx, *project, *file)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "conductorctl: %v\n", err)
 		return 1
 	}
-	_, _ = fmt.Fprintf(a.out, "intake %s (lane=%s tier=%s status=%s)\n", scenario.ID, task.Lane, task.Tier, task.Status)
+	_, _ = fmt.Fprintf(a.out, "intake: %d scenario(s) ingested, %d skipped (already present)\n",
+		len(res.Created), len(res.Skipped))
+	if len(res.Created) > 0 {
+		_, _ = fmt.Fprintf(a.out, "  created: %s\n", strings.Join(res.Created, ", "))
+	}
+	if len(res.Skipped) > 0 {
+		_, _ = fmt.Fprintf(a.out, "  skipped: %s\n", strings.Join(res.Skipped, ", "))
+	}
 	return 0
 }
 

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/everva/conductor-platform/internal/registry"
+	"github.com/everva/conductor-platform/internal/intake"
 	"github.com/everva/conductor-platform/internal/statestore"
 )
 
@@ -59,61 +59,21 @@ func (a *app) onboard(ctx context.Context, repo, baseBranch string) (statestore.
 	return p, nil
 }
 
-// intake ingests a scenario file into the ledger for projectID: it validates the
-// required fields, refuses deps that reference unknown tasks, then creates the
-// Scenario AND its todo Task. Validation happens BEFORE any write, so a rejected
-// intake leaves NO partial state.
-func (a *app) intake(ctx context.Context, projectID, scenarioPath string) (statestore.Scenario, statestore.Task, error) {
-	if projectID == "" {
-		return statestore.Scenario{}, statestore.Task{}, errors.New("intake: project is required")
-	}
-	if _, err := a.store.GetProject(ctx, projectID); err != nil {
-		return statestore.Scenario{}, statestore.Task{}, fmt.Errorf("intake: project %q: %w", projectID, err)
-	}
-
-	doc, err := parseScenarioFile(scenarioPath)
+// intake ingests a scenario file into the ledger for projectID by DELEGATING to
+// the first-class internal/intake pipeline — the ONE validated intake path. That
+// package owns the rich ADR-0012 scenario schema, deterministic validation
+// (required fields, T1..T4 tier, the repo-external holdout rule, dangling-dep
+// resolution over the project's existing tasks AND the batch), the multi-document
+// YAML loader, idempotent persistence, and the projection onto the FROZEN
+// statestore types. Validation runs over the whole batch BEFORE any write, so a
+// rejected intake leaves NO partial state (all-or-nothing). It persists through
+// whatever StateStore conductorctl built (in-memory or the shared -dsn Postgres).
+func (a *app) intake(ctx context.Context, projectID, scenarioPath string) (intake.IntakeResult, error) {
+	res, err := intake.IntakeFile(ctx, a.store, projectID, scenarioPath)
 	if err != nil {
-		return statestore.Scenario{}, statestore.Task{}, fmt.Errorf("intake: %w", err)
+		return intake.IntakeResult{}, err
 	}
-	if err := doc.validate(); err != nil {
-		return statestore.Scenario{}, statestore.Task{}, fmt.Errorf("intake: %w", err)
-	}
-
-	// Dep-gate: every dep must reference a task that already exists, else refuse
-	// with no partial write (deps reference unknown tasks -> clear error).
-	for _, dep := range doc.Deps {
-		if _, err := a.store.GetTask(ctx, dep); err != nil {
-			if errors.Is(err, statestore.ErrNotFound) {
-				return statestore.Scenario{}, statestore.Task{}, fmt.Errorf("intake: dependency %q references unknown task", dep)
-			}
-			return statestore.Scenario{}, statestore.Task{}, fmt.Errorf("intake: check dependency %q: %w", dep, err)
-		}
-	}
-
-	scenario := statestore.Scenario{
-		ID:        doc.ID,
-		ProjectID: projectID,
-		Title:     doc.Title,
-		Lane:      doc.Lane,
-		Tier:      doc.Tier,
-		Deps:      doc.Deps,
-	}
-	task := statestore.Task{
-		ID:         doc.ID,
-		ProjectID:  projectID,
-		Lane:       doc.Lane,
-		Tier:       doc.Tier,
-		Status:     registry.StatusTodo,
-		Deps:       doc.Deps,
-		ScenarioID: doc.ID,
-	}
-	if err := a.store.CreateScenario(ctx, scenario); err != nil {
-		return statestore.Scenario{}, statestore.Task{}, fmt.Errorf("intake: create scenario: %w", err)
-	}
-	if err := a.store.CreateTask(ctx, task); err != nil {
-		return statestore.Scenario{}, statestore.Task{}, fmt.Errorf("intake: create task: %w", err)
-	}
-	return scenario, task, nil
+	return res, nil
 }
 
 // ledgerRow is one task's projection in the status summary, in a stable shape for

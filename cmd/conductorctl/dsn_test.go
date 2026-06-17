@@ -163,8 +163,8 @@ func TestRealDB_CrossProcessRoundTrip(t *testing.T) {
 		closeA()
 		t.Fatalf("project id = %q, want %q", p.ID, projID)
 	}
-	scn := writeScenario(t, "id: RT-1\nlane: x\ntier: T1\ndeps: []\n")
-	if _, _, err := appA.intake(ctx, projID, scn); err != nil {
+	scn := writeScenario(t, richScenario("RT-1", "x", "T1"))
+	if _, err := appA.intake(ctx, projID, scn); err != nil {
 		closeA()
 		t.Fatalf("intake via store A: %v", err)
 	}

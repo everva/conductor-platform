@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -60,6 +61,33 @@ func TestConductorctl_Onboard_CreatesProject_Idempotent(t *testing.T) {
 	}
 }
 
+// richScenario renders a valid rich (ADR-0012/ADR-0018) scenario document: the
+// intake path now delegates to internal/intake, which requires title, acceptance,
+// and a repo-EXTERNAL hidden_holdout_ref (a `store://...` locator here) in addition
+// to id/lane/tier. deps is rendered as a YAML flow list.
+func richScenario(id, lane, tier string, deps ...string) string {
+	depList := "[" + strings.Join(quoteAll(deps), ", ") + "]"
+	return strings.Join([]string{
+		"id: " + id,
+		"title: " + strconv.Quote(id+" rich scenario"),
+		"lane: " + lane,
+		"tier: " + tier,
+		"deps: " + depList,
+		"acceptance:",
+		"  - " + strconv.Quote("gate is non-empty for "+id),
+		"hidden_holdout_ref: " + strconv.Quote("store://holdouts/"+id+"/spec.yaml"),
+		"",
+	}, "\n")
+}
+
+func quoteAll(ss []string) []string {
+	out := make([]string, 0, len(ss))
+	for _, s := range ss {
+		out = append(out, strconv.Quote(s))
+	}
+	return out
+}
+
 func TestConductorctl_Intake_CreatesTaskAndScenario(t *testing.T) {
 	ctx := context.Background()
 	a, store, _, _ := newApp(t)
@@ -67,47 +95,59 @@ func TestConductorctl_Intake_CreatesTaskAndScenario(t *testing.T) {
 		t.Fatalf("onboard: %v", err)
 	}
 
-	path := writeScenario(t, `id: A-1
-title: "first task"
-lane: statestore
-tier: T1
-deps: []
-`)
-	scenario, task, err := a.intake(ctx, "repo", path)
+	path := writeScenario(t, richScenario("A-1", "statestore", "T1"))
+	res, err := a.intake(ctx, "repo", path)
 	if err != nil {
 		t.Fatalf("intake: %v", err)
 	}
-	if scenario.ID != "A-1" || scenario.Lane != "statestore" || scenario.Tier != "T1" {
-		t.Fatalf("unexpected scenario: %+v", scenario)
+	if len(res.Created) != 1 || res.Created[0] != "A-1" || len(res.Skipped) != 0 {
+		t.Fatalf("unexpected intake result: %+v", res)
 	}
-	if task.ID != "A-1" || task.Status != registry.StatusTodo || task.ScenarioID != "A-1" {
-		t.Fatalf("unexpected task: %+v", task)
-	}
-	// Both persisted in the shared store.
-	if _, err := store.GetScenario(ctx, "A-1"); err != nil {
+	// Both persisted in the shared store with the rich fields projected down.
+	scn, err := store.GetScenario(ctx, "A-1")
+	if err != nil {
 		t.Fatalf("scenario not persisted: %v", err)
 	}
-	if _, err := store.GetTask(ctx, "A-1"); err != nil {
+	if scn.Lane != "statestore" || scn.Tier != "T1" || scn.Title == "" || len(scn.Acceptance) == 0 || scn.HoldoutRef == "" {
+		t.Fatalf("rich fields not projected onto scenario: %+v", scn)
+	}
+	task, err := store.GetTask(ctx, "A-1")
+	if err != nil {
 		t.Fatalf("task not persisted: %v", err)
+	}
+	if task.Status != registry.StatusTodo || task.ScenarioID != "A-1" {
+		t.Fatalf("unexpected task: %+v", task)
+	}
+
+	// Idempotent re-intake of the same file is a no-op: skipped, not duplicated.
+	res2, err := a.intake(ctx, "repo", path)
+	if err != nil {
+		t.Fatalf("re-intake: %v", err)
+	}
+	if len(res2.Created) != 0 || len(res2.Skipped) != 1 || res2.Skipped[0] != "A-1" {
+		t.Fatalf("re-intake should skip already-present scenario: %+v", res2)
 	}
 }
 
 func TestConductorctl_Intake_KnownDep_OK(t *testing.T) {
 	ctx := context.Background()
-	a, _, _, _ := newApp(t)
+	a, store, _, _ := newApp(t)
 	if _, err := a.onboard(ctx, "owner/repo", ""); err != nil {
 		t.Fatalf("onboard: %v", err)
 	}
 	// First task with no deps.
-	p1 := writeScenario(t, "id: A-1\nlane: x\ntier: T1\ndeps: []\n")
-	if _, _, err := a.intake(ctx, "repo", p1); err != nil {
+	p1 := writeScenario(t, richScenario("A-1", "x", "T1"))
+	if _, err := a.intake(ctx, "repo", p1); err != nil {
 		t.Fatalf("intake A-1: %v", err)
 	}
 	// Second task depends on the existing A-1: accepted.
-	p2 := writeScenario(t, "id: A-2\nlane: x\ntier: T1\ndeps: [\"A-1\"]\n")
-	_, task, err := a.intake(ctx, "repo", p2)
-	if err != nil {
+	p2 := writeScenario(t, richScenario("A-2", "x", "T1", "A-1"))
+	if _, err := a.intake(ctx, "repo", p2); err != nil {
 		t.Fatalf("intake A-2 with known dep: %v", err)
+	}
+	task, err := store.GetTask(ctx, "A-2")
+	if err != nil {
+		t.Fatalf("A-2 not persisted: %v", err)
 	}
 	if len(task.Deps) != 1 || task.Deps[0] != "A-1" {
 		t.Fatalf("deps not carried: %+v", task.Deps)
@@ -120,9 +160,8 @@ func TestConductorctl_Intake_UnknownDep_Errors(t *testing.T) {
 	if _, err := a.onboard(ctx, "owner/repo", ""); err != nil {
 		t.Fatalf("onboard: %v", err)
 	}
-	path := writeScenario(t, "id: B-1\nlane: x\ntier: T2\ndeps: [\"DOES-NOT-EXIST\"]\n")
-	_, _, err := a.intake(ctx, "repo", path)
-	if err == nil {
+	path := writeScenario(t, richScenario("B-1", "x", "T2", "DOES-NOT-EXIST"))
+	if _, err := a.intake(ctx, "repo", path); err == nil {
 		t.Fatalf("expected error for unknown dep")
 	}
 	// No partial write: neither the scenario nor the task should exist.
@@ -140,13 +179,49 @@ func TestConductorctl_Intake_MissingField_NoPartialWrite(t *testing.T) {
 	if _, err := a.onboard(ctx, "owner/repo", ""); err != nil {
 		t.Fatalf("onboard: %v", err)
 	}
-	// Missing required `lane` and `tier`.
+	// Missing required title/lane/tier/acceptance/holdout: rich validation rejects.
 	path := writeScenario(t, "id: C-9\ntitle: broken\n")
-	if _, _, err := a.intake(ctx, "repo", path); err == nil {
+	if _, err := a.intake(ctx, "repo", path); err == nil {
 		t.Fatalf("expected error for missing fields")
 	}
 	if _, gerr := store.GetScenario(ctx, "C-9"); gerr == nil {
 		t.Fatalf("no partial write: scenario must not exist")
+	}
+}
+
+func TestConductorctl_Intake_RepoInternalHoldout_Rejected(t *testing.T) {
+	ctx := context.Background()
+	a, store, _, _ := newApp(t)
+	if _, err := a.onboard(ctx, "owner/repo", ""); err != nil {
+		t.Fatalf("onboard: %v", err)
+	}
+	// A repo-relative holdout path violates ADR-0018; rich validation rejects it.
+	body := strings.Join([]string{
+		"id: D-1",
+		`title: "holdout in repo"`,
+		"lane: x",
+		"tier: T1",
+		"acceptance:",
+		`  - "criterion"`,
+		`hidden_holdout_ref: "testdata/holdouts/D-1.yaml"`,
+		"",
+	}, "\n")
+	path := writeScenario(t, body)
+	if _, err := a.intake(ctx, "repo", path); err == nil {
+		t.Fatalf("expected error for repo-internal holdout ref")
+	}
+	if _, gerr := store.GetScenario(ctx, "D-1"); gerr == nil {
+		t.Fatalf("no partial write: scenario must not exist")
+	}
+}
+
+func TestConductorctl_Intake_UnknownProject_Errors(t *testing.T) {
+	ctx := context.Background()
+	a, _, _, _ := newApp(t)
+	// No onboard: the project does not exist; internal/intake must error clearly.
+	path := writeScenario(t, richScenario("A-1", "x", "T1"))
+	if _, err := a.intake(ctx, "nope", path); err == nil {
+		t.Fatalf("expected error for unknown project")
 	}
 }
 
@@ -259,7 +334,7 @@ func TestRun_OnboardThenStatus_EndToEnd(t *testing.T) {
 	if code := run(ctx, a, []string{"onboard", "owner/repo"}, &stderr); code != 0 {
 		t.Fatalf("onboard exit = %d, stderr=%s", code, stderr.String())
 	}
-	scn := writeScenario(t, "id: A-1\nlane: x\ntier: T1\ndeps: []\n")
+	scn := writeScenario(t, richScenario("A-1", "x", "T1"))
 	if code := run(ctx, a, []string{"intake", "--project", "repo", "--file", scn}, &stderr); code != 0 {
 		t.Fatalf("intake exit = %d, stderr=%s", code, stderr.String())
 	}
@@ -279,27 +354,45 @@ func TestRun_MissingRequiredFlag_NonZero(t *testing.T) {
 	}
 }
 
-// TestParseScenario_RealFixture parses an actual repo scenario file shape to prove
-// the parser handles flow-list deps and quoted titles, not just synthetic input.
-func TestParseScenario_RealFixture(t *testing.T) {
-	body := `id: C-1
-title: "Conductor tick: pick -> ... (one fresh-context tick)"
-lane: conductor
-tier: T2
-deps: ["A-3", "B-1", "B-2", "B-3"]
-`
+// TestConductorctl_Intake_RealFixture_RichSchema proves the delegated path accepts
+// a realistic multi-field rich scenario (quoted title with a colon, flow-list deps,
+// acceptance, repo-external holdout) — replacing the old hand-rolled-parser unit
+// test now that conductorctl delegates to internal/intake.
+func TestConductorctl_Intake_RealFixture_RichSchema(t *testing.T) {
+	ctx := context.Background()
+	a, store, _, _ := newApp(t)
+	if _, err := a.onboard(ctx, "owner/repo", ""); err != nil {
+		t.Fatalf("onboard: %v", err)
+	}
+	// Seed the deps C-1 references so they resolve.
+	for _, id := range []string{"A-3", "B-1", "B-2", "B-3"} {
+		if err := store.CreateTask(ctx, statestore.Task{ID: id, ProjectID: "repo", Lane: "x", Tier: "T1", Status: registry.StatusTodo}); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+	body := strings.Join([]string{
+		"id: C-1",
+		`title: "Conductor tick: pick -> ... (one fresh-context tick)"`,
+		"lane: conductor",
+		"tier: T2",
+		`deps: ["A-3", "B-1", "B-2", "B-3"]`,
+		"acceptance:",
+		`  - "one fresh-context tick advances exactly one task"`,
+		`hidden_holdout_ref: "store://holdouts/C-1/spec.yaml"`,
+		"",
+	}, "\n")
 	path := writeScenario(t, body)
-	doc, err := parseScenarioFile(path)
+	if _, err := a.intake(ctx, "repo", path); err != nil {
+		t.Fatalf("intake real fixture: %v", err)
+	}
+	scn, err := store.GetScenario(ctx, "C-1")
 	if err != nil {
-		t.Fatalf("parse: %v", err)
+		t.Fatalf("scenario not persisted: %v", err)
 	}
-	if doc.ID != "C-1" || doc.Lane != "conductor" || doc.Tier != "T2" {
-		t.Fatalf("bad scalars: %+v", doc)
+	if scn.Lane != "conductor" || scn.Tier != "T2" || len(scn.Deps) != 4 {
+		t.Fatalf("bad scenario: %+v", scn)
 	}
-	if len(doc.Deps) != 4 || doc.Deps[0] != "A-3" || doc.Deps[3] != "B-3" {
-		t.Fatalf("bad deps: %+v", doc.Deps)
-	}
-	if !strings.Contains(doc.Title, "Conductor tick") {
-		t.Fatalf("title with colon mis-parsed: %q", doc.Title)
+	if !strings.Contains(scn.Title, "Conductor tick") {
+		t.Fatalf("title with colon mis-parsed: %q", scn.Title)
 	}
 }
