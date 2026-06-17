@@ -9,11 +9,13 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/everva/conductor-platform/internal/heartbeat"
+	"github.com/everva/conductor-platform/internal/statestore"
 )
 
 // newTestLogger returns a logger that discards output so test logs stay clean.
@@ -160,6 +162,53 @@ func TestParseConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("dsn defaults empty (in-memory)", func(t *testing.T) {
+		cfg, err := parseConfig([]string{"-project", "p1", "-root", "/tmp/r"}, io.Discard)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		if cfg.dsn != "" {
+			t.Fatalf("dsn = %q, want empty by default (in-memory)", cfg.dsn)
+		}
+	})
+
+	t.Run("dsn from flag", func(t *testing.T) {
+		cfg, err := parseConfig([]string{
+			"-project", "p1", "-root", "/tmp/r",
+			"-dsn", "postgres://u:p@h:5432/db",
+		}, io.Discard)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		if cfg.dsn != "postgres://u:p@h:5432/db" {
+			t.Fatalf("dsn = %q, want the flag value", cfg.dsn)
+		}
+	})
+
+	t.Run("dsn from env (CONDUCTOR_DSN)", func(t *testing.T) {
+		t.Setenv("CONDUCTOR_DSN", "postgres://envhost/db")
+		cfg, err := parseConfig([]string{"-project", "p1", "-root", "/tmp/r"}, io.Discard)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		if cfg.dsn != "postgres://envhost/db" {
+			t.Fatalf("dsn = %q, want env value", cfg.dsn)
+		}
+	})
+
+	t.Run("dsn flag overrides env", func(t *testing.T) {
+		t.Setenv("CONDUCTOR_DSN", "postgres://envhost/db")
+		cfg, err := parseConfig([]string{
+			"-project", "p1", "-root", "/tmp/r", "-dsn", "postgres://flaghost/db",
+		}, io.Discard)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		if cfg.dsn != "postgres://flaghost/db" {
+			t.Fatalf("dsn = %q, want flag to win over env", cfg.dsn)
+		}
+	})
+
 	t.Run("env fallback", func(t *testing.T) {
 		t.Setenv("CONDUCTOR_PROJECT", "envproj")
 		t.Setenv("CONDUCTOR_ROOT", "/tmp/envroot")
@@ -296,6 +345,65 @@ func TestDaemonWritesHeartbeat(t *testing.T) {
 	if rec.Project != cfg.project {
 		t.Fatalf("heartbeat project = %q, want %q", rec.Project, cfg.project)
 	}
+}
+
+// TestNewStore_EmptyDSNUsesMemory proves the default (empty dsn) path selects the
+// in-memory store and returns a non-nil no-op closer that is safe to call. This
+// is the existing dev/test behavior and must stay unchanged.
+func TestNewStore_EmptyDSNUsesMemory(t *testing.T) {
+	cfg := testConfig(t) // dsn is the zero value (empty) -> memory.
+
+	store, closer, err := newStore(context.Background(), cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("newStore(empty dsn): %v", err)
+	}
+	if closer == nil {
+		t.Fatal("closer is nil; want a non-nil no-op closer for the memory store")
+	}
+	if _, ok := store.(*statestore.MemoryStore); !ok {
+		// Type-assert against the concrete memory store to confirm backend selection.
+		t.Fatalf("store type = %T, want *statestore.MemoryStore for empty dsn", store)
+	}
+	closer() // must not panic for the memory backend.
+}
+
+// TestRealDB_OnceTickMigratesAndRuns is the OPTIONAL real-database test: when
+// TEST_DATABASE_URL is set it constructs the Postgres-backed daemon (which
+// migrates the schema on startup) and runs a single -once tick, asserting it
+// no-ops cleanly over a fresh, un-onboarded project. It is SKIPPED when the env
+// var is unset, so the default `go test ./...` stays green with no database.
+func TestRealDB_OnceTickMigratesAndRuns(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL unset; skipping real-DB test")
+	}
+
+	cfg := testConfig(t)
+	cfg.once = true
+	cfg.dsn = dsn
+	cfg.project = "p3-1-realdb-test"
+
+	d, err := newDaemon(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("newDaemon(postgres): %v", err)
+	}
+	defer d.Close()
+
+	res, err := d.tick(context.Background())
+	if err != nil {
+		t.Fatalf("once tick over postgres returned error: %v", err)
+	}
+	if res.Outcome != "noop" {
+		t.Fatalf("once tick outcome = %q, want noop (no ready task)", res.Outcome)
+	}
+
+	// Re-running newDaemon must tolerate the now-existing project row (idempotent
+	// ensure-exists via ON CONFLICT DO NOTHING), proving the upsert seed behavior.
+	d2, err := newDaemon(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("newDaemon(postgres, second run) should tolerate existing project: %v", err)
+	}
+	d2.Close()
 }
 
 func equalStrs(a, b []string) bool {

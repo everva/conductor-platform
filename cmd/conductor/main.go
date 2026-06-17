@@ -77,6 +77,11 @@ func main() {
 type config struct {
 	// project is the project ID the daemon ticks. Required (no implicit default).
 	project string
+	// dsn is the Postgres connection string. Empty (default) selects the in-memory
+	// StateStore (dev/test behavior, unchanged); non-empty selects the shared
+	// Postgres StateStore (migrated on startup) so state persists across restarts
+	// and is shared across hosts (ADR-0010, ADR-0013). It is NEVER logged.
+	dsn string
 	// rootDir is the workspace root the provisioner clones/worktrees under.
 	rootDir string
 	// baseBranch is the integration branch merges land on (project-level default).
@@ -139,6 +144,8 @@ func run(ctx context.Context, argv []string, logger *slog.Logger, stderr io.Writ
 		_, _ = fmt.Fprintf(stderr, "conductor: %v\n", err)
 		return 1
 	}
+	// Release backend resources (the Postgres pgxpool) on exit. No-op for memory.
+	defer d.Close()
 
 	// Trap SIGINT/SIGTERM: cancelling this context unwinds the loop after the
 	// in-flight tick finishes (the tick's own ctx is derived from it, so a
@@ -180,6 +187,8 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 	fs.SetOutput(stderr)
 
 	project := fs.String("project", envOr("CONDUCTOR_PROJECT", ""), "project id to tick (required)")
+	dsn := fs.String("dsn", envOr("CONDUCTOR_DSN", ""),
+		"Postgres connection string; empty = in-memory store (dev/test). Non-empty = shared Postgres store, migrated on start. Never logged")
 	rootDir := fs.String("root", envOr("CONDUCTOR_ROOT", ""), "workspace root for clones/worktrees (required)")
 	baseBranch := fs.String("base", envOr("CONDUCTOR_BASE_BRANCH", defaultBaseBranch), "integration base branch")
 	developCmd := fs.String("develop-cmd", envOr("CONDUCTOR_DEVELOP_CMD", defaultDevelopCmd),
@@ -258,6 +267,7 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 
 	return config{
 		project:           *project,
+		dsn:               *dsn,
 		rootDir:           *rootDir,
 		baseBranch:        *baseBranch,
 		interval:          *interval,
@@ -288,31 +298,56 @@ type Daemon struct {
 	hb *heartbeat.Writer
 	// ticks counts ticks attempted; it is the heartbeat's progress signal.
 	ticks uint64
+	// closer releases store-backend resources on shutdown (the Postgres pgxpool).
+	// It is nil for the in-memory store, which owns no external resource. Close
+	// invokes it exactly once.
+	closer func()
 }
 
-// newDaemon wires the SAME components the conductor e2e test wires (in-memory
-// store, registry Picker, real provisioner, product CommandEngine, verify gate,
-// GitMerger) into a Conductor and seeds the project so a tick has something to
-// resolve. The develop command is the operator-supplied performer; it carries no
-// key. Postgres-backed state and ledger seeding via conductorctl arrive in later
-// tasks — for now the project record is created in-memory so the daemon is a
-// self-contained, runnable spine.
-func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
-	store := statestore.NewMemoryStore()
+// Close releases any backend resources the daemon owns (the Postgres connection
+// pool). It is a no-op for the in-memory store and is safe to call exactly once
+// on shutdown. The caller (run) defers it so the pgxpool is always released.
+func (d *Daemon) Close() {
+	if d.closer != nil {
+		d.closer()
+	}
+}
 
-	// Seed the project the daemon ticks. PickReady reads tasks from the same store;
-	// a fresh in-memory store has no ready tasks, so an unseeded daemon cleanly
-	// no-ops (which is exactly what the -once hermetic test asserts). Faz-1b swaps
-	// this for the shared Postgres store conductorctl writes to.
+// newDaemon wires the SAME components the conductor e2e test wires (registry
+// Picker, real provisioner, product CommandEngine, verify gate, GitMerger) into a
+// Conductor and ensures the project row exists so a tick has something to resolve.
+// The develop command is the operator-supplied performer; it carries no key.
+//
+// The StateStore backend is selected by cfg.dsn: empty selects the in-memory
+// store (dev/test, unchanged), non-empty selects the shared Postgres store, which
+// is migrated on startup so a fresh database is schema-ready. The returned
+// Daemon's Close releases the Postgres pool; the caller must defer it.
+func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
+	store, closer, err := newStore(context.Background(), cfg, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	// Ensure the project the daemon ticks exists. CreateProject is an upsert that
+	// does ON CONFLICT DO NOTHING (returning ErrAlreadyExists), so a project already
+	// onboarded via conductorctl is left untouched and a brand-new store gets a bare
+	// project row to resolve against. PickReady reads tasks from the same store; a
+	// project with no ready tasks cleanly no-ops (what the -once test asserts). For a
+	// real Postgres DSN the project and its tasks are normally onboarded out-of-band
+	// (conductorctl); this only guarantees the row is present so the tick never errors
+	// on a missing project. A failure to release the Postgres pool here would leak it,
+	// so close on any error path.
 	if err := store.CreateProject(context.Background(), statestore.Project{
 		ID:         cfg.project,
 		BaseBranch: cfg.baseBranch,
 	}); err != nil && !errors.Is(err, statestore.ErrAlreadyExists) {
-		return nil, fmt.Errorf("seed project %q: %w", cfg.project, err)
+		closer()
+		return nil, fmt.Errorf("ensure project %q: %w", cfg.project, err)
 	}
 
 	prov, err := provisioner.New(provisioner.Config{RootDir: cfg.rootDir})
 	if err != nil {
+		closer()
 		return nil, fmt.Errorf("provisioner: %w", err)
 	}
 
@@ -337,6 +372,7 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		LoadCeiling: cfg.loadCeiling,
 	})
 	if err != nil {
+		closer()
 		return nil, fmt.Errorf("governor: %w", err)
 	}
 
@@ -355,6 +391,7 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		Governor: gov,
 	})
 	if err != nil {
+		closer()
 		return nil, fmt.Errorf("conductor: %w", err)
 	}
 
@@ -369,7 +406,33 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		once:     cfg.once,
 		logger:   logger,
 		hb:       hb,
+		closer:   closer,
 	}, nil
+}
+
+// newStore selects and constructs the StateStore backend from cfg.dsn and returns
+// it alongside a closer that releases any backend resource (the Postgres pool).
+// The closer is always non-nil: for the in-memory store it is a no-op, so callers
+// can defer/call it unconditionally. The active backend is logged WITHOUT the DSN
+// (which carries the password) — only the backend name is emitted.
+func newStore(ctx context.Context, cfg config, logger *slog.Logger) (statestore.StateStore, func(), error) {
+	if cfg.dsn == "" {
+		logger.Info("statestore backend selected", slog.String("backend", "memory"))
+		return statestore.NewMemoryStore(), func() {}, nil
+	}
+
+	pg, err := statestore.NewPostgresStore(ctx, cfg.dsn)
+	if err != nil {
+		// err may wrap the DSN-derived connection error from pgx, but pgx does not
+		// echo the password in its message; we still avoid logging cfg.dsn ourselves.
+		return nil, nil, fmt.Errorf("open postgres store: %w", err)
+	}
+	if err := pg.Migrate(ctx); err != nil {
+		pg.Close()
+		return nil, nil, fmt.Errorf("migrate postgres store: %w", err)
+	}
+	logger.Info("statestore backend selected", slog.String("backend", "postgres"))
+	return pg, pg.Close, nil
 }
 
 // noopHoldout is an inert HoldoutStore: the daemon's merge decision rides on the
