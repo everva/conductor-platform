@@ -69,7 +69,7 @@
 
 ## P3 — PRODUCTION ENTEGRASYON FOLLOW-UP'LARI (agent'ların dürüstçe işaretlediği boşluklar)
 Yeni yetenekler (N-4 PG, N-9 events, N-10 governance) kuruldu AMA daemon (cmd/conductor) hepsini henüz KULLANMIYOR (in-memory store, emitter/policy bağlı değil). Üretime tam hazır olması için:
-- **P3-1: Daemon Postgres wiring** — `-dsn`/CONDUCTOR_DSN → PostgresStore (başlangıçta Migrate), yoksa in-memory default. Daemon'ı kalıcı/çok-host yapar (N-4'ü üretime taşır). EN KRİTİK.
+- **P3-1: Daemon Postgres wiring** — ✅ done (50b2270, push'lu). `-dsn`/CONDUCTOR_DSN → PostgresStore + başlangıçta Migrate; boş=in-memory default. newStore helper + Daemon.Close (pgxpool release). Proje-seed CreateProject(ON CONFLICT idempotent) her iki backend'de. DSN/şifre asla loglanmaz/commit'lenmez. **Bağımsız doğrulandı:** offline gate+e2e yeşil, **kendi docker PG'imde** real-DB -once PASS + şema gerçekten migrate oldu (projects/tasks/leases/scenarios/events tabloları), commit'te gerçek DSN yok.
 - **P3-2: Daemon observability+governance wiring** — event bus (memory/PG) + governance Policy (Project.GovernancePolicy'den seç) + Emitter → conductor Deps'e geç. N-9/N-10'u üretimde aktive eder.
 - **P3-3: Control reverse-channel** (pause/resume/abort, engine.Command frozen tipi, ADR-0011§4) — N-9'da ertelendi.
 - **P3-4: conductorctl rich-intake delege + paylaşılan store** — fixture'ları zenginleştir → internal/intake'e delege; conductorctl+daemon aynı PG store'u paylaşsın (onboard/intake gerçekten daemon'ı beslesin).
