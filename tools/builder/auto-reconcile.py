@@ -148,7 +148,9 @@ def main():
             json.dump(le, open(LEASES, "w"), indent=2, ensure_ascii=False)
 
     # --- 3. ORPHANS: extra tick scripts / lockless performer claude trees ---
-    ticks = sh("pgrep -f conductor-tick.sh").split()
+    # BUILDER-SPECIFIC: xirigo also runs a `conductor-tick.sh`; a bare match would
+    # treat the xirigo tick as an "extra" builder tick and kill it (cross-project hazard).
+    ticks = sh("pgrep -f tools/builder/conductor-tick.sh").split()
     lock_pid = sh(f"cat {RT}/conductor.lock/pid 2>/dev/null")
     if len(ticks) > 1:
         for t in ticks:
@@ -163,7 +165,7 @@ def main():
             actions.append(f"KILL orphan performer claude {p} (parent=1)")
 
     # --- 2. DEAD TICK: no tick + heartbeat stale -> kickstart ---
-    ticks = sh("pgrep -f conductor-tick.sh").split()  # re-read after kills
+    ticks = sh("pgrep -f tools/builder/conductor-tick.sh").split()  # re-read (builder-specific)
     try:
         hb = json.load(open(HB))
         hb_age = (datetime.now(timezone.utc)
@@ -179,8 +181,10 @@ def main():
         else:
             if os.path.isdir(os.path.join(RT, "conductor.lock")):
                 sh(f"rm -rf {RT}/conductor.lock")
-            sh(f"launchctl kickstart -k gui/{UID}/{LAUNCHD_LABEL}")
-            actions.append(f"DEAD TICK (hb {int(hb_age)}min) -> kickstarted fresh tick")
+            # NO `-k`: plain kickstart starts a tick only if none runs; `-k` would
+            # KILL a live long-running tick (a pgrep race could mis-fire this).
+            sh(f"launchctl kickstart gui/{UID}/{LAUNCHD_LABEL}")
+            actions.append(f"DEAD TICK (hb {int(hb_age)}min) -> kickstarted (no -k)")
 
     # summary
     done = sum(1 for t in tasks if t.get("status") == "done")
