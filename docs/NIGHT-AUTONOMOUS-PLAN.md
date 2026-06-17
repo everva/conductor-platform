@@ -54,4 +54,5 @@
 - **EK:** gofmt-fix internal/verify + .golangci.yml'a gofmt formatter eklendi (CI artık format de zorluyor) — 43291a2 push'lu. (golangci stale-cache artefaktı temizlendi: nil-ctx zaten //nolint'li, gerçek sorun yok.)
 - **🎉 P0 TAMAM (N-1,N-2,N-3).** Sıra: P1.
 - **NOT (öğrenildi):** Agent `isolation:"worktree"` SESSION repo'sunu (k8s) izole ediyor, conductor-platform'u DEĞİL. Agent'lar kendi worktree'lerini açtı (cherry-pick ile merge edildi). Bundan sonra worktree-isolation YOK; agent'lar conductor-platform'da direkt, seri çalışır.
-- **N-4 (Postgres StateStore):** 🔄 Agent (direkt, no-worktree). Docker çalışıyor → gerçek PG container ile integration test. pgx + goose migration + conformance-suite (skip-if-no-DB) + lease atomik (FOR UPDATE/advisory-lock).
+- **N-4 (Postgres StateStore):** ✅ done (6e364fc, push'lu). pgxpool + goose migration (00001_init) + PostgresStore (full frozen interface) + 13-case conformance suite (memory+PG ortak). Lease atomik = PK(project_id)+`ON CONFLICT DO NOTHING` (32-goroutine yarış→tam-1-kazanan). **Bağımsız doğrulandı:** kendi docker PG'imde 13/13 PASS (memory+PG, -race), DB-unset gate yeşil+skip, go.mod tidy, gofmt clean. Frozen interface değişmedi.
+- **N-5 (Resource-governor):** 🔄 Agent. global cap + repo-başına-1 + host-yük-tavanı (ADR-0008); conductor'a permissive-default ile entegre (e2e bozulmaz).
