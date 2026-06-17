@@ -47,4 +47,6 @@
 
 ## İLERLEME KAYDI (her iş bitince güncelle)
 - (Faz-1a) PRE-0..C-2: ✅ done (develop). e2e: ✅.
-- N-1 …: (gece boyunca buraya işlenir)
+- Gece başlangıç: develop @ 39f37ca, builder durdurulmuş, heartbeat-loop kuruldu (cron 7,37 * * * *).
+- **N-1 (cmd/conductor daemon):** ✅ done (5fa2ef3, push'lu). tick-loop + `-once` + graceful-shutdown + 7 hermetik test. Bağımsız gate yeşil (build/test -count=1/vet/lint 0 + e2e compile + -once smoke noop). slog yapılandırılmış log; develop-cmd flag/env (secret yok).
+- **N-2 (CI GitHub Actions):** 🔄 Agent (worktree). | **N-3 (README):** 🔄 Agent (worktree). Paralel, disjoint dosya.
