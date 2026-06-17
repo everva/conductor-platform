@@ -51,9 +51,13 @@ func main() {
 	}
 	defer closer()
 
+	// The control seam persists pause THROUGH the same store the daemon reads
+	// (ADR-0011 §4): with -dsn this is the shared Postgres, so a pause set here is
+	// honored by the separate daemon process. An in-process MemoryController would
+	// be invisible across processes, so it is not used for the real CLI.
 	a := &app{
 		store: store,
-		ctrl:  NewMemoryController(),
+		ctrl:  NewStoreController(store),
 		out:   os.Stdout,
 	}
 	os.Exit(run(ctx, a, rest, os.Stderr))

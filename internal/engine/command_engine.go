@@ -237,11 +237,11 @@ func (e *CommandEngine) Control(ctx context.Context, cmd Command) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	switch cmd.Action {
-	case "pause":
+	case ActionPause:
 		e.paused = true
-	case "resume":
+	case ActionResume:
 		e.paused = false
-	case "abort":
+	case ActionAbort:
 		e.aborted = true
 	default:
 		return fmt.Errorf("engine: control: unknown action %q", cmd.Action)

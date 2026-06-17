@@ -59,6 +59,12 @@ const (
 	// work this tick: a clean no-op that took no lease and did no develop. The
 	// denial reason is logged on the TickResult (ADR-0008 concurrency bounds).
 	OutcomeDenied Outcome = "denied"
+	// OutcomePaused means the project is paused via the control reverse-channel
+	// (ADR-0011 §4): a clean no-op that takes NO lease, runs NO develop, and does
+	// NO merge. The pause intent is persisted on the project (Readiness=paused) by
+	// conductorctl through the SHARED StateStore, so a separate daemon process
+	// reading the same store honors it. Resume clears it and ticks proceed again.
+	OutcomePaused Outcome = "paused"
 	// OutcomeHeld means develop+verify passed but the governance policy requires a
 	// HUMAN approval for the task's risk tier (ADR-0003): the green gate is
 	// necessary but not sufficient, so the conductor did NOT merge. The task is
@@ -149,6 +155,18 @@ type Policy interface {
 	MergeMode(task statestore.Task) governance.Decision
 }
 
+// Pauser is the OPTIONAL control-reverse-channel seam (ADR-0011 §4): BEFORE
+// PickReady/lease/develop, the tick consults it to learn whether the project is
+// paused by an operator (conductorctl pause). When it reports paused, the tick is
+// a clean no-op (OutcomePaused) — NO lease, NO develop, NO merge. It is narrowed
+// to Paused so the durable, cross-process pause check is the ONLY thing the tick
+// depends on; the operator-side Pause/Resume live behind the same control seam in
+// conductorctl. The field is OPTIONAL on Deps — a nil Pauser means never-paused
+// (the pre-P3-3 behavior), so existing wiring and tests are unaffected.
+type Pauser interface {
+	Paused(ctx context.Context, projectID string) (bool, error)
+}
+
 // Recipe carries the per-project gate/holdout binding the tick hands to the
 // verifier (ADR-0009). It is injected, not a global.
 type Recipe struct {
@@ -171,6 +189,7 @@ type Conductor struct {
 	governor Admitter
 	emitter  Emitter
 	policy   Policy
+	pauser   Pauser
 }
 
 // Deps bundles the injected collaborators so New has a single, named-field
@@ -208,6 +227,13 @@ type Deps struct {
 	// pre-N-10 behavior), keeping construction backward compatible — callers opt
 	// in by injecting a governance.Policy.
 	Policy Policy
+	// Pauser is the OPTIONAL control reverse-channel (ADR-0011 §4, P3-3). When set,
+	// the tick consults it BEFORE leasing/developing and cleanly no-ops
+	// (OutcomePaused) on a paused project. A nil Pauser means never-paused (the
+	// pre-P3-3 behavior), keeping construction backward compatible — the daemon
+	// opts in by injecting a store-backed controller that reads the SHARED store so
+	// a pause set by a separate conductorctl process is honored.
+	Pauser Pauser
 }
 
 // New returns a Conductor wired from the injected collaborators. It errors if any
@@ -244,6 +270,7 @@ func New(d Deps) (*Conductor, error) {
 		governor: d.Governor,
 		emitter:  d.Emitter,
 		policy:   d.Policy,
+		pauser:   d.Pauser,
 	}, nil
 }
 
@@ -282,6 +309,23 @@ func (c *Conductor) Tick(ctx context.Context, projectID string) (TickResult, err
 	project, err := c.store.GetProject(ctx, projectID)
 	if err != nil {
 		return TickResult{}, fmt.Errorf("conductor: tick: get project %q: %w", projectID, err)
+	}
+
+	// Control reverse-channel pause-gate (ADR-0011 §4): conductorctl persists a
+	// pause through the SHARED StateStore via the control seam, so this SEPARATE
+	// daemon process sees it. When a Pauser is injected and reports the project
+	// paused, the tick is a clean no-op — taken BEFORE PickReady/lease/develop/
+	// merge — so nothing is leased and no work runs. A nil Pauser means
+	// never-paused (the pre-P3-3 behavior), so existing wiring and tests proceed
+	// exactly as before (backward compatible).
+	if c.pauser != nil {
+		paused, perr := c.pauser.Paused(ctx, projectID)
+		if perr != nil {
+			return TickResult{}, fmt.Errorf("conductor: tick: pause check for %q: %w", projectID, perr)
+		}
+		if paused {
+			return TickResult{Outcome: OutcomePaused}, nil
+		}
 	}
 
 	task, err := c.picker.PickReady(ctx, projectID)

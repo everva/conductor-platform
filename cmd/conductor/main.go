@@ -425,6 +425,10 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		Governor: gov,
 		Emitter:  emitter,
 		Policy:   policy,
+		// Control reverse-channel pause-gate (ADR-0011 §4, P3-3): read the durable
+		// pause off the SAME store conductorctl writes it to, so `conductorctl pause`
+		// in a separate process makes this daemon's next tick a clean no-op.
+		Pauser: conductor.NewStorePauser(store),
 	})
 	if err != nil {
 		closer()
