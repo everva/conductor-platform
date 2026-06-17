@@ -22,7 +22,7 @@ type EngineAdapter interface {
 Şemalar (kanıt-temelli, **skor yok** — ADR-0003):
 ```
 Verdict      { result: pass|fail|blocked, branch, commit_sha,
-               tests:{unit, lint, build, maestro_exit, visual_diff_pct, e2e}, files[], summary }
+               checks:[{name, result, evidence}], files[], summary }   // jenerik (Y5): unit/lint/build/maestro/visual… reçeteye göre
 ReviewResult { decision: pass|changes-requested|blocked, evidence[], notes }
 HealthState  { phase, last_activity_ts, signal: progressing|idle|unknown }
 Event        { ts, project, task, phase, kind, payload }   // tek-kaynak şema → Go+TS codegen (ADR-0007)
@@ -44,5 +44,12 @@ tipleri taşır. Tek CommandEngine = kod yazmadan yeni proje-tipi = en jenerik, 
 - Reçete kontratı (`develop`/`verify` komut girdileri + JSON çıktı şeması) ADR-0009 scaffolder'ın ürettiği şey.
 - Event şeması ADR-e'de dondurulacak (Events fiili onu yayar).
 
+## Güncelleme (review: Y5, Y2, K2)
+- **Verdict.tests jenerikleştirildi:** sabit anahtar (`maestro_exit`/`visual_diff_pct` mobil-özel) yerine
+  `checks: [{name, result, evidence}]` → proje-tipinden bağımsız; "kod yazmadan yeni kanıt türü" mümkün (jeneriklik).
+- **Event/Control sahipliği:** Engine YALNIZ kendi subprocess çıktısını normalize edip platforma verir;
+  Postgres'e yazma + NOTIFY + komut-tablosu tüketimi PLATFORM işi (ADR-0011). `Events()`/`Control()` bu sınırı temsil eder.
+- **Develop/Verify somut mekaniği** ADR-0014'te donduruldu (performer kontratı + LLM çıktı dayanıklılığı).
+
 ## Durum
-✅ Kapandı / DONDU.
+✅ Kapandı / DONDU (ADR-0014 somutlar).

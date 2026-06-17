@@ -27,5 +27,8 @@ Merkezi **Postgres** bağımlılığı eklendi (registry+lease için). "Sıfır 
 bağımlılık" olarak korunur: topoloji = **merkezi tek Postgres + her host'ta ince Go client binary**. Host'a
 Postgres kurulmaz; tek-binary kurulum kolaylığı host tarafında geçerli kalır.
 
+## Güncelleme (review: D3)
+Şema formatı **JSON Schema** olarak donduruldu (ADR-0011) — "protobuf veya JSON Schema" açık seçeneği kapandı.
+
 ## Durum
-✅ Kapandı (ADR-0010 ile rafine edildi).
+✅ Kapandı (ADR-0010 + ADR-0011 ile rafine edildi).

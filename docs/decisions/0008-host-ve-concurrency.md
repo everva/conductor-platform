@@ -34,7 +34,12 @@ refactor değil. Lease modeli xirigo'da kanıtlı.
 State backend baştan **merkezi Postgres** seçildi → "Faz-1 lokal-dosya, Faz-2 merkezi'ye geç" maddesi DÜŞTÜ.
 "Repo-başına-tek-aktif lease HOST-ÜSTÜ" kritik kuralı Postgres row-lock/advisory-lock ile **baştan** sağlanır;
 Faz-2 (A pinleme vs B merkezi) ikilemi büyük ölçüde (B) lehine çözülmüş oldu. StateStore soyutlaması test için
-korunur ama birincil backend Postgres.
+korunur ama birincil backend Postgres. **(ADR-0013 rafine: Faz-1a in-memory/dosya StateStore, Faz-1b Postgres;
+birincil backend yine Postgres. Gövdedeki "Faz-1 ... lokal-dosya state" artık "Faz-1a" demektir.)**
+
+## Güncelleme (review: Y1)
+`requires` capability **lane seviyesinde** (task değil): lane→capability eşlemesi `lanes` tablosunda tanımlı
+(ADR-0010); `tasks.requires` oradan TÜRETİLİR, task'a elle yazılmaz. (Takma-ad: "ADR-c" = ADR-0010.)
 
 ## Durum
-✅ Faz-1 kapandı. Çok-host executor (uzak ssh/agent) hâlâ Faz-2; state zemini baştan merkezi (ADR-0010).
+✅ Faz-1 kapandı. Çok-host executor (uzak ssh/agent) hâlâ Faz-2; state zemini Faz-1b'de merkezi Postgres (ADR-0010/0013).

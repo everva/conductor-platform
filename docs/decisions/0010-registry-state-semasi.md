@@ -39,5 +39,16 @@ Hibrit ledger = hız + şeffaflık. Kaynaktan-türet = drift'i yapısal eler.
 - ADR-0008 güncellenir: Faz-1'den itibaren Postgres; "Faz-2'de merkezi'ye geç" maddesi düşer (baştan merkezi).
 - StateStore soyutlaması yine tutulur (test/in-memory için), ama birincil backend Postgres.
 
+## Güncelleme (review: Y3, Y4, Y1, O2, O5)
+- **intent vs gözlemlenen (drift netliği):** Postgres'te OTORİTER olan = intent (deps, lease, scenario, config).
+  Gözlemlenen runtime (task merge oldu mu, branch var mı) cache'lenmez → her tick git/gh'den TÜRETİLİR
+  (ADR-0016 reconcile). `tasks.status` = türetilen/reconcile edilen alan, otoriter değil.
+- **lease reaper:** `leases.acquired_at` + TTL/host-heartbeat reaper (ayrı reconcile job, ADR-0016) → crash'te
+  repo sonsuz kilitlenmez. Global-cap (≤N) atomik: `INSERT ... WHERE (SELECT count(*) FROM leases) < N` / advisory-lock.
+- **`lanes(name, capabilities[])` tablosu** eklendi → lane→capability (ADR-0008 Y1).
+- **`tasks.retry_count`** eklendi (ADR-0004 O2).
+- **conductorctl ↔ daemon:** Postgres komut tablosu (ADR-0011 control-kanalı) üzerinden (O5).
+- **Faz-1a:** bu Postgres katmanı in-memory/dosya `StateStore` ile yer değiştirir (ADR-0013); Postgres = Faz-1b.
+
 ## Durum
 ✅ Kapandı. Şema alanları (DDL) implementasyonda kesinleşir.

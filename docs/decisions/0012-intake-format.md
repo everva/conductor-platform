@@ -33,5 +33,11 @@ gizli-holdout overfit koruması. Asistanlı+onay = konuşmadan güvenilir spec.
 - Tier (risk) → governance (ADR-0003) merge-mode + human-merge kapısını sürer.
 - lane → host capability routing (ADR-0008).
 
+## Güncelleme (review: K1, D1)
+Gizli holdout'un "repo içinde `.conductor/scenarios/`" ↔ "performer görmez" ÇELİŞKİSİ **ADR-0018**'de çözüldü:
+public acceptance testleri `.conductor/scenarios/`'da (performer görür); **gizli holdout repo-DIŞI store'da**,
+verify'de ayrı verify-worktree'ye geçici enjekte. `holdout_ref` bu repo-dışı store'a işaret eder.
+(Takma-ad eşlemesi: "ADR-c"=0010, "ADR-d"=bu ADR (0012), "ADR-e"=0011.)
+
 ## Durum
-✅ Kapandı.
+✅ Kapandı (gizli-holdout mekaniği ADR-0018).

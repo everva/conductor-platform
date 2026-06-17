@@ -29,5 +29,11 @@ hız↔güvenlik dengesi; migration-auto-ship defect'inin panzehiri.
 - Per-path pattern listesi (schema.prisma, migrations/, auth, roles.guard) governance'ta tanımlanır.
 - "yeşil değilse merge yok" kuralı korunur ama gate lokal kanıttır, CI değil.
 
+## Güncelleme (review: Y6)
+xirigo RUNTIME.md dersi: macOS'te **lokal Docker BANNED** (thermal crash). "Gerekiyorsa lokal container" satırı
+macOS'te gerçekçi değil → container-gerektiren gate'ler (migration-safety, integration) **lokal-imkansız**:
+işaretle-ve-atla (pre-prod'a ertele) veya remote-runner. Yüksek-risk migration lokal deterministik
+doğrulanamıyor — bu kabul edilir ve **görünür** kılınır (sessiz atlama yok).
+
 ## Durum
 ✅ Kapandı. (Per-path pattern detayı governance ADR'sinde genişleyecek.)

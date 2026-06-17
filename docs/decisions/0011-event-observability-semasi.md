@@ -29,5 +29,13 @@ event'ler zaten JSON. Şemayı şimdi dondurmak motorun tutarlı yaymasını gar
 - Audit/journal (ADR-0010) repo'da; event-stream (canlı) Postgres'te — ikisi farklı amaç (kalıcı denetim vs canlı izleme).
 - Faz-3 UI (VS Code/web) bu şema + control kanalı üstüne oturur; teknoloji seçimi ertelenmiş seam.
 
+## Güncelleme (review: Y2, D5)
+- **Sahiplik:** event'leri Postgres'e yazan + NOTIFY eden + komut-tablosunu tüketen = PLATFORM (sentinel,
+  scaffolder, conductor). Engine (ADR-0002 `Events()`) YALNIZ kendi subprocess çıktısını normalize edip
+  platforma verir — Postgres'i engine bilmez.
+- **phase↔fiil eşlemesi:** intake→`plan`; Develop→`develop`/`test`/`diff`/`log`; Verify→`review`/`verify`;
+  conductor→`pr`/`merge`; sentinel→`health`/`intervention-needed`.
+- **Faz:** event-stream + codegen = Faz-1b; Faz-1a'da event'ler dosyaya/stdout'a log'lanır (ADR-0013).
+
 ## Durum
 ✅ Kapandı. JSON Schema dosyaları + Postgres event tablosu DDL implementasyonda yazılır.

@@ -20,7 +20,7 @@ Benimle yazışarak senaryo+holdout üretilen; bu task'ları **birden çok proje
 | [0002](0002-engine-adapter.md) | Engine/Adapter | 5-fiil arayüz DONDU (Develop/Verify/Health/Events/Control); tek genel CommandEngine (reçete komutları subprocess; yeni tip=yeni reçete, kod yok) | ✅ DONDU |
 | [0003](0003-verify-gate.md) | Verify-gate | Deterministik kanıt + taze-göz review; lokal-öncelikli, CI post-merge, risk-katmanlı | ✅ Kapandı |
 | [0004](0004-branch-merge-modeli.md) | Branch/merge | Kısa-ömürlü per-task branch → gate → squash-merge develop → sil | ✅ Kapandı |
-| [0005](0005-intake-katmani.md) | Intake | Konuşma→senaryo+holdout damıtma birinci-sınıf parça | 🟡 Yön kapandı, format detayı açık |
+| [0005](0005-intake-katmani.md) | Intake | Konuşma→senaryo+holdout damıtma birinci-sınıf parça | ✅ Kapandı (format 0012, izolasyon 0018) |
 | [0006](0006-sentinel.md) | Sentinel | 3-katman: deterministik taban + LLM-danışman (gri-bölge) + deterministik backstop | ✅ Kapandı |
 | [0007](0007-platform-dili-go.md) | Platform dili | Go (tek binary, kolay kurulum); şema tek-kaynak → Go+TS codegen | ✅ Kapandı |
 | [0008](0008-host-ve-concurrency.md) | Host & concurrency | Şema host+capability-aware; Faz-1 tek-host; lease=global cap + repo başına 1 | ✅ Faz-1 kapandı, çok-host Faz-2 |
@@ -28,16 +28,27 @@ Benimle yazışarak senaryo+holdout üretilen; bu task'ları **birden çok proje
 | [0010](0010-registry-state-semasi.md) | Registry/state | Merkezi Postgres (registry+lease, host-üstü atomik) + ince Go client; canlı durum DB / audit repo'da; runtime kaynaktan-türet (drift yok) | ✅ Kapandı |
 | [0011](0011-event-observability-semasi.md) | Event/observability | Postgres+LISTEN/NOTIFY gerçek-zaman; JSON Schema tek-kaynak→Go+TS codegen; phase/kind taksonomi + intervention-needed; control ters-kanal | ✅ Kapandı |
 | [0012](0012-intake-format.md) | Intake format | Senaryo şeması (id/lane/tier/deps/acceptance/holdout); holdout=deterministik test (kod); karma görünürlük (temel TDD + gizli holdout); asistanlı damıtma+onay | ✅ Kapandı |
+| [0013](0013-faz1a-faz1b-bolunmesi.md) | Faz-1a/1b bölünmesi | Walking-skeleton (1a: dosya-state, tek claude -p, en riskli varsayımı önce test) → ölçek (1b: Postgres, governor, intake, events) | ✅ Kapandı |
+| [0014](0014-performer-kontrati-llm-dayaniklilik.md) | Performer kontratı + LLM dayanıklılık | develop_cmd stdin/stdout kontratı; pipeline performer-içinde; malformed/no-verdict/not-logged-in→blocked; sahte-yeşil asla | ✅ Kapandı |
+| [0015](0015-macos-deployment-runtime.md) | macOS deployment/runtime | FDA-scoped binary, oauth-token (keychain ulaşılmaz), explicit PATH, caffeinate, launchd, preflight | ✅ Kapandı |
+| [0016](0016-liveness-recovery-somut.md) | Liveness/recovery (somut) | mkdir-lock, stale-steal, progress-aware watchdog (mtime), orphan-sweep, BAĞIMSIZ auto-reconcile job; Katman-2 → 1b | ✅ Kapandı |
+| [0017](0017-workspace-modeli.md) | Workspace modeli | Per-project clone + per-task worktree + cleanup; gh-token (deploy-key yasak); verify-worktree | ✅ Kapandı |
+| [0018](0018-holdout-izolasyon.md) | Holdout izolasyon | Public test repo'da, gizli holdout repo-DIŞI store; verify-worktree'ye geçici enjekte; negatif-test ile kanıt | ✅ Kapandı |
 
-## Açık / sıradaki kararlar
-**Tüm Faz-1 tasarım kararları KAPANDI (ADR 0001–0012).** Kalan:
-- **Faz-1 iskelet (KOD)** — Provisioner + Registry (Postgres) + Event-şeması (JSON Schema) + Verify-gate + Resource-governor. Engine arayüzü donduğu için (ADR-0002) başlanabilir. optiway/test-proje ile uçtan uca doğrula (canlıya DOKUNMA).
-- **Platform repo remote** — `everva/conductor-platform` private kurulumu (§6.2; henüz yok).
-- **UI hedefi (Faz-3)** — VS Code vs web (ertelendi; şimdilik dilden-bağımsız event+control seam).
+## Durum
+**Tüm Faz-1 tasarım kararları KAPANDI (ADR 0001–0018)** + 2 bağımsız adversarial review'ın 25 bulgusu kapatıldı
+([REVIEW-FINDINGS.md](../REVIEW-FINDINGS.md)). Repo: github.com/everva/conductor-platform (private).
+- **Sıradaki (KOD):** [PHASE-1-PLAN.md](../PHASE-1-PLAN.md) → **Faz-1a walking skeleton** (ÖN-ADIM: paylaşılan
+  kontratları dondur → Dalga A: statestore+registry+engine → B: provisioner+verify+sentinel+macOS → C: entegrasyon+uçtan-uca).
+- **UI hedefi (Faz-3)** — VS Code vs web (ertelendi; event+control seam hazır).
+
+**Takma-ad eşlemesi** (eski ADR metinlerinde): ADR-c = ADR-0010, ADR-d = ADR-0012, ADR-e = ADR-0011.
 
 ## Faz planı
-- **Faz-1 (ana yapı):** Provisioner + Registry + Event-şeması + Verify-gate + Resource-governor. Tek host (davinci), lokal-dosya state. optiway/test-proje ile uçtan uca doğrula (canlıya DOKUNMA).
-- **Faz-2:** Engine Adapter 2. reçete + çok-host capability routing (iOS-lane→Mac).
+- **Faz-1a (walking skeleton):** dosya-state + tek `claude -p` + deterministik verify + tek task merge + macOS launchd.
+  En riskli varsayımı (engine mekaniği + LLM dayanıklılık + holdout izolasyon) önce test eder. (ADR-0013)
+- **Faz-1b (ölçek):** Postgres + resource-governor (paralel) + intake + scaffolder + events + governance-policy + heartbeat.
+- **Faz-2:** Engine 2. reçete + çok-host capability routing (iOS-lane→Mac) + sentinel Katman-2.
 - **Faz-3:** Observability UI (VS Code/web), Kontaktör-buildable.
 
 ## Taşınan disiplin

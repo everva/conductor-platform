@@ -24,5 +24,11 @@ LLM'i **canlılık teşhisine (danışman)** koy, karar merciine DEĞİL. 3 katm
 - Sentinel ayrı karmaşık servis değil; liveness+recovery platform iskeletine gömülü, event yayar (observability ilk veri kaynağı).
 - LLM-judge çağrısı `claude -p` subprocess (Go'dan).
 
+## Güncelleme (review: K5)
+Katman-1 (deterministik) ve Katman-3 (backstop) SOMUT mekanizmaları **ADR-0016**'da operasyonelleştirildi
+(atomik mkdir-lock, stale-lock steal, progress-aware watchdog [mtime], orphan-sweep, **BAĞIMSIZ** auto-reconcile
+job). Katman-2 (LLM-danışman gri-bölge) **Faz-1b**'ye ertelendi (ADR-0013) — walking skeleton'da deterministik
+taban+backstop yeter.
+
 ## Durum
-✅ Kapandı.
+✅ Kapandı (ADR-0016 somutlar).

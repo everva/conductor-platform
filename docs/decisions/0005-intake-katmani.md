@@ -21,4 +21,5 @@ Kalite kapısının çapası senaryonun (B)-formu (kabul kriteri) olmasıdır. I
 - Holdout reçetesi verify-gate (ADR-0003) tarafından koşulur.
 
 ## Durum
-🟡 Yön kapandı. Somut format şeması (senaryo + holdout) açık — ADR-d'de dondurulacak.
+✅ Kapandı. Senaryo formatı **ADR-0012**'de, gizli-holdout izolasyonu **ADR-0018**'de, asistanlı damıtma
+zamanlaması **ADR-0013** (Faz-1b) ile donduruldu.

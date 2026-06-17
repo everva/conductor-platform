@@ -33,5 +33,10 @@ Per-stack profil = jeneriklik + isabet dengesi. Asistanlı+onay = hız + güvenl
 - Per-stack profil kütüphanesi platformda yaşar (kapsam = implementasyon detayı; ilk hedef stack'ler kullanıcı
   projelerinden: ios-swift, node/medusa, next-web).
 
+## Güncelleme (review: O1)
+**Bootstrap-task tavuk-yumurta çözümü:** kalite-altyapısı kuran task'ın kendi kapısı = **meta-holdout**
+("test komutu artık var ve yeşil çalışıyor" — deterministik kontrol). Bu özel bootstrap akışı normal
+gizli-holdout'tan (ADR-0018) muaftır; insan onayıyla geçer. (Takma-ad: "ADR-c" = ADR-0010.)
+
 ## Durum
 ✅ Kapandı.

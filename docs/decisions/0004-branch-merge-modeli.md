@@ -24,5 +24,11 @@ korur + insan-ekibi güvenliğini (review-öncesi kod sızmaz) ekler. Branch öm
 - Bağımlı task taze develop'tan çıkar → zincir korunur.
 - blocked task'a bağımlılar "ready" olmaz (dep-gate).
 
+## Güncelleme (review: O4, O2)
+- **Merge tespiti:** squash-merge commit mesajına `[task:<id>]` trailer → reconcile (ADR-0010/0016) develop'ta
+  grep'leyerek task'ın merge'ini DETERMİNİSTİK tespit eder.
+- **retry-count:** `tasks.retry_count` (ADR-0010 DDL). retry-cap (bu ADR, max 2) ile time-backstop
+  (ADR-0006/0016, ~6h) BAĞIMSIZ tetikler; hangisi önce vurursa blocked — koordinasyon ADR-0016'da.
+
 ## Durum
 ✅ Kapandı.
