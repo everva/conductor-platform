@@ -9,8 +9,11 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/everva/conductor-platform/internal/heartbeat"
 )
 
 // newTestLogger returns a logger that discards output so test logs stay clean.
@@ -200,6 +203,99 @@ func TestRunExitCodes(t *testing.T) {
 			t.Fatalf("run(-once no-op) = %d, want 0", code)
 		}
 	})
+}
+
+// TestParseConfig_CheckMode proves -check only needs -heartbeat (not
+// project/root), and that an empty heartbeat path is rejected in check mode.
+func TestParseConfig_CheckMode(t *testing.T) {
+	t.Run("check needs only heartbeat", func(t *testing.T) {
+		cfg, err := parseConfig([]string{"-check", "-heartbeat", "/tmp/hb.json"}, io.Discard)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		if !cfg.check || cfg.heartbeatPath != "/tmp/hb.json" {
+			t.Fatalf("unexpected check cfg: %+v", cfg)
+		}
+		if cfg.heartbeatStale <= 0 {
+			t.Fatalf("heartbeatStale should default positive, got %s", cfg.heartbeatStale)
+		}
+	})
+
+	t.Run("check without heartbeat errors", func(t *testing.T) {
+		if _, err := parseConfig([]string{"-check"}, io.Discard); err == nil {
+			t.Fatal("expected error: -check requires -heartbeat")
+		}
+	})
+}
+
+// TestRunCheck_ExitCodes drives the independent stall-detector entry point and
+// asserts its exit-code contract (FRESH=0, STALE=1, MISSING=2) over an injected
+// heartbeat file. It tests the inner run path (runCheck), not os.Exit.
+func TestRunCheck_ExitCodes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hb.json")
+	at := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+
+	// MISSING: no file yet -> exit 2.
+	missingCfg := config{check: true, heartbeatPath: path, heartbeatStale: time.Minute}
+	if code := runCheck(missingCfg, newTestLogger(), io.Discard); code != 2 {
+		t.Fatalf("runCheck(missing) = %d, want 2", code)
+	}
+
+	// Write a heartbeat stamped at `at`.
+	w := heartbeat.NewWriter(path, "h", "p", 1, func() time.Time { return at })
+	if err := w.Write(1, "noop"); err != nil {
+		t.Fatalf("seed heartbeat: %v", err)
+	}
+
+	// FRESH: a generous threshold makes it fresh regardless of wall-clock skew at
+	// test time (the heartbeat was just written, so age is small).
+	freshCfg := config{check: true, heartbeatPath: path, heartbeatStale: time.Hour}
+	if code := runCheck(freshCfg, newTestLogger(), io.Discard); code != 0 {
+		t.Fatalf("runCheck(fresh) = %d, want 0", code)
+	}
+
+	// STALE: a tiny threshold against a fixed-in-the-past stamp. We can't inject
+	// the clock through runCheck, so write a heartbeat far in the past instead.
+	stalePath := filepath.Join(dir, "stale.json")
+	oldW := heartbeat.NewWriter(stalePath, "h", "p", 1, func() time.Time { return time.Now().Add(-time.Hour) })
+	if err := oldW.Write(1, "noop"); err != nil {
+		t.Fatalf("seed stale heartbeat: %v", err)
+	}
+	staleCfg := config{check: true, heartbeatPath: stalePath, heartbeatStale: time.Minute}
+	if code := runCheck(staleCfg, newTestLogger(), io.Discard); code != 1 {
+		t.Fatalf("runCheck(stale) = %d, want 1", code)
+	}
+}
+
+// TestDaemonWritesHeartbeat proves the tick loop writes a heartbeat when a path
+// is configured, and that the record carries the advancing tick count + outcome.
+func TestDaemonWritesHeartbeat(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.once = true
+	cfg.heartbeatPath = filepath.Join(t.TempDir(), "hb.json")
+
+	d, err := newDaemon(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("newDaemon: %v", err)
+	}
+	if _, err := d.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	rec, err := heartbeat.Read(cfg.heartbeatPath)
+	if err != nil {
+		t.Fatalf("Read heartbeat: %v", err)
+	}
+	if rec.Tick != 1 {
+		t.Fatalf("heartbeat tick = %d, want 1 after one tick", rec.Tick)
+	}
+	if rec.LastOutcome != "noop" {
+		t.Fatalf("heartbeat outcome = %q, want noop", rec.LastOutcome)
+	}
+	if rec.Project != cfg.project {
+		t.Fatalf("heartbeat project = %q, want %q", rec.Project, cfg.project)
+	}
 }
 
 func equalStrs(a, b []string) bool {

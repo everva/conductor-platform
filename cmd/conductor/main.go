@@ -39,6 +39,7 @@ import (
 	"github.com/everva/conductor-platform/internal/conductor"
 	"github.com/everva/conductor-platform/internal/engine"
 	"github.com/everva/conductor-platform/internal/governor"
+	"github.com/everva/conductor-platform/internal/heartbeat"
 	"github.com/everva/conductor-platform/internal/provisioner"
 	"github.com/everva/conductor-platform/internal/registry"
 	"github.com/everva/conductor-platform/internal/statestore"
@@ -58,6 +59,11 @@ const (
 	// runs in the worktree. It carries NO key — the subscription session does. It
 	// is split on spaces into an argv (no shell). Override with -develop-cmd.
 	defaultDevelopCmd = "claude -p"
+	// defaultHeartbeatStale is the age past which the independent stall-detector
+	// (-check) considers the heartbeat STALE. Generous relative to the default
+	// 30s tick interval so a single slow tick does not false-alert; an external
+	// alert job overrides via -heartbeat-stale / CONDUCTOR_HEARTBEAT_STALE.
+	defaultHeartbeatStale = 5 * time.Minute
 )
 
 func main() {
@@ -91,6 +97,21 @@ type config struct {
 	// loadCeiling is the governor's normalized-load ceiling (loadavg / NumCPU)
 	// above which new work is denied admission (ADR-0008 "host yük tavanı").
 	loadCeiling float64
+	// heartbeatPath is where the daemon writes its liveness heartbeat each tick
+	// (ADR-0016). Empty = no heartbeat written (non-breaking no-op).
+	heartbeatPath string
+	// heartbeatStale is the staleness threshold the independent -check detector
+	// uses to classify the heartbeat FRESH vs STALE.
+	heartbeatStale time.Duration
+	// heartbeatProgress, when > 0, enables progress-aware (no-progress) detection
+	// in -check: a fresh heartbeat whose tick count never advances for longer than
+	// this window is reported STALE (stuck). It is consulted only across repeated
+	// checks in a long-lived detector process, so a single -check pass ignores it.
+	heartbeatProgress time.Duration
+	// check, when true, runs the INDEPENDENT stall-detector instead of the daemon:
+	// read the heartbeat at heartbeatPath, print status, exit 0 FRESH / non-zero
+	// STALE|MISSING (ADR-0016 independent backstop).
+	check bool
 }
 
 // run parses argv, builds the daemon, and drives it once or in a loop. It is
@@ -104,6 +125,13 @@ func run(ctx context.Context, argv []string, logger *slog.Logger, stderr io.Writ
 		}
 		_, _ = fmt.Fprintf(stderr, "conductor: %v\n", err)
 		return 2
+	}
+
+	// Independent stall-detector mode (ADR-0016): read the heartbeat and exit on
+	// its liveness verdict. This is the OUT-OF-PROCESS backstop an external
+	// launchd/cron job invokes; it never builds or runs the daemon.
+	if cfg.check {
+		return runCheck(cfg, logger, stderr)
 	}
 
 	d, err := newDaemon(cfg, logger)
@@ -124,6 +152,24 @@ func run(ctx context.Context, argv []string, logger *slog.Logger, stderr io.Writ
 		return 1
 	}
 	return 0
+}
+
+// runCheck is the INDEPENDENT stall-detector entry point (ADR-0016): it reads
+// the heartbeat at cfg.heartbeatPath and exits on its liveness verdict, never
+// touching the daemon's wiring (store/engine/git). An external launchd/cron job
+// runs `conductor -check -heartbeat <path>` periodically and alerts on the
+// non-zero exit. The default Notifier logs the stall; the exit code is the
+// machine-readable signal (see heartbeat.Detect for the code contract).
+func runCheck(cfg config, logger *slog.Logger, stderr io.Writer) int {
+	chk, err := heartbeat.New(cfg.heartbeatPath, heartbeat.CheckerConfig{Threshold: cfg.heartbeatStale})
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "conductor: %v\n", err)
+		return 2
+	}
+	if cfg.heartbeatProgress > 0 {
+		chk.WithProgressWindow(cfg.heartbeatProgress)
+	}
+	return heartbeat.Detect(chk, heartbeat.LogNotifier{Logger: logger}, stderr)
 }
 
 // parseConfig parses argv into a config, applying env fallback per flag and
@@ -147,16 +193,44 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		"governor: max concurrent tasks across all projects (lease-derived; ADR-0008)")
 	loadCeiling := fs.Float64("load-ceiling", envFloatOr("CONDUCTOR_LOAD_CEILING", governor.DefaultLoadCeiling),
 		"governor: normalized 1-min load ceiling (loadavg/NumCPU) above which new work is denied")
+	heartbeat := fs.String("heartbeat", envOr("CONDUCTOR_HEARTBEAT", ""),
+		"path the daemon writes its liveness heartbeat to each tick (ADR-0016); empty = disabled")
+	heartbeatStale := fs.Duration("heartbeat-stale", envDurationOr("CONDUCTOR_HEARTBEAT_STALE", defaultHeartbeatStale),
+		"independent -check: heartbeat age past which the daemon is reported STALE")
+	heartbeatProgress := fs.Duration("heartbeat-progress", envDurationOr("CONDUCTOR_HEARTBEAT_PROGRESS", 0),
+		"independent -check: if >0, a fresh heartbeat whose tick never advances for this long is STALE (stuck)")
+	check := fs.Bool("check", envBoolOr("CONDUCTOR_CHECK", false),
+		"run the INDEPENDENT stall-detector over -heartbeat and exit (0=FRESH, non-zero=STALE/MISSING); does not start the daemon")
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "conductor — Faz-1a tick daemon")
 		_, _ = fmt.Fprintln(stderr, "\nusage: conductor -project <id> -root <dir> [-once] [-interval 30s] [-develop-cmd \"claude -p\"]")
+		_, _ = fmt.Fprintln(stderr, "       conductor -check -heartbeat <path>   # independent stall-detector (ADR-0016)")
 		fs.PrintDefaults()
 	}
 
 	if err := fs.Parse(argv); err != nil {
 		return config{}, err
 	}
+
+	// -check is the INDEPENDENT stall-detector: it only reads the heartbeat, so it
+	// needs none of the daemon's required fields (project/root). It must NOT build
+	// the daemon, so validate just its own input and return early.
+	if *check {
+		if *heartbeat == "" {
+			return config{}, errors.New("-check requires -heartbeat <path> (or set CONDUCTOR_HEARTBEAT)")
+		}
+		if *heartbeatStale <= 0 {
+			return config{}, fmt.Errorf("-heartbeat-stale must be positive (got %s)", *heartbeatStale)
+		}
+		return config{
+			check:             true,
+			heartbeatPath:     *heartbeat,
+			heartbeatStale:    *heartbeatStale,
+			heartbeatProgress: *heartbeatProgress,
+		}, nil
+	}
+
 	if *project == "" {
 		return config{}, errors.New("-project is required (or set CONDUCTOR_PROJECT)")
 	}
@@ -183,16 +257,19 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 	}
 
 	return config{
-		project:     *project,
-		rootDir:     *rootDir,
-		baseBranch:  *baseBranch,
-		interval:    *interval,
-		timeout:     *timeout,
-		developCmd:  cmd,
-		once:        *once,
-		hostID:      host,
-		globalCap:   *globalCap,
-		loadCeiling: *loadCeiling,
+		project:           *project,
+		rootDir:           *rootDir,
+		baseBranch:        *baseBranch,
+		interval:          *interval,
+		timeout:           *timeout,
+		developCmd:        cmd,
+		once:              *once,
+		hostID:            host,
+		globalCap:         *globalCap,
+		loadCeiling:       *loadCeiling,
+		heartbeatPath:     *heartbeat,
+		heartbeatStale:    *heartbeatStale,
+		heartbeatProgress: *heartbeatProgress,
 	}, nil
 }
 
@@ -205,6 +282,12 @@ type Daemon struct {
 	interval time.Duration
 	once     bool
 	logger   *slog.Logger
+	// hb writes the liveness heartbeat each tick (ADR-0016). It is nil when no
+	// -heartbeat path is configured; *heartbeat.Writer treats a nil receiver as a
+	// no-op, so the daemon stays non-breaking without nil-guards at call sites.
+	hb *heartbeat.Writer
+	// ticks counts ticks attempted; it is the heartbeat's progress signal.
+	ticks uint64
 }
 
 // newDaemon wires the SAME components the conductor e2e test wires (in-memory
@@ -275,12 +358,17 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		return nil, fmt.Errorf("conductor: %w", err)
 	}
 
+	// NewWriter returns nil for an empty path; a nil *Writer is a no-op, so an
+	// unconfigured heartbeat changes nothing about the daemon's behavior.
+	hb := heartbeat.NewWriter(cfg.heartbeatPath, cfg.hostID, cfg.project, os.Getpid(), nil)
+
 	return &Daemon{
 		cond:     cond,
 		project:  cfg.project,
 		interval: cfg.interval,
 		once:     cfg.once,
 		logger:   logger,
+		hb:       hb,
 	}, nil
 }
 
@@ -323,6 +411,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			d.logger.Info("conductor daemon stopping (signal received); in-flight tick finished")
+			// Final heartbeat on graceful shutdown: a "shutdown" outcome lets the
+			// independent detector distinguish a clean stop from a crash (the file
+			// then goes stale, not torn). Best-effort; a write error is logged only.
+			if hbErr := d.hb.Write(d.ticks, "shutdown"); hbErr != nil {
+				d.logger.Warn("final heartbeat write failed", slog.String("err", hbErr.Error()))
+			}
 			return nil
 		case <-ticker.C:
 			if _, err := d.tick(ctx); err != nil {
@@ -344,6 +438,20 @@ func (d *Daemon) tick(ctx context.Context) (conductor.TickResult, error) {
 	d.logger.Info("tick start", slog.String("project", d.project))
 
 	res, err := d.cond.Tick(ctx, d.project)
+
+	// Heartbeat (ADR-0016): record this tick whether it succeeded or failed, so a
+	// stuck/erroring daemon still emits liveness AND a progress signal (the tick
+	// count advances even on a failed tick). The outcome captures error context
+	// for the independent detector to log. A heartbeat-write error is logged but
+	// never fails the tick — liveness telemetry must not break the daemon.
+	d.ticks++
+	outcome := string(res.Outcome)
+	if err != nil {
+		outcome = "error:" + string(res.Outcome)
+	}
+	if hbErr := d.hb.Write(d.ticks, outcome); hbErr != nil {
+		d.logger.Warn("heartbeat write failed", slog.String("err", hbErr.Error()))
+	}
 
 	attrs := []any{
 		slog.String("project", d.project),
