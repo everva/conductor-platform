@@ -40,6 +40,7 @@ Not: builder tick-bug (~1dk tick-ölümü) nedeniyle A-3..C-2 Agent'larla kodlan
 | [0017](0017-workspace-modeli.md) | Workspace modeli | Per-project clone + per-task worktree + cleanup; gh-token (deploy-key yasak); verify-worktree | ✅ Kapandı |
 | [0018](0018-holdout-izolasyon.md) | Holdout izolasyon | Public test repo'da, gizli holdout repo-DIŞI store; verify-worktree'ye geçici enjekte; negatif-test ile kanıt | ✅ Kapandı |
 | [0019](0019-builder-light-conductor.md) | İnşa aracı (builder) | xirigo'dan port light-conductor (`tools/builder/`); Go-gate; Faz-1a'yı otonom kodlar; ADR-0015/0016 canlı test; olgunlaşınca dogfood | ✅ Kapandı |
+| [0020](0020-control-pause-temsili.md) | Control/pause temsili | Frozen StateStore Project-mutasyonu yok → pause kapsüllenmiş marker-task ile kalıcı+paylaşımlı; conductor.Tick honor; engine.Command vokabüleri (Pause/Resume/Abort); abort ertelendi; öneri: toplamsal UpdateProject | ✅ Kapandı (abort follow-up) |
 
 ## Durum
 **Tüm Faz-1 tasarım kararları KAPANDI (ADR 0001–0018)** + 2 bağımsız adversarial review'ın 25 bulgusu kapatıldı

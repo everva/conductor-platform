@@ -74,5 +74,18 @@ Yeni yetenekler (N-4 PG, N-9 events, N-10 governance) kuruldu AMA daemon (cmd/co
 - **P3-4: conductorctl paylaşılan store** — ✅ done (df44906, push'lu). conductorctl global `-dsn`→PostgresStore+Migrate (extractDSN pre-pass: subcommand dispatch'i bozmadan -dsn'i argv'den ayıklar; flag>env>empty). DSN/şifre loglanmaz (pgx redact). **Bağımsız doğrulandı:** offline gate+e2e yeşil + **gerçek binary'lerle kendi docker PG'imde cross-process**: proc1 onboard→proc2(ayrı process) status GÖRDÜ→proc3 daemon -once aynı PG'de tick. Operatör→daemon döngüsü gerçek.
 - **P3-5: conductorctl rich-intake delege** (ŞİMDİ 🔄) — conductorctl intake'in lenient parser'ını internal/intake (rich ADR-0012 validate) ile değiştir; fixture'ları geçerli rich senaryolara yükselt; tek intake yolu. (N-7 borcu.)
 - **P3-5: conductorctl rich-intake delege** — ✅ done (1214a46, push'lu). 179-satır lenient parser (scenario.go) SİLİNDİ; intake→intake.IntakeFile delege; fixture'lar rich'e yükseltildi (title/acceptance/holdout). net -282/+163, parser kalıntısı yok. **Bağımsız doğrulandı:** gate yeşil, fresh e2e PASS, 7 intake testi (no-partial-write/repo-internal-holdout-red/unknown-project) PASS, frozen+intake-API untouched.
-- **P3-3: Control reverse-channel** (ŞİMDİ 🔄) — ADR-0011§4. BULGU: conductorctl pause/resume `a.ctrl` seam'inden geçiyor AMA conductor.Tick pause-check YOK → daemon'a karşı muhtemelen inert. Scope: pause-state'i StateStore'da kalıcı yap (PG paylaşımı) + conductor.Tick paused-project'i atlasın (no-op) + engine.Command vokabülerini (Pause/Resume/Abort) formalize et. Canlı-performer-abort riskliyse follow-up. Real-DB: pause→daemon -once atlar, resume→sürer.
+- **P3-3: Control reverse-channel** — ✅ done (166bf40, push'lu). BULGU: pause yalnız conductorctl in-memory'deydi + conductor.Tick pause-check yoktu. **Frozen kısıt:** StateStore'da UpdateProject yok (Project immutable) → pause kapsüllenmiş **marker-task** (`__conductor.paused__:<id>`, ProjectID boş=ledger'da görünmez) ile kalıcı/paylaşımlı (`conductor.StorePauser`). Tick honor (OutcomePaused, nil-Pauser=eski davranış). engine.Command vokabüleri (control.go: ActionPause/Resume/Abort). **Abort ertelendi** (process-group sinyali, follow-up). Karar kaydı: **ADR-0020**. **Bağımsız doğrulandı:** frozen 0 değişiklik, gate+fresh-e2e+pause-testleri yeşil, **gerçek binary'lerle PG'de** pause→daemon outcome=paused→resume→ilerliyor, marker görünmez.
+
+## 🎉🎉🎉 P3 TAMAM (P3-1..P3-5) — DAEMON ÜRETİM-ŞEKLİNDE
+Postgres-backed + operatör-CLI paylaşımlı store + events (PG LISTEN/NOTIFY) + governance (tier-gate) + governor + heartbeat + pause/resume kontrol. Her biri bağımsız + gerçek-PG/gerçek-binary doğrulandı. 21 paket, gate yeşil. ADR-0020 eklendi.
+
+## P4 — ÜRETİM SERTLEŞTİRME (autonomous-safe, kullanıcı kararı GEREKMEYEN işler)
+- **P4-1: Dockerfile (multi-stage) + docker-compose** (daemon + postgres) — "production çıkacak" için konteynerleştirme/deploy. (ŞİMDİ 🔄)
+- **P4-2: Daemon health/observability HTTP** (/healthz liveness + /readyz + heartbeat/tick durumu) — prod ops şart.
+- **P4-3: Makefile** (gate/build/run/migrate hedefleri) + dağıtım dokümanı.
+
+## FOLLOW-UP (kullanıcı kararı / risk → sabah)
+- Abort (in-flight iptal): kalıcı aborting sinyali + tick ctx-honor (ADR-0020 follow-up).
+- StateStore'a toplamsal UpdateProject (frozen'ın kontrollü gevşetilmesi) → pause'u Project-durumuna taşı (ADR-0020 önerisi).
+- Builder tick-bug kök-çözümü (temiz ortam; gece-otonom RİSKLİ → bilinçli ertelendi).
 - **Opsiyonel:** builder tick-bug kök-çözümü (temiz ortam) → çözülürse dogfood.
