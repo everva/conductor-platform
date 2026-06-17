@@ -49,4 +49,6 @@
 - (Faz-1a) PRE-0..C-2: ✅ done (develop). e2e: ✅.
 - Gece başlangıç: develop @ 39f37ca, builder durdurulmuş, heartbeat-loop kuruldu (cron 7,37 * * * *).
 - **N-1 (cmd/conductor daemon):** ✅ done (5fa2ef3, push'lu). tick-loop + `-once` + graceful-shutdown + 7 hermetik test. Bağımsız gate yeşil (build/test -count=1/vet/lint 0 + e2e compile + -once smoke noop). slog yapılandırılmış log; develop-cmd flag/env (secret yok).
-- **N-2 (CI GitHub Actions):** 🔄 Agent (worktree). | **N-3 (README):** 🔄 Agent (worktree). Paralel, disjoint dosya.
+- **N-3 (README):** ✅ done (e2e63f8, push'lu). 189-satır README; mimari/tick-akışı/flag&subcommand/durum — kod ile doğrulandı, Postgres & gerçek claude -p "pending" doğru işaretli. cherry-pick ile merge.
+- **N-2 (CI GitHub Actions):** 🔄 Agent (agent/n2-ci worktree). Bekleniyor → bağımsız gate → cherry-pick → push.
+- **NOT (öğrenildi):** Agent `isolation:"worktree"` SESSION repo'sunu (k8s) izole ediyor, conductor-platform'u DEĞİL. Bu yüzden agent'lar kendi worktree'lerini açtı (cherry-pick ile merge ediliyor). Bundan sonra worktree-isolation YOK; agent'lar conductor-platform'da direkt çalışır, seri çalıştır (race önlemi).
