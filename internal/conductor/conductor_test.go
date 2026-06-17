@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/everva/conductor-platform/internal/engine"
+	"github.com/everva/conductor-platform/internal/events"
+	"github.com/everva/conductor-platform/internal/governance"
 	"github.com/everva/conductor-platform/internal/governor"
 	"github.com/everva/conductor-platform/internal/registry"
 	"github.com/everva/conductor-platform/internal/statestore"
@@ -468,6 +470,133 @@ func TestConductor_Tick_GovernorAdmit_Proceeds(t *testing.T) {
 	}
 	if h.merge.calls != 1 {
 		t.Fatalf("admit must let the merge happen, got %d", h.merge.calls)
+	}
+}
+
+// TestConductor_Tick_HumanRequiredTier_HeldNotMerged proves a high-tier task whose
+// independent gate PASSES is NOT auto-merged when a human-required governance policy
+// is injected: no merge call, the task is held (blocked) awaiting a human, the held
+// outcome + structured hold reason are surfaced, and an intervention-needed event is
+// emitted. The base never gets a [task:<id>] trailer for a held task.
+func TestConductor_Tick_HumanRequiredTier_HeldNotMerged(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, engine.Verdict{Result: "pass"}, nil, "pass", nil)
+	// Make the only task a high-risk tier the default policy holds for a human.
+	tk := h.task(t)
+	tk.Tier = governance.TierT4
+	if err := h.store.UpdateTask(ctx, tk); err != nil {
+		t.Fatalf("set tier: %v", err)
+	}
+
+	em := &recordingEmitter{}
+	cond, err := New(Deps{
+		Store:       h.store,
+		Picker:      registry.NewRegistry(h.store),
+		Provisioner: h.prov,
+		Engine:      h.eng,
+		Verifier:    h.verf,
+		Merger:      h.merge,
+		HostID:      "host-1",
+		Emitter:     em,
+		Policy:      governance.DefaultPolicy(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	res, err := cond.Tick(ctx, projectID)
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if res.Outcome != OutcomeHeld {
+		t.Fatalf("outcome = %q, want held; res=%+v", res.Outcome, res)
+	}
+	if res.HoldReason != governance.ReasonHighTier {
+		t.Fatalf("hold reason = %q, want %q", res.HoldReason, governance.ReasonHighTier)
+	}
+	if h.merge.calls != 0 {
+		t.Fatalf("human-required tier must NOT merge, got %d merge calls", h.merge.calls)
+	}
+	// Verify still ran (the gate is necessary); only the merge was withheld.
+	if h.verf.calls != 1 {
+		t.Fatalf("verify calls = %d, want 1 (gate runs before the hold)", h.verf.calls)
+	}
+	if got := h.task(t).Status; got != registry.StatusBlocked {
+		t.Fatalf("held task status = %q, want blocked (awaiting human)", got)
+	}
+	if !em.hasKind(events.KindInterventionNeeded) {
+		t.Fatalf("held task must emit intervention-needed; got kinds %v", em.kinds())
+	}
+	if h.leaseHeld(t) {
+		t.Fatalf("lease must be released after a held tick")
+	}
+	if h.prov.cleanupCalls != 1 {
+		t.Fatalf("worktree cleanup calls = %d, want 1", h.prov.cleanupCalls)
+	}
+}
+
+// TestConductor_Tick_AutoMergeTier_StillMerges proves the policy is non-intrusive
+// for low-risk tiers: a T2 task whose gate passes auto-merges exactly as without a
+// policy, and emits no intervention-needed event.
+func TestConductor_Tick_AutoMergeTier_StillMerges(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, engine.Verdict{Result: "pass"}, nil, "pass", nil) // seeded tier is T2
+
+	em := &recordingEmitter{}
+	cond, err := New(Deps{
+		Store:       h.store,
+		Picker:      registry.NewRegistry(h.store),
+		Provisioner: h.prov,
+		Engine:      h.eng,
+		Verifier:    h.verf,
+		Merger:      h.merge,
+		HostID:      "host-1",
+		Emitter:     em,
+		Policy:      governance.DefaultPolicy(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	res, err := cond.Tick(ctx, projectID)
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if res.Outcome != OutcomeMerged {
+		t.Fatalf("outcome = %q, want merged (auto-merge tier)", res.Outcome)
+	}
+	if h.merge.calls != 1 {
+		t.Fatalf("auto-merge tier must merge once, got %d", h.merge.calls)
+	}
+	if got := h.task(t).Status; got != registry.StatusDone {
+		t.Fatalf("task status = %q, want done", got)
+	}
+	if em.hasKind(events.KindInterventionNeeded) {
+		t.Fatalf("auto-merge tier must NOT emit intervention-needed; kinds %v", em.kinds())
+	}
+}
+
+// TestConductor_Tick_NilPolicy_AutoMergesHighTier proves the seam is backward
+// compatible: with NO policy injected, even a T4 task auto-merges (pre-N-10
+// behavior), which is exactly why existing tests stay green.
+func TestConductor_Tick_NilPolicy_AutoMergesHighTier(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, engine.Verdict{Result: "pass"}, nil, "pass", nil)
+	tk := h.task(t)
+	tk.Tier = governance.TierT4
+	if err := h.store.UpdateTask(ctx, tk); err != nil {
+		t.Fatalf("set tier: %v", err)
+	}
+
+	res, err := h.cond.Tick(ctx, projectID) // harness conductor has no Policy
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if res.Outcome != OutcomeMerged {
+		t.Fatalf("outcome = %q, want merged (nil policy = auto-merge-all)", res.Outcome)
+	}
+	if h.merge.calls != 1 {
+		t.Fatalf("nil policy must auto-merge even T4, got %d merge calls", h.merge.calls)
 	}
 }
 

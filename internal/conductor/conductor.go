@@ -25,6 +25,7 @@ import (
 
 	"github.com/everva/conductor-platform/internal/engine"
 	"github.com/everva/conductor-platform/internal/events"
+	"github.com/everva/conductor-platform/internal/governance"
 	"github.com/everva/conductor-platform/internal/governor"
 	"github.com/everva/conductor-platform/internal/statestore"
 	"github.com/everva/conductor-platform/internal/verify"
@@ -58,6 +59,12 @@ const (
 	// work this tick: a clean no-op that took no lease and did no develop. The
 	// denial reason is logged on the TickResult (ADR-0008 concurrency bounds).
 	OutcomeDenied Outcome = "denied"
+	// OutcomeHeld means develop+verify passed but the governance policy requires a
+	// HUMAN approval for the task's risk tier (ADR-0003): the green gate is
+	// necessary but not sufficient, so the conductor did NOT merge. The task is
+	// held awaiting-human (blocked + HoldReason) and an intervention-needed event
+	// is emitted. No [task:<id>] trailer lands on the base for a held task.
+	OutcomeHeld Outcome = "held"
 )
 
 // TickResult is the structured result of a single tick.
@@ -76,6 +83,10 @@ type TickResult struct {
 	// DenyReason is the governor's structured denial reason, set only when the
 	// Outcome is OutcomeDenied (admission control bounded concurrency this tick).
 	DenyReason governor.Reason
+	// HoldReason is the governance policy's structured reason for holding the task
+	// for a human, set only when the Outcome is OutcomeHeld (ADR-0003 risk-layered
+	// merge: high-tier task passed the gate but a human must approve the merge).
+	HoldReason governance.Reason
 }
 
 // Picker selects the next ready task and manages the repo-scoped lease. It is the
@@ -128,6 +139,16 @@ type Emitter interface {
 	Publish(ctx context.Context, ev events.Event) error
 }
 
+// Policy is the OPTIONAL governance seam (ADR-0003, N-10): AFTER the independent
+// verify gate PASSES, the tick consults it to decide whether the task's risk tier
+// permits an automatic merge or requires a HUMAN approval first. It is narrowed to
+// MergeMode so a fake can drive the tick; governance.Policy satisfies it. The field
+// is OPTIONAL on Deps — a nil Policy means auto-merge-all (the pre-N-10 behavior),
+// so existing wiring and tests are unaffected.
+type Policy interface {
+	MergeMode(task statestore.Task) governance.Decision
+}
+
 // Recipe carries the per-project gate/holdout binding the tick hands to the
 // verifier (ADR-0009). It is injected, not a global.
 type Recipe struct {
@@ -149,6 +170,7 @@ type Conductor struct {
 	hostID   string
 	governor Admitter
 	emitter  Emitter
+	policy   Policy
 }
 
 // Deps bundles the injected collaborators so New has a single, named-field
@@ -180,6 +202,12 @@ type Deps struct {
 	// no events are emitted, keeping construction backward compatible — callers
 	// opt in by injecting an events.EventBus.
 	Emitter Emitter
+	// Policy is the OPTIONAL governance merge policy (ADR-0003, N-10). When set,
+	// the tick consults it after a green verify gate and HOLDS high-tier tasks for
+	// a human instead of auto-merging. A nil Policy means auto-merge-all (the
+	// pre-N-10 behavior), keeping construction backward compatible — callers opt
+	// in by injecting a governance.Policy.
+	Policy Policy
 }
 
 // New returns a Conductor wired from the injected collaborators. It errors if any
@@ -215,6 +243,7 @@ func New(d Deps) (*Conductor, error) {
 		hostID:   hostID,
 		governor: d.Governor,
 		emitter:  d.Emitter,
+		policy:   d.Policy,
 	}, nil
 }
 
@@ -238,7 +267,9 @@ func (c *Conductor) emit(ctx context.Context, task statestore.Task, phase events
 // Tick runs ONE fresh-context tick for the project (ADR-0001 sıralılık):
 //
 //	PickReady -> admit (governor) -> acquire lease -> Workspace -> Develop -> Verify
-//	  -> (independent pass) squash-merge with [task:<id>] + mark done
+//	  -> (independent pass, auto-merge tier) squash-merge with [task:<id>] + mark done
+//	  -> (independent pass, human-required tier) HOLD: no merge, mark blocked + emit
+//	     intervention-needed (ADR-0003 risk-layered; only when a policy is injected)
 //	  -> (changes-requested) retry up to MaxRetries, then block
 //	  -> (malformed/no verdict) block, never fake-green
 //	  -> (auth expired) STOP the tick
@@ -330,8 +361,18 @@ func (c *Conductor) runTask(ctx context.Context, project statestore.Project, tas
 		return c.handleChangesRequested(ctx, task, verdict, review)
 	}
 
-	// Independent PASS: squash-merge into the base with a [task:<id>] trailer and
-	// mark the task done (ADR-0004).
+	// Risk-layered merge policy (ADR-0003, N-10): a green gate is necessary but not
+	// always sufficient. When a policy is injected and the task's tier requires a
+	// HUMAN, HOLD the task (no merge, no [task:<id>] trailer) instead of
+	// auto-merging. A nil policy means auto-merge-all (pre-N-10 behavior).
+	if c.policy != nil {
+		if dec := c.policy.MergeMode(task); dec.HumanRequired() {
+			return c.handleHumanRequired(ctx, task, verdict, review, dec)
+		}
+	}
+
+	// Independent PASS (and auto-merge tier): squash-merge into the base with a
+	// [task:<id>] trailer and mark the task done (ADR-0004).
 	sha, mErr := c.merger.SquashMerge(ctx, project, task, ws)
 	if mErr != nil {
 		// Merge failed AFTER an independent pass: block for inspection, never lie.
@@ -406,6 +447,34 @@ func (c *Conductor) handleChangesRequested(ctx context.Context, task statestore.
 	c.emit(ctx, task, events.PhaseReview, events.KindDecision,
 		map[string]any{"result": review.Result, "retry_count": task.RetryCount + 1})
 	return TickResult{Outcome: OutcomeRetry, TaskID: task.ID, Verdict: verdict, Review: review}, nil
+}
+
+// handleHumanRequired implements the ADR-0003 risk-layered hold: the independent
+// gate PASSED, but the task's risk tier (T3/T4 by the default policy) requires a
+// HUMAN approval before the merge may land. The conductor therefore does NOT merge
+// — no SquashMerge call, so the base branch gets NO [task:<id>] trailer for this
+// task — and instead HOLDS the task awaiting a human.
+//
+// The hold reuses the existing blocked status (no new frozen status field): a held
+// task is, like a retry-capped or failed task, one a human must act on before it
+// proceeds (registry doc: "failed and is awaiting retry/recovery"). The distinction
+// is carried out-of-band by the OutcomeHeld + HoldReason on the TickResult and by
+// the emitted intervention-needed event (ADR-0011 human-gate), which name the
+// awaiting-human cause explicitly so a UI surfaces "müdahale gerek" rather than a
+// generic failure.
+func (c *Conductor) handleHumanRequired(ctx context.Context, task statestore.Task, verdict engine.Verdict, review engine.ReviewResult, dec governance.Decision) (TickResult, error) {
+	c.emit(ctx, task, events.PhaseReview, events.KindInterventionNeeded,
+		map[string]any{"reason": "human approval required", "tier": dec.Tier, "policy_reason": string(dec.Reason)})
+	if err := c.markBlocked(ctx, task); err != nil {
+		return TickResult{}, fmt.Errorf("conductor: tick: hold for human %q: %w", task.ID, err)
+	}
+	return TickResult{
+		Outcome:    OutcomeHeld,
+		TaskID:     task.ID,
+		Verdict:    verdict,
+		Review:     review,
+		HoldReason: dec.Reason,
+	}, nil
 }
 
 // markDone re-reads the task and sets it done (ADR-0004 terminal state). It
