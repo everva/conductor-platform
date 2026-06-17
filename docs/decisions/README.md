@@ -13,6 +13,11 @@ Benimle yazışarak senaryo+holdout üretilen; bu task'ları **birden çok proje
 > DF bu yüzden battı (LLM-judge merge-gate → kararsız, 7-8h, terk). Xirigo bu yüzden tutuyor
 > (test/maestro/visual exit-code + taze-göz review). LLM yalnız *danışman* rolünde kalır, *karar mercii* değil.
 
+## GÜNCEL DURUM (2026-06-17 gecesi)
+**Faz-1a ÇEKİRDEK TAMAM (9/9) + uçtan-uca doğrulandı** — `develop`'a merge+push, 8 paket, tüm gate'ler yeşil.
+Gece-otonom çalışma + kalan iş listesi (P0/P1/P2): **[../NIGHT-AUTONOMOUS-PLAN.md](../NIGHT-AUTONOMOUS-PLAN.md)**.
+Not: builder tick-bug (~1dk tick-ölümü) nedeniyle A-3..C-2 Agent'larla kodlandı (hepsi bağımsız gate'ten geçti).
+
 ## Kapanan kararlar
 | ADR | Konu | Karar özeti | Durum |
 |-----|------|-------------|-------|
