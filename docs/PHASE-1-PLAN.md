@@ -106,4 +106,8 @@ Her sub-agent'a: ilgili ADR'ler + kontrat + "test yaz" + Rule#9 (bağımsız do�
 - Çok-host executor (ssh/agent) → **Faz-2**.
 - Sentinel Katman-2 (LLM-danışman) → **Faz-1b**.
 - Observability UI (VS Code/web) → **Faz-3** (event+control şema hazır).
-- Migration aracı: **goose** (basit). Dogfooding: platform Faz-1'de kendini conductor'la DEĞİL, normal Go test+CI ile geliştirir.
+- Migration aracı: **goose** (basit).
+- **İnşa aracı (ADR-0019):** xirigo'dan port edilmiş ayrı **builder light-conductor** (`tools/builder/` + state
+  `~/.conductor-platform-builder/`) Faz-1a task'larını otonom kodlar; Go-gate (build+test+vet+golangci-lint).
+  conductor-platform'un kendisi DEĞİL (paradoks yok); ürün olgunlaşınca dogfood'a geçilir. ÖN-ADIM: Go kontratları
+  builder'ın ilk task'ı olarak tek-performer + insan onayıyla dondurulur.

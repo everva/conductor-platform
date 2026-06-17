@@ -34,12 +34,14 @@ Benimle yazışarak senaryo+holdout üretilen; bu task'ları **birden çok proje
 | [0016](0016-liveness-recovery-somut.md) | Liveness/recovery (somut) | mkdir-lock, stale-steal, progress-aware watchdog (mtime), orphan-sweep, BAĞIMSIZ auto-reconcile job; Katman-2 → 1b | ✅ Kapandı |
 | [0017](0017-workspace-modeli.md) | Workspace modeli | Per-project clone + per-task worktree + cleanup; gh-token (deploy-key yasak); verify-worktree | ✅ Kapandı |
 | [0018](0018-holdout-izolasyon.md) | Holdout izolasyon | Public test repo'da, gizli holdout repo-DIŞI store; verify-worktree'ye geçici enjekte; negatif-test ile kanıt | ✅ Kapandı |
+| [0019](0019-builder-light-conductor.md) | İnşa aracı (builder) | xirigo'dan port light-conductor (`tools/builder/`); Go-gate; Faz-1a'yı otonom kodlar; ADR-0015/0016 canlı test; olgunlaşınca dogfood | ✅ Kapandı |
 
 ## Durum
 **Tüm Faz-1 tasarım kararları KAPANDI (ADR 0001–0018)** + 2 bağımsız adversarial review'ın 25 bulgusu kapatıldı
 ([REVIEW-FINDINGS.md](../REVIEW-FINDINGS.md)). Repo: github.com/everva/conductor-platform (private).
-- **Sıradaki (KOD):** [PHASE-1-PLAN.md](../PHASE-1-PLAN.md) → **Faz-1a walking skeleton** (ÖN-ADIM: paylaşılan
-  kontratları dondur → Dalga A: statestore+registry+engine → B: provisioner+verify+sentinel+macOS → C: entegrasyon+uçtan-uca).
+- **Sıradaki (KOD):** [PHASE-1-PLAN.md](../PHASE-1-PLAN.md) → **Faz-1a walking skeleton**, **builder light-conductor
+  ile otonom** (ADR-0019). Sıra: (1) builder'ı xirigo'dan port (`tools/builder/`) → (2) ÖN-ADIM: Go kontratlarını
+  dondur (tek performer+onay) → (3) Dalga A: statestore+registry+engine → B: provisioner+verify+sentinel+macOS → C: entegrasyon+uçtan-uca.
 - **UI hedefi (Faz-3)** — VS Code vs web (ertelendi; event+control seam hazır).
 
 **Takma-ad eşlemesi** (eski ADR metinlerinde): ADR-c = ADR-0010, ADR-d = ADR-0012, ADR-e = ADR-0011.
