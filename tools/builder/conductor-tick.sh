@@ -446,8 +446,8 @@ else:
     task["commit_sha"] = verdict.get("commit_sha")
     res = (verdict.get("result") or "").lower()
     if res == "pass":
-        # Rule#9 / ADR-0014: do NOT blindly trust the performer's self-reported
-        # pass (a false-green is the worst outcome — ADR-0003). Leave the task
+        # Rule#9 / ADR-0014: do NOT blindly trust the performer self-reported
+        # pass (a false-green is the worst outcome, ADR-0003). Leave the task
         # running; the bash layer below re-runs the FULL gate INDEPENDENTLY in the
         # worktree and only then merges + marks done (or blocks on a false-green).
         print("PASS"); sys.exit(0)
