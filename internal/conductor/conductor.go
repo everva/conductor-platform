@@ -24,6 +24,7 @@ import (
 	"fmt"
 
 	"github.com/everva/conductor-platform/internal/engine"
+	"github.com/everva/conductor-platform/internal/events"
 	"github.com/everva/conductor-platform/internal/governor"
 	"github.com/everva/conductor-platform/internal/statestore"
 	"github.com/everva/conductor-platform/internal/verify"
@@ -117,6 +118,16 @@ type Admitter interface {
 	Admit(ctx context.Context, projectID string) (governor.Decision, error)
 }
 
+// Emitter is the OPTIONAL observability seam (ADR-0011): the tick publishes
+// lifecycle events (started/decision/merge/intervention-needed) at its natural
+// phase boundaries so a UI can watch live. It is narrowed to Publish so a fake
+// (or events.EventBus) satisfies it. The field is OPTIONAL on Deps — a nil
+// Emitter means no events are emitted (backward compatible), so existing wiring
+// and tests are unaffected.
+type Emitter interface {
+	Publish(ctx context.Context, ev events.Event) error
+}
+
 // Recipe carries the per-project gate/holdout binding the tick hands to the
 // verifier (ADR-0009). It is injected, not a global.
 type Recipe struct {
@@ -137,6 +148,7 @@ type Conductor struct {
 	recipe   Recipe
 	hostID   string
 	governor Admitter
+	emitter  Emitter
 }
 
 // Deps bundles the injected collaborators so New has a single, named-field
@@ -163,6 +175,11 @@ type Deps struct {
 	// deny. A nil Governor means admit-all, keeping construction backward
 	// compatible (no resource bounds) — callers opt in by injecting one.
 	Governor Admitter
+	// Emitter is the OPTIONAL observability bus (ADR-0011, N-9). When set, the
+	// tick publishes lifecycle events at phase boundaries. A nil Emitter means
+	// no events are emitted, keeping construction backward compatible — callers
+	// opt in by injecting an events.EventBus.
+	Emitter Emitter
 }
 
 // New returns a Conductor wired from the injected collaborators. It errors if any
@@ -197,7 +214,25 @@ func New(d Deps) (*Conductor, error) {
 		recipe:   d.Recipe,
 		hostID:   hostID,
 		governor: d.Governor,
+		emitter:  d.Emitter,
 	}, nil
+}
+
+// emit publishes an event on the optional observability bus (ADR-0011). It is a
+// no-op when no emitter is injected, so emission is non-breaking for callers
+// that don't opt in. Emission errors are swallowed: observability must never
+// fail or alter a tick's outcome.
+func (c *Conductor) emit(ctx context.Context, task statestore.Task, phase events.Phase, kind events.Kind, payload map[string]any) {
+	if c.emitter == nil {
+		return
+	}
+	_ = c.emitter.Publish(ctx, events.Event{
+		Project: task.ProjectID,
+		Task:    task.ID,
+		Phase:   phase,
+		Kind:    kind,
+		Payload: payload,
+	})
 }
 
 // Tick runs ONE fresh-context tick for the project (ADR-0001 sıralılık):
@@ -272,6 +307,7 @@ func (c *Conductor) runTask(ctx context.Context, project statestore.Project, tas
 	}()
 
 	// Develop in the fresh worktree (A-3). Sentinel classification first (ADR-0014).
+	c.emit(ctx, task, events.PhaseDevelop, events.KindStarted, nil)
 	verdict, devErr := c.engine.Develop(ctx, task, ws)
 	if devErr != nil {
 		return c.handleDevelopError(ctx, task, devErr)
@@ -279,6 +315,7 @@ func (c *Conductor) runTask(ctx context.Context, project statestore.Project, tas
 
 	// Independent verify (B-2): gates + hidden holdout. The merge gate is THIS
 	// result, never the self-reported verdict (Rule#9).
+	c.emit(ctx, task, events.PhaseVerify, events.KindStarted, nil)
 	review, _, verErr := c.verifier.Verify(ctx, verdict, ws, c.recipe.Gates, task.ScenarioID)
 	if verErr != nil {
 		// Verify could not produce a result: block rather than fake-green.
@@ -309,6 +346,7 @@ func (c *Conductor) runTask(ctx context.Context, project statestore.Project, tas
 		return TickResult{}, fmt.Errorf("conductor: tick: mark done %q: %w", task.ID, err)
 	}
 
+	c.emit(ctx, task, events.PhaseMerge, events.KindMerge, map[string]any{"merge_sha": sha})
 	return TickResult{
 		Outcome:  OutcomeMerged,
 		TaskID:   task.ID,
@@ -329,11 +367,16 @@ const reviewPass = "pass"
 func (c *Conductor) handleDevelopError(ctx context.Context, task statestore.Task, devErr error) (TickResult, error) {
 	if errors.Is(devErr, engine.ErrAuthExpired) {
 		// Stop: retrying would just hit the wall again. Lease is released by the
-		// Tick defer; the task is left as-is for a human to resume.
+		// Tick defer; the task is left as-is for a human to resume. An auth wall
+		// is the canonical human-gate: signal intervention-needed (ADR-0011).
+		c.emit(ctx, task, events.PhaseDevelop, events.KindInterventionNeeded,
+			map[string]any{"reason": "auth expired", "error": devErr.Error()})
 		return TickResult{Outcome: OutcomeStopped, TaskID: task.ID},
 			fmt.Errorf("conductor: tick: develop %q stopped: %w", task.ID, devErr)
 	}
 	// ErrMalformedVerdict / ErrNoVerdict / anything else -> block, never retry blind.
+	c.emit(ctx, task, events.PhaseDevelop, events.KindInterventionNeeded,
+		map[string]any{"reason": "develop blocked", "error": devErr.Error()})
 	if blockErr := c.markBlocked(ctx, task); blockErr != nil {
 		return TickResult{}, fmt.Errorf("conductor: tick: develop failed and block failed: %w", errors.Join(devErr, blockErr))
 	}
@@ -347,6 +390,9 @@ func (c *Conductor) handleDevelopError(ctx context.Context, task statestore.Task
 // negative: a holdout-breaking task is changes-requested and so never merges).
 func (c *Conductor) handleChangesRequested(ctx context.Context, task statestore.Task, verdict engine.Verdict, review engine.ReviewResult) (TickResult, error) {
 	if task.RetryCount >= MaxRetries {
+		// Retry cap hit: a human must intervene (ADR-0011 human-gate).
+		c.emit(ctx, task, events.PhaseReview, events.KindInterventionNeeded,
+			map[string]any{"reason": "retry cap reached", "retry_count": task.RetryCount})
 		if err := c.markBlocked(ctx, task); err != nil {
 			return TickResult{}, fmt.Errorf("conductor: tick: block after retry cap %q: %w", task.ID, err)
 		}
@@ -357,6 +403,8 @@ func (c *Conductor) handleChangesRequested(ctx context.Context, task statestore.
 	if err := c.bumpRetry(ctx, task); err != nil {
 		return TickResult{}, fmt.Errorf("conductor: tick: bump retry %q: %w", task.ID, err)
 	}
+	c.emit(ctx, task, events.PhaseReview, events.KindDecision,
+		map[string]any{"result": review.Result, "retry_count": task.RetryCount + 1})
 	return TickResult{Outcome: OutcomeRetry, TaskID: task.ID, Verdict: verdict, Review: review}, nil
 }
 
