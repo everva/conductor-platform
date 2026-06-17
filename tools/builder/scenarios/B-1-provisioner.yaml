@@ -1,0 +1,50 @@
+# B-1 — Faz-1a Dalga B: provisioner (per-project clone + per-task worktree)
+#
+# Implements the workspace model from ADR-0017: one isolated per-project clone +
+# a per-task `git worktree` cut FRESH from the base branch, authenticated with a
+# gh-token credential helper (deploy-key FORBIDDEN), with worktree cleanup. It
+# produces the `engine.Workspace{Path,Branch}` the FROZEN EngineAdapter consumes
+# (PRE-0). It MUST NOT change the frozen Workspace field set.
+#
+# Holdout note (ADR-0018): hidden_holdout_ref is repo-DIŞI; never read it. The
+# develop worktree must NEVER contain the hidden holdout.
+
+id: B-1
+title: "Provisioner: per-project clone + per-task git worktree (fresh base) + gh-token auth + cleanup"
+lane: provisioner
+tier: T2
+deps: ["A-3"]
+
+acceptance:
+  - "internal/provisioner: a `Provisioner` that, given a `statestore.Project` (Repo, BaseBranch), ensures a single ISOLATED per-project clone exists (created once, idempotent; isolated from any user working copy — ADR-0017). No global singleton; root dir is injected."
+  - "Per-task worktree: `Workspace(ctx, project, task) (engine.Workspace, error)` adds a `git worktree` on a short-lived per-task branch `conductor/<project>/<task-id>` cut FRESH from BaseBranch (ADR-0004/0017). Returns `engine.Workspace{Path,Branch}` with Path = the absolute worktree path and Branch = that branch (matches the FROZEN struct)."
+  - "Freshness (ADR-0004): before cutting the worktree it fetches/updates BaseBranch so the branch is always current — no long-lived/stale base. Cutting a worktree for a task that already has one is safe (idempotent / reuse-or-recreate, documented)."
+  - "Auth: uses a gh-token credential helper (e.g. `gh auth setup-git`) so pushes are WRITABLE. Deploy-key is FORBIDDEN (ADR-0017 — read-only trap). Token comes from injected config/env, never hard-coded."
+  - "Cleanup: `Cleanup(ctx, ws) error` removes the worktree and prunes it (`git worktree remove` + prune) and is idempotent. Retention hook: blocked-task worktrees may be retained for diagnosis per a flag (ADR-0017), default = remove on success."
+  - "Isolation guarantee (ADR-0018): the per-task develop worktree NEVER receives the hidden holdout; provisioning writes only repo content + the fresh branch. (Holdout injection is verify's job, B-2.)"
+  - "go build ./... && go test ./... && go vet ./... && golangci-lint run all green. TDD: tests run against a local throwaway bare/seed repo (no network, no live optiway), asserting branch off base + worktree path exists + cleanup removes it."
+  - "No v2/legacy/duplicate provisioner types; idiomatic Go (exec.CommandContext for git, errors wrapped, temp dirs cleaned in tests). Touches NO live repo."
+
+# Public acceptance tests the performer writes FIRST (TDD) and must pass.
+public_test_ref: internal/provisioner/provisioner_test.go
+public_tests_outline:
+  - "TestProvisioner_Workspace_BranchesFromBase: worktree branch tip equals BaseBranch tip at creation (fresh cut)."
+  - "TestProvisioner_Workspace_ReturnsWorkspaceStruct: engine.Workspace.Path exists on disk and Branch == conductor/<project>/<task>."
+  - "TestProvisioner_Cleanup_RemovesWorktree_Idempotent: after Cleanup the path is gone; a second Cleanup is a no-op."
+  - "TestProvisioner_PerProjectClone_Idempotent: provisioning the same project twice reuses one clone."
+  - "TestProvisioner_NoDeployKey: auth path uses gh-token credential helper, not an ssh deploy-key."
+
+# Hidden holdout — repo-DIŞI, performer NEVER sees it (ADR-0018). Injected at an
+# independent verify step into a throwaway verify-worktree. For B-1 it stresses
+# isolation beyond the visible names: that the develop worktree contains NO
+# holdout file (negative — proves leak-free provisioning), that cutting a second
+# task worktree does not corrupt the first (parallel-branch isolation), and that
+# a stale base is re-fetched so the branch is genuinely fresh (not a cached tip).
+hidden_holdout_ref: "store://holdouts/B-1/provisioner_holdout_test.go"
+
+notes: >
+  Workspace leg of Faz-1a (ADR-0017). Keep it honest: the hidden holdout asserts
+  the develop worktree is holdout-free and that base freshness is real, beyond the
+  visible test names, so a provisioner that copies a cached tree or skips fetch is
+  blocked at verify (ADR-0018). Use a LOCAL throwaway repo in tests — never touch
+  the live optiway repo. Do NOT change the frozen engine.Workspace struct.

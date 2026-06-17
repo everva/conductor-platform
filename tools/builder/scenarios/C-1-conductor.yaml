@@ -1,0 +1,53 @@
+# C-1 — Faz-1a Dalga C: conductor tick-loop integration (one tick, end-to-end)
+#
+# Wires the whole chain into one fresh-context tick (ADR-0001): registry.PickReady
+# -> provisioner.Workspace -> engine.Develop -> verify -> (if green) squash-merge
+# develop + [task:<id>] trailer (ADR-0004) -> statestore update. It ORCHESTRATES
+# the already-built, frozen-contract components (A-2 registry, B-1 provisioner,
+# A-3 engine, B-2 verify, B-3 recovery); it adds no new business logic into them
+# and changes NO frozen signature.
+#
+# Holdout note (ADR-0018): hidden_holdout_ref is repo-DIŞI; never read it.
+
+id: C-1
+title: "Conductor tick: pick -> workspace -> develop -> verify -> merge -> update (one fresh-context tick)"
+lane: conductor
+tier: T2
+deps: ["A-3", "B-1", "B-2", "B-3"]
+
+acceptance:
+  - "internal/conductor: a `Conductor` constructed from its collaborators by INTERFACE — the registry (A-2), provisioner (B-1), the frozen `engine.EngineAdapter` (A-3), the verifier (B-2), and the reconciler (B-3) — plus the `statestore.StateStore`. No global singleton; everything injected so the tick is unit-testable with fakes."
+  - "`Tick(ctx, projectID) (TickResult, error)` runs ONE fresh-context tick (ADR-0001 sıralılık): PickReady a task -> acquire the repo lease -> Provisioner.Workspace (fresh per-task worktree) -> EngineAdapter.Develop -> Verifier verify (independent + holdout) -> on `pass` squash-merge the branch into BaseBranch with a `[task:<id>]` trailer (ADR-0004) and mark the task done -> on `changes-requested`/blocked leave the task for retry/blocked -> ALWAYS release the lease + cleanup the worktree (defer)."
+  - "Resilience wiring (ADR-0014): if Develop returns `engine.ErrAuthExpired` the tick STOPS and surfaces it (no kickstart, no merge). `engine.ErrMalformedVerdict` / `engine.ErrNoVerdict` -> task blocked, NO merge, NO fake-green (ADR-0003). Verify changes-requested -> retry up to the cap then blocked (ADR-0004 max 2)."
+  - "Merge gate (Rule#9, ADR-0003/0018): the tick merges ONLY on the independent Verifier's `pass` — never on the performer's self-reported Verdict alone. A holdout-breaking task therefore never merges (negative path covered)."
+  - "Lease + cleanup safety: the lease is acquired before develop and released in a defer; the worktree is cleaned in a defer regardless of outcome (blocked-task retention flag honored). A tick with no ready task is a clean no-op (errors.Is(err, statestore.ErrNotFound) handled, not fatal)."
+  - "Fresh context per tick (ADR-0001): the tick carries no state between runs beyond what's in the StateStore + git; re-running Tick re-derives from the store/reconciler (idempotent with B-3)."
+  - "go build ./... && go test ./... && go vet ./... && golangci-lint run all green. TDD: a fake EngineAdapter (returns scripted Verdicts incl. the sentinels), a fake/real local-repo provisioner+verifier, and an in-memory store drive the green path, the holdout-fail path, and the auth-expired stop path."
+  - "No v2/legacy/duplicate orchestration; the conductor calls the collaborators through their interfaces only and changes no frozen signature. Idiomatic Go (context, defer cleanup/release, errors.Is on sentinels). Touches NO live optiway repo."
+
+# Public acceptance tests the performer writes FIRST (TDD) and must pass.
+public_test_ref: internal/conductor/conductor_test.go
+public_tests_outline:
+  - "TestConductor_Tick_GreenPath_Merges: pick -> develop pass -> verify pass -> squash-merge with [task:<id>] -> task done, lease released, worktree cleaned."
+  - "TestConductor_Tick_HoldoutFail_NoMerge: verify changes-requested -> NO merge, task not done (Rule#9 negative)."
+  - "TestConductor_Tick_MalformedVerdict_Blocks: engine.ErrMalformedVerdict -> task blocked, no merge, no fake-green."
+  - "TestConductor_Tick_AuthExpired_StopsTick: engine.ErrAuthExpired -> tick stops and surfaces, lease released."
+  - "TestConductor_Tick_NoReadyTask_NoOp: PickReady ErrNotFound -> clean no-op, no lease taken."
+
+# Hidden holdout — repo-DIŞI, performer NEVER sees it (ADR-0018). For C-1 it
+# stresses the orchestration invariants beyond the visible names: the lease is
+# ALWAYS released and the worktree ALWAYS cleaned even when develop/verify panics
+# or errors mid-tick (defer guarantees), a merge happens on the INDEPENDENT
+# verify pass only (not the self-reported Verdict), and a second Tick after a
+# done task is a no-op (idempotent with reconcile). An over-fit conductor that
+# leaks the lease on error or trusts the Verdict fails it.
+hidden_holdout_ref: "store://holdouts/C-1/conductor_holdout_test.go"
+
+notes: >
+  This is the Faz-1a integration spine (PHASE-1-PLAN §2 'bitti' kriteri 1-3): one
+  task develop->verify->squash-merge end-to-end, plus the negative paths (holdout
+  break -> blocked; malformed Verdict -> blocked; auth -> stop). Keep it honest: the
+  hidden holdout proves lease/worktree are always reclaimed and merge rides only on
+  independent verify, beyond the visible names, so a leaky or self-report-trusting
+  orchestrator is blocked at verify (ADR-0018). Use fakes + a LOCAL throwaway repo;
+  never touch live optiway. Do NOT change any frozen signature; wire only.

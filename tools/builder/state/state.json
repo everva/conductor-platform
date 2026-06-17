@@ -40,7 +40,7 @@
       "last_verdict": null,
       "commit_sha": null,
       "blocked_reason": null,
-      "_note": "Dalga A: registry (projects/tasks/leases/scenarios) on top of StateStore. Scenario YAML TBD — operator writes it before this becomes ready."
+      "_note": "Dalga A: registry business logic (ready-task selection + lease acquire/release + task lifecycle) on top of the frozen StateStore."
     },
     {
       "id": "A-3",
@@ -53,7 +53,72 @@
       "last_verdict": null,
       "commit_sha": null,
       "blocked_reason": null,
-      "_note": "Dalga A: CommandEngine + performer contract + LLM-resilience parse (ADR-0014). Scenario YAML TBD."
+      "_note": "Dalga A: CommandEngine (EngineAdapter impl) + performer contract + deterministic LLM-resilience parse (ADR-0014)."
+    },
+    {
+      "id": "B-1",
+      "lane": "provisioner",
+      "tier": "T2",
+      "status": "todo",
+      "deps": ["A-3"],
+      "scenario_ref": "B-1-provisioner.yaml",
+      "retry_count": 0,
+      "last_verdict": null,
+      "commit_sha": null,
+      "blocked_reason": null,
+      "_note": "Dalga B: per-project clone + per-task git worktree (fresh base) + gh-token auth + cleanup (ADR-0017)."
+    },
+    {
+      "id": "B-2",
+      "lane": "verify",
+      "tier": "T2",
+      "status": "todo",
+      "deps": ["A-3"],
+      "scenario_ref": "B-2-verify.yaml",
+      "retry_count": 0,
+      "last_verdict": null,
+      "commit_sha": null,
+      "blocked_reason": null,
+      "_note": "Dalga B: deterministic gate runner (build/test/vet/lint -> Check[]) + repo-external holdout injection into verify-worktree -> ReviewResult; independent, Rule#9 (ADR-0003/0018)."
+    },
+    {
+      "id": "B-3",
+      "lane": "recovery",
+      "tier": "T1",
+      "status": "todo",
+      "deps": ["A-2"],
+      "scenario_ref": "B-3-recovery.yaml",
+      "retry_count": 0,
+      "last_verdict": null,
+      "commit_sha": null,
+      "blocked_reason": null,
+      "_note": "Dalga B: deterministic liveness/reconcile (NO LLM) — stale-lease reaper + git-derived [task:<id>] reconcile, idempotent (ADR-0016)."
+    },
+    {
+      "id": "C-1",
+      "lane": "conductor",
+      "tier": "T2",
+      "status": "todo",
+      "deps": ["A-3", "B-1", "B-2", "B-3"],
+      "scenario_ref": "C-1-conductor.yaml",
+      "retry_count": 0,
+      "last_verdict": null,
+      "commit_sha": null,
+      "blocked_reason": null,
+      "_note": "Dalga C: tick-loop integration pick->workspace->develop->verify->merge->update (one fresh-context tick); wires the deps chain (ADR-0001)."
+    },
+    {
+      "id": "C-2",
+      "lane": "cli",
+      "tier": "T1",
+      "status": "todo",
+      "deps": ["C-1"],
+      "scenario_ref": "C-2-conductorctl.yaml",
+      "retry_count": 0,
+      "last_verdict": null,
+      "commit_sha": null,
+      "blocked_reason": null,
+      "_note": "Dalga C: conductorctl CLI — onboard/intake/status/pause/resume; minimal but working over the same StateStore (ADR-0011/0010)."
     }
   ]
 }

@@ -1,0 +1,49 @@
+# A-2 — Faz-1a Dalga A: registry business logic on top of StateStore
+#
+# Sits ON TOP OF the FROZEN `StateStore` interface (PRE-0) and the in-memory impl
+# (A-1). It owns the platform's task-selection + lease + lifecycle rules (ADR-0010
+# task-ledger, ADR-0008 repo-başına-1 lease, ADR-0004 task lifecycle). It USES the
+# frozen StateStore interface; it MUST NOT change StateStore's signatures or the
+# Project/Task/Lease/Scenario field sets.
+#
+# Holdout note (ADR-0018): hidden_holdout_ref is repo-DIŞI; never read it.
+
+id: A-2
+title: "Registry: ready-task selection, lease acquire/release, task lifecycle on top of StateStore"
+lane: registry
+tier: T1
+deps: ["A-1"]
+
+acceptance:
+  - "internal/registry: a `Registry` value constructed from a `statestore.StateStore` (e.g. `NewRegistry(store statestore.StateStore) *Registry`). It composes the FROZEN interface and never reaches around it — no second backing map, no global singleton."
+  - "Ready-task selection: `PickReady(ctx, projectID) (statestore.Task, error)` returns the single highest-priority pickable task, or wraps `statestore.ErrNotFound` when none is pickable. Pickable = status in (todo|ready) AND every dep id resolves to a task with status `done` AND the project's lease is free (no active `statestore.Lease`). Among pickable tasks, lowest phase/order wins (deterministic, stable tie-break by task ID)."
+  - "Lease handling (single-host Faz-1a, ADR-0008): acquiring for the picked task calls `statestore.AcquireLease`; a second acquire while a lease is held returns an error (no double-lease — repo-başına-1). Release calls `statestore.ReleaseLease` and is idempotent (releasing an unleased project is not an error)."
+  - "Task lifecycle (ADR-0004): explicit transitions todo→ready→running→(done|blocked) via `statestore.UpdateTask`. Illegal transitions (e.g. done→running) return an error and do not persist. A task whose dep is `blocked` never becomes ready (dep-gate, ADR-0004 §Sonuç)."
+  - "Status is treated as a derived/reconciled field (ADR-0010 §Güncelleme): the registry sets it on explicit transition but does not assume it is authoritative truth about git; it reads through StateStore each call (no stale cache)."
+  - "Errors are returned, never panicked; `errors.Is(err, statestore.ErrNotFound)` holds for the no-pickable-task and missing-record cases."
+  - "go build ./... && go test ./... && go vet ./... && golangci-lint run all green. TDD: tests written first."
+  - "No v2/legacy/duplicate registry types; no business logic copied into statestore. Idiomatic Go (small constructor, interface dependency, table-driven tests)."
+
+# Public acceptance tests the performer writes FIRST (TDD) and must pass.
+public_test_ref: internal/registry/registry_test.go
+public_tests_outline:
+  - "TestRegistry_PickReady_RespectsDeps: a task with an undone dep is NOT picked; once the dep is done it is."
+  - "TestRegistry_PickReady_LowestOrderWins: among several pickable tasks the lowest phase/order (stable by ID) is returned."
+  - "TestRegistry_PickReady_NoneReady_ReturnsErrNotFound: errors.Is(err, statestore.ErrNotFound)."
+  - "TestRegistry_AcquireLease_SecondAcquireFails: repo-başına-1 lease holds; ReleaseLease is idempotent."
+  - "TestRegistry_Lifecycle_IllegalTransitionRejected: done->running is rejected and not persisted."
+
+# Hidden holdout — repo-DIŞI, performer NEVER sees it (ADR-0018). Injected at an
+# independent verify step into a throwaway verify-worktree. For A-2 it stresses
+# selection/lifecycle invariants beyond the named tests (e.g. a dep that is
+# `blocked` must gate dependents to never-ready; pick while a lease is held must
+# return none; tie-break determinism under shuffled input) so an over-fit stub
+# that only satisfies the visible names is blocked.
+hidden_holdout_ref: "store://holdouts/A-2/registry_holdout_test.go"
+
+notes: >
+  This is the business-logic leg over the frozen StateStore (ADR-0010/0008/0004).
+  Keep it honest: the hidden holdout exercises dep-gate + lease + tie-break behavior
+  beyond the visible test names, so a selector that hard-codes the public fixtures
+  is blocked at verify (ADR-0018 negative-test principle). Do NOT touch the frozen
+  statestore signatures; depend on the interface, not the concrete MemoryStore.

@@ -1,0 +1,56 @@
+# B-2 — Faz-1a Dalga B: deterministic verify gate + hidden-holdout injection
+#
+# The independent, deterministic verify gate (ADR-0003 evidence-based, ADR-0018
+# holdout isolation). It runs recipe gate commands (build/test/vet/lint) over the
+# performer's output, produces `engine.Check[]`, injects the REPO-EXTERNAL hidden
+# holdout into a SEPARATE verify-worktree, runs it, and returns an
+# `engine.ReviewResult`. It is INDEPENDENT — it does not trust the performer's
+# self-reported Verdict (Rule#9). It MUST NOT change the frozen Check/ReviewResult
+# field sets (PRE-0).
+#
+# Holdout note (ADR-0018): the holdout lives repo-DIŞI; the PERFORMER never sees
+# it. This gate is the ONLY place it is injected, and only into a throwaway
+# verify-worktree that is deleted after.
+
+id: B-2
+title: "Verify gate: deterministic build/test/vet/lint Checks + repo-external holdout injection into verify-worktree"
+lane: verify
+tier: T2
+deps: ["A-3"]
+
+acceptance:
+  - "internal/verify: a `Verifier` that, given a workspace + the recipe gate commands, runs each gate (build/test/vet/lint) as a subprocess and produces an `engine.Check{Name,Result,Evidence}` per gate (frozen field set, PRE-0). Result is `pass`/`fail` from the command exit code; Evidence is a short factual record (e.g. trimmed output / first failing line)."
+  - "Holdout injection (ADR-0018): a SEPARATE verify-worktree is created from the performer's commit; the hidden holdout is fetched from a REPO-EXTERNAL store (Faz-1a: injected local dir / private ref behind an interface) and copied TEMPORARILY into the verify-worktree, the holdout suite is run, then the verify-worktree is DELETED. The develop worktree and the performer's branch are never written to."
+  - "Independence (Rule#9, ADR-0018 §3): the gate derives its result from its OWN deterministic command exit codes + holdout outcome — it ignores the performer's self-reported Verdict.Result. A passing self-report with a failing gate yields changes-requested."
+  - "Result mapping: returns `engine.ReviewResult{Result,Findings,Summary}` (frozen): all gates + holdout pass -> `pass`; any gate or the holdout fails -> `changes-requested` with concrete Findings (which gate, which holdout assertion). NEVER fake-green (ADR-0003): a holdout-breaking commit MUST yield changes-requested (blocked merge)."
+  - "Holdout secrecy guarantee: the holdout source path is never logged into the develop worktree or the returned Findings in a way that leaks its contents; only pass/fail + a non-revealing identifier surfaces. The verify-worktree is removed even on error (cleanup in defer)."
+  - "go build ./... && go test ./... && go vet ./... && golangci-lint run all green. TDD: tests use a local throwaway repo + a fake holdout store (interface) with one passing and one failing holdout fixture; assert the negative case (holdout fails -> changes-requested)."
+  - "No v2/legacy/duplicate verify types; the holdout store is an injected interface (swappable for Faz-1b Postgres/private-repo). Idiomatic Go (context, defer cleanup, errors wrapped)."
+  - "Depends on the frozen engine.Check / engine.ReviewResult; does not change them. Does not call the performer or trust its output."
+
+# Public acceptance tests the performer writes FIRST (TDD) and must pass.
+public_test_ref: internal/verify/verify_test.go
+public_tests_outline:
+  - "TestVerifier_Gates_ProduceChecks: build/test/vet/lint each yield a Check with Name + pass/fail + Evidence."
+  - "TestVerifier_HoldoutPass_ResultPass: gates green + holdout green -> ReviewResult.Result == pass."
+  - "TestVerifier_HoldoutFail_ChangesRequested: a holdout-breaking commit -> changes-requested (negative test, Rule#9)."
+  - "TestVerifier_IgnoresSelfReportedVerdict: a self-reported pass with a failing gate still yields changes-requested."
+  - "TestVerifier_VerifyWorktreeCleanedUp: the temp verify-worktree (and injected holdout) is removed after the run, even on failure."
+
+# Hidden holdout — repo-DIŞI, performer NEVER sees it (ADR-0018). For B-2 (which
+# IS the holdout machinery) the meta-holdout stresses the isolation+independence
+# invariants beyond the visible names: that the develop worktree is byte-identical
+# before/after verify (no holdout leak / no mutation), that cleanup happens on a
+# panicking/failing gate, and that the gate result is driven by exit codes not by
+# the performer's Verdict string. An over-fit verifier that trusts the self-report
+# or leaks the holdout into the dev tree fails it.
+hidden_holdout_ref: "store://holdouts/B-2/verify_holdout_test.go"
+
+notes: >
+  This is the platform's value-proposition gate (ADR-0018 over-fit/cheat guard) and
+  the Rule#9 independent verifier. Keep it honest: the meta-holdout proves the
+  develop worktree stays clean, cleanup is defer-guaranteed, and the result ignores
+  the performer's self-report, beyond the visible names — so a verifier that trusts
+  the Verdict or leaks the holdout is blocked at verify. Use a LOCAL throwaway repo
+  + a fake injected holdout store in tests; never touch live optiway. Do NOT change
+  the frozen Check/ReviewResult structs.

@@ -1,0 +1,51 @@
+# C-2 — Faz-1a Dalga C: conductorctl CLI (minimal but working)
+#
+# The thin operator client (PHASE-1-PLAN §1 cmd/conductorctl). Minimal but real:
+# onboard a repo, intake a scenario, show ledger status, pause/resume. It drives
+# the same FROZEN StateStore (PRE-0) the daemon uses (Faz-1a single-host; Faz-1b
+# moves control to the Postgres command table, ADR-0011/0010 §O5). It changes NO
+# frozen signature; it composes the registry + statestore.
+#
+# Holdout note (ADR-0018): hidden_holdout_ref is repo-DIŞI; never read it.
+
+id: C-2
+title: "conductorctl CLI: onboard / intake / status / pause-resume (minimal, working)"
+lane: cli
+tier: T1
+deps: ["C-1"]
+
+acceptance:
+  - "cmd/conductorctl: a runnable CLI (standard library `flag` or a single small subcommand dispatcher — no heavy framework) with subcommands `onboard`, `intake`, `status`, `pause`, `resume`. `conductorctl <cmd> -h` prints usage; unknown subcommand exits non-zero with a clear message."
+  - "onboard <repo>: registers a `statestore.Project` (Repo + BaseBranch from flags, default base e.g. develop) via the StateStore/registry, with readiness set; idempotent re-onboard of the same repo does not duplicate (returns the existing project)."
+  - "intake: ingests a scenario into the ledger — reads a scenario YAML (path flag) and creates a `statestore.Scenario` + its `statestore.Task` (id/lane/tier/deps/scenario_ref, status todo) via the registry. Validates required fields and refuses a scenario whose deps reference unknown tasks (clear error, non-zero exit)."
+  - "status: prints a concise ledger summary from the StateStore — per task: id, lane, tier, status, deps, and lease holder if any; plus current lease state. Deterministic, stable ordering (by task id). Human-readable table; `--json` flag emits machine-readable JSON."
+  - "pause / resume: toggles the daemon's run state for a project (Faz-1a: a control flag/file the conductor loop reads before each tick; the seam is an injected `Controller` interface so Faz-1b can swap to the Postgres command table per ADR-0011/0010). pause makes the next Tick a no-op; resume restores it. Idempotent."
+  - "Exit codes are meaningful (0 success, non-zero on error) and errors go to stderr; the CLI shares the SAME StateStore the conductor uses (no second source of truth). No global mutable singleton — store/controller injected into the command handlers so they are testable."
+  - "go build ./... && go test ./... && go vet ./... && golangci-lint run all green. TDD: command handlers tested against an in-memory store + fake controller (onboard creates a project, intake creates task+scenario, status renders expected rows, pause/resume flips state)."
+  - "No v2/legacy/duplicate CLI; minimal surface, idiomatic Go (small main wiring + handler funcs taking the store/controller, table-driven handler tests). Does NOT touch live optiway."
+
+# Public acceptance tests the performer writes FIRST (TDD) and must pass.
+public_test_ref: cmd/conductorctl/conductorctl_test.go
+public_tests_outline:
+  - "TestConductorctl_Onboard_CreatesProject_Idempotent: onboard creates a Project; re-onboard does not duplicate."
+  - "TestConductorctl_Intake_CreatesTaskAndScenario: intake of a valid scenario YAML creates Scenario + Task (status todo)."
+  - "TestConductorctl_Intake_UnknownDep_Errors: a scenario whose deps reference an unknown task is refused (non-zero)."
+  - "TestConductorctl_Status_RendersLedger: status lists tasks in stable id order with status + lease; --json round-trips."
+  - "TestConductorctl_PauseResume_TogglesRunState: pause makes the next tick a no-op; resume restores; both idempotent."
+
+# Hidden holdout — repo-DIŞI, performer NEVER sees it (ADR-0018). For C-2 it
+# stresses CLI invariants beyond the visible names: status ordering is stable
+# under shuffled store insertion, intake is rejected (no partial write) when a
+# required scenario field is missing, exit codes are non-zero on every error
+# path, and pause/resume is idempotent (double-pause stays paused, no flip). An
+# over-fit CLI that hard-codes the sample fixtures or leaves partial writes fails it.
+hidden_holdout_ref: "store://holdouts/C-2/conductorctl_holdout_test.go"
+
+notes: >
+  The minimal operator surface (PHASE-1-PLAN §1). Keep it minimal but REAL — it must
+  share the same StateStore the conductor uses (no second truth) and expose the
+  control seam as an injected interface so Faz-1b swaps to the Postgres command
+  table (ADR-0011/0010). Keep it honest: the hidden holdout exercises stable
+  ordering, no-partial-write intake, exit codes, and idempotent pause/resume beyond
+  the visible names, so a fixture-hard-coded CLI is blocked at verify (ADR-0018).
+  Never touch live optiway. Do NOT change any frozen signature.

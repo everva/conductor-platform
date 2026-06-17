@@ -1,0 +1,52 @@
+# B-3 — Faz-1a Dalga B: deterministic liveness / reconcile (NO LLM)
+#
+# The independent, DETERMINISTIC backstop (ADR-0016, operationalizing ADR-0006
+# Katman-1/3). Pure Go, NO `claude -p`: a stale-lease reaper + a git-derived state
+# reconcile. It runs as a separate job (not embedded in the conductor loop) so the
+# conductor can recover from its own death. It USES the FROZEN StateStore interface
+# (Lease.AcquiredAt, Task status) from PRE-0; it MUST NOT change its signatures.
+#
+# Holdout note (ADR-0018): hidden_holdout_ref is repo-DIŞI; never read it.
+
+id: B-3
+title: "Recovery: deterministic stale-lease reaper + git-derived state reconcile (no LLM, idempotent)"
+lane: recovery
+tier: T1
+deps: ["A-2"]
+
+acceptance:
+  - "internal/reconcile (or internal/sentinel): a deterministic `Reconciler` built over a `statestore.StateStore`. PURE Go, NO LLM / no `claude -p` (ADR-0016 Katman-1 is deterministic). Designed to run as a SEPARATE job from the conductor loop (ADR-0016 — independent backstop), no global singleton."
+  - "Stale-lease reaper (ADR-0010 §Güncelleme reaper, ADR-0016): `ReapLeases(ctx, now)` releases any `statestore.Lease` whose `AcquiredAt` is older than an injected TTL, OR whose owner is dead (dead-owner check injectable, e.g. PID liveness func). Uses `statestore.ReleaseLease`; releasing a still-fresh lease is left untouched."
+  - "Git-derived reconcile (ADR-0004/0010/0016): `ReconcileTasks(ctx, project)` derives observed truth from git — a squash-merge commit on BaseBranch carrying the `[task:<id>]` trailer means that task is merged -> set its status `done` via `statestore.UpdateTask`. Runtime truth is DERIVED from git each pass, never cached (ADR-0010 §3) — status is a reconciled field, not authoritative."
+  - "Idempotent (ADR-0016): running ReapLeases / ReconcileTasks twice with the same inputs yields the same state — a task already `done` stays done, an already-released lease is not re-released, no duplicate writes."
+  - "Determinism: same inputs (clock `now`, git log, store contents) -> same outputs, every run. No randomness, no wall-clock except the injected `now`. The `[task:<id>]` trailer match is exact (ADR-0004 §Güncelleme)."
+  - "Decoupling: the reconciler depends on the frozen StateStore interface + a small git-reader interface (injectable so tests use a fake git log) — it does not depend on the conductor loop, engine, or verify packages (so it survives their death, ADR-0016)."
+  - "go build ./... && go test ./... && go vet ./... && golangci-lint run all green. TDD: tests use a fake clock + fake git-log + in-memory store; assert reap-on-TTL, reap-on-dead-owner, done-on-trailer, and idempotency."
+  - "No v2/legacy/duplicate reconcile types; no LLM call anywhere in this package. Idiomatic Go (injected clock + git reader, context, errors wrapped)."
+
+# Public acceptance tests the performer writes FIRST (TDD) and must pass.
+public_test_ref: internal/reconcile/reconcile_test.go
+public_tests_outline:
+  - "TestReconciler_ReapLeases_TTLExpired: a lease older than TTL is released; a fresh one is not."
+  - "TestReconciler_ReapLeases_DeadOwner: a lease whose owner-liveness func reports dead is released regardless of age."
+  - "TestReconciler_ReconcileTasks_TrailerMarksDone: a [task:<id>] squash commit on base -> task status done."
+  - "TestReconciler_Idempotent: running reap+reconcile twice produces no extra writes / identical state."
+  - "TestReconciler_NoTrailer_NoChange: a base commit without the trailer does not flip any task to done."
+
+# Hidden holdout — repo-DIŞI, performer NEVER sees it (ADR-0018). For B-3 it
+# stresses determinism/idempotency invariants beyond the visible names: a commit
+# whose trailer is MALFORMED or for an unknown task must NOT mark anything done
+# (no fuzzy match), reaping must not touch a lease re-acquired AFTER `now`, and
+# two interleaved reconcile passes over the same git log must converge to one
+# state (no double-write, no flapping). An over-fit reconciler that substring-
+# greps the id or caches git state fails it.
+hidden_holdout_ref: "store://holdouts/B-3/reconcile_holdout_test.go"
+
+notes: >
+  The independent deterministic backstop (ADR-0016) — the thing that lets the
+  conductor recover from its own death; the first night-run hangs without it.
+  Strictly NO LLM here. Keep it honest: the hidden holdout exercises exact-trailer
+  matching, fresh-lease safety, and convergence beyond the visible names, so a
+  fuzzy/substring matcher or a cached-state reconciler is blocked at verify
+  (ADR-0018). Do NOT change the frozen StateStore signatures; depend on the
+  interface + an injected clock and git reader.

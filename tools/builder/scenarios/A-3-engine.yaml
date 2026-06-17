@@ -1,0 +1,53 @@
+# A-3 — Faz-1a Dalga A: CommandEngine (EngineAdapter impl) + LLM-resilience parse
+#
+# Fills the FROZEN `EngineAdapter` interface from PRE-0 with a single generic
+# `CommandEngine` that runs recipe commands (develop_cmd / verify_cmd) as
+# subprocesses and normalizes their stdout into a `Verdict` (ADR-0002, ADR-0014).
+# The pipeline runs INSIDE the performer (`claude -p`); Go only drives the
+# subprocess + timeout + parse/normalize. It MUST NOT change the frozen
+# EngineAdapter signatures, the Verdict/Check field sets, or the sentinel error
+# names (ErrMalformedVerdict / ErrNoVerdict / ErrAuthExpired).
+#
+# Holdout note (ADR-0018): hidden_holdout_ref is repo-DIŞI; never read it.
+
+id: A-3
+title: "CommandEngine: EngineAdapter impl driving recipe subprocesses + deterministic LLM-resilience parse"
+lane: engine
+tier: T2
+deps: ["A-2"]
+
+acceptance:
+  - "internal/engine: a concrete `CommandEngine` implementing the FROZEN `EngineAdapter` (Develop/Verify/Health/Events/Control) from PRE-0. Constructor takes the recipe commands + env config (e.g. develop_cmd, verify_cmd, timeout); no global singleton. The subprocess command is injectable so tests can run a fake performer (no real `claude -p` in unit tests)."
+  - "Develop(ctx, task, ws): runs the recipe develop command as a subprocess in `ws.Path` with the contract env (ADR-0014: scenario/public-tests/rules/workspace on stdin), enforces a timeout via ctx, and returns the parsed `engine.Verdict` (frozen field set: Result/Branch/CommitSHA/Checks/Files/BlockedReason/Summary)."
+  - "Verify(ctx, verdict, ws): runs the recipe verify command and returns an `engine.ReviewResult` (frozen: Result pass|changes-requested; Findings; Summary). It does not develop; it reviews a prior Verdict's evidence."
+  - "LLM-resilience parse (ADR-0014, DETERMINISTIC, MANDATORY): extract the LAST valid JSON object carrying a `result` key from prose/markdown stdout. Parse-fail (no extractable/valid Verdict JSON) -> wrap `engine.ErrMalformedVerdict`. Empty stdout OR ctx timeout/no output -> wrap `engine.ErrNoVerdict`. An auth-wall marker (e.g. \"Not logged in\" / token-expiry text) detected in output -> wrap `engine.ErrAuthExpired` so the whole tick stops (no kickstart). All three detectable with errors.Is."
+  - "NEVER fake-green (ADR-0003/0014): on any parse/no-verdict/auth error the method returns the sentinel error and an empty/zero Verdict — it never synthesizes a passing Verdict and never silently retries (no DF blind-retry trap). Self-heal/retry is the performer's job inside the subprocess, not Go's."
+  - "Health/Events/Control are minimal but REAL, not stub-leaks: Health derives a `HealthState{Phase,LastActivityTS,Signal}` from observed subprocess activity (e.g. last-output mtime -> progressing|idle|unknown). Events returns a real channel that emits normalized `engine.Event` envelopes parsed from subprocess lines and closes on ctx cancel. Control delivers pause/resume/abort to the running process (e.g. signal / process group) and errors on unknown action."
+  - "go build ./... && go test ./... && go vet ./... && golangci-lint run all green. TDD: tests written first, using a fake performer script/binary for stdout fixtures (valid Verdict in prose, malformed, empty, auth-marker)."
+  - "No v2/legacy/duplicate engine types; depend on the frozen interface + statestore.Task. Idiomatic Go (context for cancellation/timeout, errors.Is sentinels wrapped with %w, exec.CommandContext)."
+
+# Public acceptance tests the performer writes FIRST (TDD) and must pass.
+public_test_ref: internal/engine/command_engine_test.go
+public_tests_outline:
+  - "TestCommandEngine_Develop_ParsesVerdictFromProse: stdout has chatter then a JSON Verdict; the exact frozen fields are returned."
+  - "TestCommandEngine_Develop_Malformed_ReturnsErrMalformedVerdict: errors.Is(err, engine.ErrMalformedVerdict) and Verdict is zero."
+  - "TestCommandEngine_Develop_EmptyOrTimeout_ReturnsErrNoVerdict: errors.Is(err, engine.ErrNoVerdict)."
+  - "TestCommandEngine_Develop_AuthMarker_ReturnsErrAuthExpired: 'Not logged in' marker -> errors.Is(err, engine.ErrAuthExpired)."
+  - "TestCommandEngine_Verify_ReturnsReviewResult: review stdout parses into ReviewResult{Result,Findings,Summary}."
+
+# Hidden holdout — repo-DIŞI, performer NEVER sees it (ADR-0018). Injected at an
+# independent verify step into a throwaway verify-worktree. For A-3 it stresses
+# parse robustness beyond the visible names: MULTIPLE JSON blocks (must take the
+# LAST valid `result`-keyed one), a `result`-less JSON object (must NOT be
+# accepted as a Verdict -> malformed), JSON inside a fenced code block, and the
+# fake-green guard (a non-JSON 'all tests passed' prose line must NOT become a
+# passing Verdict). An over-fit parser that greps the first {...} fails it.
+hidden_holdout_ref: "store://holdouts/A-3/command_engine_holdout_test.go"
+
+notes: >
+  This is the riskiest Faz-1a contract (ADR-0014 §Sonuç): proves the subprocess +
+  JSON-parse abstraction works with real `claude -p` AND degrades deterministically.
+  Keep it honest: the hidden holdout exercises last-valid-block selection, the
+  result-key requirement, and the never-fake-green guard beyond the visible tests,
+  so a naive first-brace parser is blocked at verify (ADR-0018). Do NOT change the
+  frozen EngineAdapter signatures or sentinel names; fill behind them.
