@@ -1,0 +1,11 @@
+# golangci-lint v2 configuration.
+# Schema: https://golangci-lint.run/docs/configuration/file/ (v2 uses `version: "2"`).
+# Scoped to a sensible default linter set that currently runs with 0 issues on
+# this repo. Do NOT weaken this to hide real problems — fix the code instead.
+version: "2"
+
+linters:
+  # `default: standard` enables golangci-lint's curated standard set
+  # (errcheck, govet, ineffassign, staticcheck, unused) — the same defaults
+  # the project runs clean against locally.
+  default: standard

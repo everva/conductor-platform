@@ -1,0 +1,49 @@
+name: CI
+
+# Runs the same deterministic gate the project uses locally:
+# go build / go test (-race) / go vet / golangci-lint, plus the hermetic
+# e2e-tagged test. No secrets required — the product uses subscription
+# `claude -p`; CI only builds, tests, vets and lints.
+on:
+  push:
+    branches:
+      - develop
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: build / test / vet / lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test (race)
+        run: go test -race ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: E2E test (hermetic, -tags e2e)
+        # The e2e suite drives a throwaway LOCAL git repo with a deterministic
+        # shell performer in place of `claude -p`; it needs only git + go and no
+        # network, so it runs hermetically in CI.
+        run: go test -tags e2e -run E2E ./internal/conductor/
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.12.0
