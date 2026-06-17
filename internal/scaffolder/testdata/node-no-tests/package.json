@@ -1,0 +1,8 @@
+{
+  "name": "node-no-tests",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "tsc",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}
