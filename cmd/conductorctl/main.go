@@ -26,15 +26,89 @@ import (
 const defaultBaseBranch = "develop"
 
 func main() {
-	// Faz-1a wiring: a single in-memory store + in-process controller. Faz-1b
-	// replaces these with the Postgres-backed implementations behind the same
-	// interfaces; the handlers below are unaffected.
+	ctx := context.Background()
+
+	// -dsn is a GLOBAL flag that selects the StateStore backend the operator drives:
+	// empty (default) keeps the Faz-1a in-memory store (each process fresh, fine for
+	// dev/tests), while a non-empty DSN points conductorctl at the SAME shared
+	// Postgres the daemon uses (ADR-0010/0013) so onboard/intake in one invocation
+	// are visible to status/pause in a later, separate process — and to the running
+	// daemon. It is extracted here, AROUND the subcommand dispatch, so the
+	// per-subcommand flag parsing (--project/--file/--base) in run is untouched.
+	dsn, rest, err := extractDSN(os.Args[1:])
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "conductorctl: %v\n", err)
+		os.Exit(2)
+	}
+
+	// Select the StateStore backend from the resolved DSN. The closer releases the
+	// Postgres pool (a no-op for memory) and is always invoked before exit. The DSN
+	// (which carries the password) is NEVER logged or printed.
+	store, closer, err := newStore(ctx, dsn)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "conductorctl: %v\n", err)
+		os.Exit(1)
+	}
+	defer closer()
+
 	a := &app{
-		store: statestore.NewMemoryStore(),
+		store: store,
 		ctrl:  NewMemoryController(),
 		out:   os.Stdout,
 	}
-	os.Exit(run(context.Background(), a, os.Args[1:], os.Stderr))
+	os.Exit(run(ctx, a, rest, os.Stderr))
+}
+
+// extractDSN pulls the GLOBAL -dsn/--dsn flag out of argv, returning its resolved
+// value (flag value > CONDUCTOR_DSN env > "") and argv with the flag (and its
+// value, when separate) removed. It is intentionally a small, position-tolerant
+// pre-pass rather than a flag.FlagSet so the subcommand and its own flags survive
+// untouched: a real FlagSet stops at the first non-flag token (the subcommand),
+// which would make `conductorctl onboard -dsn ... repo` unparseable. Both
+// `-dsn value` and `-dsn=value` (and the `--` long forms) are accepted; a `-dsn`
+// with no following value is an error.
+func extractDSN(argv []string) (string, []string, error) {
+	dsn := os.Getenv("CONDUCTOR_DSN")
+	rest := make([]string, 0, len(argv))
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
+		switch {
+		case arg == "-dsn" || arg == "--dsn":
+			if i+1 >= len(argv) {
+				return "", nil, fmt.Errorf("flag needs an argument: %s", arg)
+			}
+			dsn = argv[i+1]
+			i++ // consume the value too
+		case strings.HasPrefix(arg, "-dsn=") || strings.HasPrefix(arg, "--dsn="):
+			dsn = arg[strings.IndexByte(arg, '=')+1:]
+		default:
+			rest = append(rest, arg)
+		}
+	}
+	return dsn, rest, nil
+}
+
+// newStore selects and constructs the StateStore backend from dsn, mirroring the
+// daemon's newStore (cmd/conductor): empty selects the in-memory store (unchanged
+// Faz-1a behavior), non-empty opens the shared Postgres store and migrates it on
+// start so a fresh database is schema-ready. The returned closer releases the
+// Postgres pool and is a no-op for memory, so callers can defer it
+// unconditionally. The DSN (which carries the password) is NEVER logged.
+func newStore(ctx context.Context, dsn string) (statestore.StateStore, func(), error) {
+	if dsn == "" {
+		return statestore.NewMemoryStore(), func() {}, nil
+	}
+
+	pg, err := statestore.NewPostgresStore(ctx, dsn)
+	if err != nil {
+		// pgx does not echo the password in its error; we still never log the DSN.
+		return nil, nil, fmt.Errorf("open postgres store: %w", err)
+	}
+	if err := pg.Migrate(ctx); err != nil {
+		pg.Close()
+		return nil, nil, fmt.Errorf("migrate postgres store: %w", err)
+	}
+	return pg, pg.Close, nil
 }
 
 // run dispatches argv to a subcommand handler and returns the process exit code.
@@ -179,7 +253,10 @@ func runPauseResume(ctx context.Context, a *app, args []string, stderr io.Writer
 func usage() string {
 	var b strings.Builder
 	b.WriteString("conductorctl — Faz-1a operator client\n\n")
-	b.WriteString("usage: conductorctl <command> [flags]\n\n")
+	b.WriteString("usage: conductorctl [-dsn <postgres-dsn>] <command> [flags]\n\n")
+	b.WriteString("global flags:\n")
+	b.WriteString("  -dsn  Postgres connection string (or CONDUCTOR_DSN); empty = in-memory.\n")
+	b.WriteString("        Non-empty points at the SAME shared store the daemon uses. Never logged.\n\n")
 	b.WriteString("commands:\n")
 	b.WriteString("  onboard  <repo>   register a project (--base)\n")
 	b.WriteString("  intake            ingest a scenario into the ledger (--project --file)\n")
