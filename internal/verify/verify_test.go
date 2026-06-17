@@ -151,7 +151,7 @@ func TestVerifier_VerifyWorktreeCleanedUp(t *testing.T) {
 
 	var captured string
 	v := New(store, Config{
-		HoldoutCmd: holdoutCmd("h_test.sh"),
+		HoldoutCmd:       holdoutCmd("h_test.sh"),
 		onVerifyWorktree: func(p string) { captured = p },
 	})
 

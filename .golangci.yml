@@ -9,3 +9,8 @@ linters:
   # (errcheck, govet, ineffassign, staticcheck, unused) — the same defaults
   # the project runs clean against locally.
   default: standard
+
+# Formatting is part of the gate: CI fails if code is not gofmt-clean.
+formatters:
+  enable:
+    - gofmt
