@@ -1,0 +1,43 @@
+# PRE-0 — ÖN-ADIM: freeze the shared Go contracts (ADR-0014 §7, ADR-0019)
+#
+# This is the FIRST builder task and it gates every Dalga A/B/C task. It is run
+# single-performer and REQUIRES HUMAN SIGN-OFF on the diff before any dependent
+# task (A-1 ...) is flipped to ready. The point: lock the interface/struct
+# surface ONCE so parallel performers later cannot drift it (review #7).
+#
+# Holdout note (ADR-0018): the hidden_holdout_ref points OUTSIDE the repo. The
+# performer must never read it; it is injected only at an independent verify step.
+
+id: PRE-0
+title: "Freeze shared Go contracts: EngineAdapter, Verdict, ReviewResult, StateStore"
+lane: contracts
+tier: T2
+deps: []
+
+# What this task must produce. Compilable skeleton ONLY — interfaces + structs +
+# doc comments + a couple of sentinel errors. No business logic; impls come later
+# (A-1 fills StateStore, A-3 fills the engine). After this lands, these signatures
+# are FROZEN: later performers fill behind them, never change them.
+acceptance:
+  - "internal/statestore: `StateStore` interface defined per ADR-0010/0013 (CRUD over projects, tasks, leases, scenarios; methods take context.Context; errors returned, not panicked). Compiles."
+  - "internal/engine: `EngineAdapter` interface + `Verdict` struct defined per ADR-0002/0014. Verdict fields EXACTLY: Result string; Branch string; CommitSHA string; Checks []Check (Check{Name, Result, Evidence string}); Files []string; BlockedReason string; Summary string. JSON tags match the schema in PHASE-1-PLAN §6 and the performer Verdict (result/branch/commit_sha/checks/files/blocked_reason/summary)."
+  - "internal/verify (or internal/engine): `ReviewResult` struct defined (fresh-eyes review outcome per ADR-0003): Result string (pass|changes-requested); Findings []string; Summary string. Compiles."
+  - "Sentinel errors declared where used (e.g. statestore.ErrNotFound, engine.ErrMalformedVerdict, engine.ErrNoVerdict, engine.ErrAuthExpired) — these names are part of the frozen contract because ADR-0014 maps directly onto them."
+  - "go build ./... && go vet ./... green. go test ./... green (even if only a trivial compile/JSON-roundtrip test exists)."
+  - "golangci-lint run green (exported identifiers documented)."
+  - "NO implementation logic in this task — interfaces have no bodies, structs have no methods beyond what the contract requires; impls are separate tasks. Do not add v2/legacy/duplicate types."
+
+# Public acceptance tests the performer writes + must pass (TDD, ADR-0018 visible layer).
+public_test_ref: internal/engine/contract_test.go   # e.g. Verdict JSON round-trips with the exact tags
+
+# Hidden holdout — repo-DIŞI, performer NEVER sees it (ADR-0018). Injected at an
+# independent verify step. For PRE-0 the holdout checks the frozen field set did
+# not drift (e.g. marshals a golden Verdict and asserts the exact JSON keys).
+hidden_holdout_ref: "store://holdouts/PRE-0/contract_freeze_holdout_test.go"
+
+human_signoff_required: true
+notes: >
+  Operator: after the performer reports pass, REVIEW the contract diff yourself and
+  confirm the signatures are what you want LOCKED. Only then mark A-1 (and siblings)
+  ready in state.json. This human gate is intentional (ADR-0019) — do not automate it
+  away in Faz-1a.

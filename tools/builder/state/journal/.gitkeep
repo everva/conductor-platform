@@ -1,0 +1,7 @@
+# journal/
+
+Per-task attempt log. At RUNTIME the builder writes journal entries to
+~/.conductor-platform-builder/journal/<task_id>.md (one append per attempt:
+killed/rc + the verbatim Verdict JSON — never re-summarized, ORCHESTRATION.md §4).
+This versioned copy only carries the template/schema note; the live journals are
+runtime state and are not committed.

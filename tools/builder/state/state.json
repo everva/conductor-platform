@@ -1,0 +1,59 @@
+{
+  "_comment": "VERSIONED TEMPLATE ledger (Faz-1a, no Postgres — ADR-0013). On first run conductor-tick.sh copies this to ~/.conductor-platform-builder/state.json and mutates THAT runtime copy; this template stays clean in git. status one of: todo | ready | running | done | blocked. A task is pickable when status in (ready, todo) and every dep id is done. scenario_ref is relative to tools/builder/scenarios/. retry_count caps at 2 -> blocked (ADR-0004). The PRE-STEP (Go contracts freeze) is task 0 and gates everything (ADR-0019).",
+  "version": 1,
+  "phase": "1a",
+  "tasks": [
+    {
+      "id": "PRE-0",
+      "lane": "contracts",
+      "tier": "T2",
+      "status": "ready",
+      "deps": [],
+      "scenario_ref": "PRE-0-contracts-freeze.yaml",
+      "retry_count": 0,
+      "last_verdict": null,
+      "commit_sha": null,
+      "blocked_reason": null,
+      "_note": "ÖN-ADIM (ADR-0014 §7 / ADR-0019): freeze shared Go contracts. Single-performer + HUMAN sign-off before anything depends on it. Operator should review the diff and confirm before flipping dependents to ready."
+    },
+    {
+      "id": "A-1",
+      "lane": "statestore",
+      "tier": "T1",
+      "status": "todo",
+      "deps": ["PRE-0"],
+      "scenario_ref": "A-1-statestore-inmemory.yaml",
+      "retry_count": 0,
+      "last_verdict": null,
+      "commit_sha": null,
+      "blocked_reason": null,
+      "_note": "Faz-1a Dalga A first task: in-memory StateStore impl behind the frozen interface."
+    },
+    {
+      "id": "A-2",
+      "lane": "registry",
+      "tier": "T1",
+      "status": "todo",
+      "deps": ["A-1"],
+      "scenario_ref": "A-2-registry.yaml",
+      "retry_count": 0,
+      "last_verdict": null,
+      "commit_sha": null,
+      "blocked_reason": null,
+      "_note": "Dalga A: registry (projects/tasks/leases/scenarios) on top of StateStore. Scenario YAML TBD — operator writes it before this becomes ready."
+    },
+    {
+      "id": "A-3",
+      "lane": "engine",
+      "tier": "T2",
+      "status": "todo",
+      "deps": ["A-2"],
+      "scenario_ref": "A-3-engine.yaml",
+      "retry_count": 0,
+      "last_verdict": null,
+      "commit_sha": null,
+      "blocked_reason": null,
+      "_note": "Dalga A: CommandEngine + performer contract + LLM-resilience parse (ADR-0014). Scenario YAML TBD."
+    }
+  ]
+}

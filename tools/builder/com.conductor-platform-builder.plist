@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.conductor-platform-builder</string>
+
+  <!-- ADR-0015: FDA-scoped binary. launchd children (claude, go, git, gh)
+       inherit THIS responsible process's Full Disk Access TCC grant, which is
+       what lets them read/write the conductor-platform repo under ~/Documents.
+       Do NOT grant FDA to the system /bin/bash (that would affect every script
+       on the machine). xirigo used a dedicated `conductor-bash` copy. Make one:
+         cp /bin/bash ~/.conductor-platform-builder/builder-bash
+       then grant THAT copy Full Disk Access in System Settings (see README).
+       If you skip the dedicated copy and point this at /bin/bash directly, you
+       must grant FDA to /bin/bash itself (not recommended). -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/atakan/.conductor-platform-builder/builder-bash</string>
+    <string>/Users/atakan/Documents/GitHub/conductor-platform/tools/builder/conductor-tick.sh</string>
+  </array>
+
+  <!-- Fire every 5 min. A running tick no-ops the fire via the mkdir-lock; when
+       a tick ends, the next fire (<=5 min later) starts the next fresh tick.
+       RunAtLoad fires once at load/boot; KeepAlive(SuccessfulExit=false) relaunches
+       only on abnormal exit, so a clean tick (exit 0) waits for the interval. -->
+  <key>StartInterval</key><integer>300</integer>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key><false/>
+  </dict>
+
+  <!-- ADR-0015: launchd starts with an almost-empty PATH. Make claude / go / gh /
+       golangci-lint reachable. Covers ~/.local/bin (claude), ~/go/bin (golangci-lint
+       via `go install`), Homebrew (Apple Silicon + Intel), and the Go toolchain. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/Users/atakan/.local/bin:/Users/atakan/go/bin:/opt/homebrew/bin:/usr/local/bin:/usr/local/go/bin:/opt/homebrew/go/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key><string>/Users/atakan</string>
+    <!-- subscription claude -p; NO ANTHROPIC_API_KEY (ADR-0015). The token is
+         read from ~/.conductor-platform-builder/oauth-token inside the tick. -->
+  </dict>
+
+  <key>WorkingDirectory</key><string>/Users/atakan/Documents/GitHub/conductor-platform</string>
+  <key>StandardOutPath</key><string>/Users/atakan/.conductor-platform-builder/builder.launchd.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/atakan/.conductor-platform-builder/builder.launchd.err.log</string>
+  <key>ProcessType</key><string>Background</string>
+</dict>
+</plist>

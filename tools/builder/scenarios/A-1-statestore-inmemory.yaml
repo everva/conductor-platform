@@ -1,0 +1,44 @@
+# A-1 — Faz-1a Dalga A, first task: in-memory StateStore implementation
+#
+# Fills the FROZEN `StateStore` interface from PRE-0 with an in-memory/file impl
+# (Postgres is Faz-1b — ADR-0013). The interface is abstract so the 1a->1b swap
+# is clean; this task must NOT change the interface, only implement it.
+#
+# Holdout note (ADR-0018): hidden_holdout_ref is repo-DIŞI; never read it.
+
+id: A-1
+title: "In-memory StateStore implementation behind the frozen interface"
+lane: statestore
+tier: T1
+deps: ["PRE-0"]
+
+acceptance:
+  - "internal/statestore: a concrete `MemoryStore` (or `InMemoryStore`) implementing the FROZEN StateStore interface from PRE-0. Constructor `NewMemoryStore() *MemoryStore`."
+  - "All interface methods implemented with correct semantics: create/get/list/update for projects, tasks, leases, scenarios. Get of a missing id returns the frozen `ErrNotFound` sentinel (not nil, not panic)."
+  - "Thread-safe: guarded by a sync.RWMutex (the future governor/reconcile may read concurrently). Stored values are COPIES, not shared pointers, so a caller mutating a returned struct cannot corrupt the store."
+  - "Lease semantics (single-host Faz-1a): AcquireLease is atomic under the mutex — acquiring a lease for a project/task that already has an active lease returns an error (no double-lease). ReleaseLease is idempotent."
+  - "An UpdateTask that changes status is reflected in the next List/Get (no stale reads)."
+  - "go build ./... && go test ./... && go vet ./... && golangci-lint run all green."
+  - "No v2/legacy/duplicate store types. No global mutable singleton — the store is an explicit value passed by the caller."
+
+# Public acceptance tests the performer writes FIRST (TDD) and must pass.
+public_test_ref: internal/statestore/memory_test.go
+public_tests_outline:
+  - "TestMemoryStore_TaskCRUD: create -> get -> update status -> list reflects it."
+  - "TestMemoryStore_GetMissing_ReturnsErrNotFound."
+  - "TestMemoryStore_AcquireLease_SecondAcquireFails (atomic single-host lease)."
+  - "TestMemoryStore_ReturnedValueIsCopy: mutating a returned task does not change the stored one."
+  - "TestMemoryStore_Concurrent: parallel writers via -race do not data-race (run go test -race)."
+
+# Hidden holdout — repo-DIŞI, performer NEVER sees it (ADR-0018). Injected at an
+# independent verify step into a throwaway verify-worktree. For A-1 it stresses
+# semantics the public tests don't name (e.g. lease TTL/idempotent release under
+# contention, list ordering stability) so an over-fit stub fails it.
+hidden_holdout_ref: "store://holdouts/A-1/memory_store_holdout_test.go"
+
+notes: >
+  This task is the in-memory leg of the StateStore swap (ADR-0013). Keep the impl
+  honest: the hidden holdout exercises behavior beyond the visible test names, so a
+  map-with-no-locking or a stub that only satisfies the listed tests will be blocked
+  at verify (ADR-0018 negative-test principle). Run `go test -race ./internal/statestore/...`
+  as part of the gate.

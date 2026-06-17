@@ -1,0 +1,6 @@
+{
+  "_comment": "VERSIONED TEMPLATE leases (Faz-1a, single-host — ADR-0013). Copied to ~/.conductor-platform-builder/leases.json on first run. Single-host walking skeleton: max_workers=1, max_per_repo=1 (lease atomicity is the real value of Postgres and is deferred to Faz-1b — ADR-0013). active[] entries are {task, pid, started_at}; the reconciler drops a lease whose task is done/blocked or whose owner pid is dead.",
+  "active": [],
+  "max_workers": 1,
+  "max_per_repo": 1
+}
