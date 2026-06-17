@@ -1,0 +1,22 @@
+# Two scenarios in one file (multi-document YAML stream). A-2 depends on A-1
+# (intra-batch dep), exercising in-batch dep resolution.
+id: A-1
+title: "In-memory StateStore implementation behind the frozen interface"
+lane: statestore
+tier: T1
+deps: []
+acceptance:
+  - "internal/statestore: a concrete MemoryStore implementing the frozen interface."
+  - "Get of a missing id returns the frozen ErrNotFound sentinel."
+public_test_ref: internal/statestore/memory_test.go
+hidden_holdout_ref: "store://holdouts/A-1/memory_store_holdout_test.go"
+notes: "First leg of the StateStore swap."
+---
+id: A-2
+title: "Registry task-selection on top of the frozen StateStore"
+lane: registry
+tier: T2
+deps: ["A-1"]
+acceptance:
+  - "internal/registry: PickReady selects a ready task honoring the dep-gate."
+hidden_holdout_ref: "store://holdouts/A-2/registry_holdout_test.go"

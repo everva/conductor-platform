@@ -1,0 +1,10 @@
+# Single scenario whose dep references an ID that is neither a known task nor a
+# batch sibling: must be rejected as a dangling dependency.
+id: B-1
+title: "Provisioner with a dangling dependency"
+lane: provisioner
+tier: T2
+deps: ["DOES-NOT-EXIST"]
+acceptance:
+  - "internal/provisioner: fresh per-task worktree."
+hidden_holdout_ref: "store://holdouts/B-1/provisioner_holdout_test.go"
