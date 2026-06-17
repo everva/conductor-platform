@@ -38,6 +38,8 @@ import (
 
 	"github.com/everva/conductor-platform/internal/conductor"
 	"github.com/everva/conductor-platform/internal/engine"
+	"github.com/everva/conductor-platform/internal/events"
+	"github.com/everva/conductor-platform/internal/governance"
 	"github.com/everva/conductor-platform/internal/governor"
 	"github.com/everva/conductor-platform/internal/heartbeat"
 	"github.com/everva/conductor-platform/internal/provisioner"
@@ -117,6 +119,13 @@ type config struct {
 	// read the heartbeat at heartbeatPath, print status, exit 0 FRESH / non-zero
 	// STALE|MISSING (ADR-0016 independent backstop).
 	check bool
+	// governance, when true (the DEFAULT), wires the risk-layered merge policy
+	// (governance.DefaultPolicy, ADR-0003/N-10) into the conductor so high-tier
+	// (T3/T4) and untiered tasks are HELD for a human after a green gate instead of
+	// auto-merging; T1/T2 still auto-merge. When false, no policy is injected (nil)
+	// so every green task auto-merges (the pre-N-10 behavior). Default true so
+	// production correctly human-gates high-risk merges.
+	governance bool
 }
 
 // run parses argv, builds the daemon, and drives it once or in a loop. It is
@@ -210,6 +219,8 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		"independent -check: if >0, a fresh heartbeat whose tick never advances for this long is STALE (stuck)")
 	check := fs.Bool("check", envBoolOr("CONDUCTOR_CHECK", false),
 		"run the INDEPENDENT stall-detector over -heartbeat and exit (0=FRESH, non-zero=STALE/MISSING); does not start the daemon")
+	governance := fs.Bool("governance", envBoolOr("CONDUCTOR_GOVERNANCE", true),
+		"wire the risk-layered merge policy (ADR-0003): high-tier/untiered tasks are HELD for a human after a green gate; false = auto-merge all (default true)")
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "conductor — Faz-1a tick daemon")
@@ -280,6 +291,7 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		heartbeatPath:     *heartbeat,
 		heartbeatStale:    *heartbeatStale,
 		heartbeatProgress: *heartbeatProgress,
+		governance:        *governance,
 	}, nil
 }
 
@@ -298,9 +310,10 @@ type Daemon struct {
 	hb *heartbeat.Writer
 	// ticks counts ticks attempted; it is the heartbeat's progress signal.
 	ticks uint64
-	// closer releases store-backend resources on shutdown (the Postgres pgxpool).
-	// It is nil for the in-memory store, which owns no external resource. Close
-	// invokes it exactly once.
+	// closer releases backend resources on shutdown (the Postgres statestore pool
+	// AND, for a Postgres event bus, its LISTENer connections + pool). It is nil
+	// for the all-memory dev setup, which owns no external resource. Close invokes
+	// it exactly once.
 	closer func()
 }
 
@@ -376,6 +389,27 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		return nil, fmt.Errorf("governor: %w", err)
 	}
 
+	// Observability bus (ADR-0011, N-9): the event Emitter the tick publishes
+	// lifecycle events on. memory for the in-process dev setup, Postgres
+	// LISTEN/NOTIFY when a DSN is set (so external subscribers see events). Its
+	// closer is composed onto the store closer so both are released on shutdown.
+	emitter, busCloser, err := newEmitter(context.Background(), cfg, logger)
+	if err != nil {
+		closer()
+		return nil, fmt.Errorf("event bus: %w", err)
+	}
+	// Compose: release the event bus AND the store on Close, exactly once each.
+	storeCloser := closer
+	closer = func() {
+		busCloser()
+		storeCloser()
+	}
+
+	// Governance merge policy (ADR-0003, N-10): default ON so production human-gates
+	// high-tier (T3/T4) and untiered tasks after a green gate; -governance=false
+	// leaves it nil so every green task auto-merges (pre-N-10 behavior).
+	policy := newPolicy(cfg, logger)
+
 	cond, err := conductor.New(conductor.Deps{
 		Store:       store,
 		Picker:      registry.NewRegistry(store),
@@ -389,6 +423,8 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		}},
 		HostID:   cfg.hostID,
 		Governor: gov,
+		Emitter:  emitter,
+		Policy:   policy,
 	})
 	if err != nil {
 		closer()
@@ -433,6 +469,54 @@ func newStore(ctx context.Context, cfg config, logger *slog.Logger) (statestore.
 	}
 	logger.Info("statestore backend selected", slog.String("backend", "postgres"))
 	return pg, pg.Close, nil
+}
+
+// newEmitter selects and constructs the event bus (ADR-0011, N-9) the conductor
+// publishes lifecycle events on, returning it as a conductor.Emitter alongside a
+// closer that releases any backend resource. The closer is always non-nil: for
+// the in-memory bus it tears down subscriptions (a safe no-op here, as the daemon
+// holds no subscribers), so callers can call it unconditionally.
+//
+// The backend follows cfg.dsn, mirroring newStore: empty selects the in-memory
+// bus (events observable in-process; fine for dev), non-empty selects the
+// Postgres LISTEN/NOTIFY bus so external subscribers on other processes/hosts see
+// events in realtime. The PG bus opens its OWN pgx pool (a dedicated LISTENer
+// connection is required and the frozen statestore exposes no pool accessor); the
+// events table it persists to is created by the statestore migrations the store
+// already applied on startup. The DSN (which carries the password) is NEVER
+// logged — only the backend name is emitted.
+//
+// An events.EventBus satisfies conductor.Emitter directly: both declare
+// Publish(ctx, events.Event) error, so no adapter is needed.
+func newEmitter(ctx context.Context, cfg config, logger *slog.Logger) (conductor.Emitter, func(), error) {
+	if cfg.dsn == "" {
+		bus := events.NewMemoryBus()
+		logger.Info("event bus backend selected", slog.String("backend", "memory"))
+		return bus, bus.Close, nil
+	}
+
+	bus, err := events.NewPostgresBus(ctx, cfg.dsn)
+	if err != nil {
+		// pgx does not echo the password in its error; we still never log cfg.dsn.
+		return nil, nil, fmt.Errorf("open postgres event bus: %w", err)
+	}
+	logger.Info("event bus backend selected", slog.String("backend", "postgres"))
+	return bus, bus.Close, nil
+}
+
+// newPolicy constructs the risk-layered governance merge policy (ADR-0003, N-10)
+// when cfg.governance is true (the default), returning nil when it is false. A nil
+// conductor.Policy means auto-merge-all (the pre-N-10 behavior). It is split from
+// newDaemon so a test can assert the on/off → non-nil/nil mapping deterministically
+// without reaching into the conductor's unexported seams. It logs the active mode
+// (never any secret).
+func newPolicy(cfg config, logger *slog.Logger) conductor.Policy {
+	if !cfg.governance {
+		logger.Info("governance policy disabled", slog.String("mode", "auto-merge-all"))
+		return nil
+	}
+	logger.Info("governance policy active", slog.String("mode", "risk-layered (T3/T4 + untiered held for human)"))
+	return governance.DefaultPolicy()
 }
 
 // noopHoldout is an inert HoldoutStore: the daemon's merge decision rides on the

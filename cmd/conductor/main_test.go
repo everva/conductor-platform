@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/everva/conductor-platform/internal/events"
 	"github.com/everva/conductor-platform/internal/heartbeat"
 	"github.com/everva/conductor-platform/internal/statestore"
 )
@@ -233,6 +234,100 @@ func TestParseConfig(t *testing.T) {
 	})
 }
 
+// TestParseConfig_Governance proves the -governance flag defaults to true (so
+// production human-gates high-tier merges), is togglable to false, and honors the
+// CONDUCTOR_GOVERNANCE env fallback with the flag winning over env.
+func TestParseConfig_Governance(t *testing.T) {
+	t.Run("defaults true", func(t *testing.T) {
+		cfg, err := parseConfig([]string{"-project", "p1", "-root", "/tmp/r"}, io.Discard)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		if !cfg.governance {
+			t.Fatal("governance = false, want true by default (production human-gates T3/T4)")
+		}
+	})
+
+	t.Run("disable via flag", func(t *testing.T) {
+		cfg, err := parseConfig([]string{"-project", "p1", "-root", "/tmp/r", "-governance=false"}, io.Discard)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		if cfg.governance {
+			t.Fatal("governance = true, want false after -governance=false")
+		}
+	})
+
+	t.Run("env fallback", func(t *testing.T) {
+		t.Setenv("CONDUCTOR_GOVERNANCE", "false")
+		cfg, err := parseConfig([]string{"-project", "p1", "-root", "/tmp/r"}, io.Discard)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		if cfg.governance {
+			t.Fatal("governance = true, want false from CONDUCTOR_GOVERNANCE=false")
+		}
+	})
+
+	t.Run("flag overrides env", func(t *testing.T) {
+		t.Setenv("CONDUCTOR_GOVERNANCE", "false")
+		cfg, err := parseConfig([]string{"-project", "p1", "-root", "/tmp/r", "-governance=true"}, io.Discard)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		if !cfg.governance {
+			t.Fatal("governance = false, want true (flag should win over env)")
+		}
+	})
+}
+
+// TestNewPolicy_GovernanceToggle proves the governance on/off switch maps to a
+// non-nil / nil conductor.Policy: ON wires the risk-layered policy (so T3/T4 are
+// human-gated), OFF leaves it nil (auto-merge-all). The Deps.Policy field is
+// populated from exactly this value.
+func TestNewPolicy_GovernanceToggle(t *testing.T) {
+	on := config{governance: true}
+	if newPolicy(on, newTestLogger()) == nil {
+		t.Fatal("newPolicy(governance=true) = nil, want a non-nil risk-layered policy")
+	}
+
+	off := config{governance: false}
+	if p := newPolicy(off, newTestLogger()); p != nil {
+		t.Fatalf("newPolicy(governance=false) = %v, want nil (auto-merge-all)", p)
+	}
+}
+
+// TestNewEmitter_BackendByDSN proves the event Emitter backend follows -dsn,
+// mirroring newStore: empty dsn selects the in-memory bus (observable in-process),
+// and the returned closer is a non-nil, safe-to-call teardown. The Postgres branch
+// (dsn set) is exercised by the optional real-DB test.
+func TestNewEmitter_BackendByDSN(t *testing.T) {
+	cfg := testConfig(t) // dsn is the zero value (empty) -> memory event bus.
+
+	emitter, closer, err := newEmitter(context.Background(), cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("newEmitter(empty dsn): %v", err)
+	}
+	if emitter == nil {
+		t.Fatal("emitter is nil; want the in-memory event bus for empty dsn")
+	}
+	if closer == nil {
+		t.Fatal("closer is nil; want a non-nil teardown for the memory event bus")
+	}
+	if _, ok := emitter.(*events.MemoryBus); !ok {
+		t.Fatalf("emitter type = %T, want *events.MemoryBus for empty dsn", emitter)
+	}
+
+	// The memory bus satisfies the conductor.Emitter seam directly: Publish is
+	// callable and observable in-process, with no adapter.
+	ev := events.Event{Project: "p", Phase: events.PhaseDevelop, Kind: events.KindStarted}
+	if err := emitter.Publish(context.Background(), ev); err != nil {
+		t.Fatalf("Publish on memory emitter: %v", err)
+	}
+
+	closer() // must not panic for the memory backend.
+}
+
 // TestRunExitCodes checks the top-level run() exit codes for the help and
 // missing-required-flag paths without spawning a process.
 func TestRunExitCodes(t *testing.T) {
@@ -382,6 +477,23 @@ func TestRealDB_OnceTickMigratesAndRuns(t *testing.T) {
 	cfg.once = true
 	cfg.dsn = dsn
 	cfg.project = "p3-1-realdb-test"
+	cfg.governance = true
+
+	// With a DSN set, the event Emitter backend must be the Postgres LISTEN/NOTIFY
+	// bus so external subscribers see events. (The store migrations create the
+	// events table newDaemon's bus publishes to.) Construct + close it directly
+	// first to assert backend selection, then run the full daemon below.
+	if err := statestore.MigrateDSN(context.Background(), dsn); err != nil {
+		t.Fatalf("MigrateDSN: %v", err)
+	}
+	emitter, busCloser, err := newEmitter(context.Background(), cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("newEmitter(postgres): %v", err)
+	}
+	if _, ok := emitter.(*events.PostgresBus); !ok {
+		t.Fatalf("emitter type = %T, want *events.PostgresBus for a set dsn", emitter)
+	}
+	busCloser()
 
 	d, err := newDaemon(cfg, newTestLogger())
 	if err != nil {
