@@ -50,5 +50,8 @@
 - Gece başlangıç: develop @ 39f37ca, builder durdurulmuş, heartbeat-loop kuruldu (cron 7,37 * * * *).
 - **N-1 (cmd/conductor daemon):** ✅ done (5fa2ef3, push'lu). tick-loop + `-once` + graceful-shutdown + 7 hermetik test. Bağımsız gate yeşil (build/test -count=1/vet/lint 0 + e2e compile + -once smoke noop). slog yapılandırılmış log; develop-cmd flag/env (secret yok).
 - **N-3 (README):** ✅ done (e2e63f8, push'lu). 189-satır README; mimari/tick-akışı/flag&subcommand/durum — kod ile doğrulandı, Postgres & gerçek claude -p "pending" doğru işaretli. cherry-pick ile merge.
-- **N-2 (CI GitHub Actions):** 🔄 Agent (agent/n2-ci worktree). Bekleniyor → bağımsız gate → cherry-pick → push.
-- **NOT (öğrenildi):** Agent `isolation:"worktree"` SESSION repo'sunu (k8s) izole ediyor, conductor-platform'u DEĞİL. Bu yüzden agent'lar kendi worktree'lerini açtı (cherry-pick ile merge ediliyor). Bundan sonra worktree-isolation YOK; agent'lar conductor-platform'da direkt çalışır, seri çalıştır (race önlemi).
+- **N-2 (CI GitHub Actions):** ✅ done (6d9c9eb, push'lu). .github/workflows/ci.yml (build/test-race/vet/e2e-tags/golangci v2.12.0, push+PR, read-only perms, secret yok) + .golangci.yml v2 (default:standard). YAML actionlint+yaml-parse temiz, gate bağımsız 0 issue. cherry-pick ile merge.
+- **EK:** gofmt-fix internal/verify + .golangci.yml'a gofmt formatter eklendi (CI artık format de zorluyor) — 43291a2 push'lu. (golangci stale-cache artefaktı temizlendi: nil-ctx zaten //nolint'li, gerçek sorun yok.)
+- **🎉 P0 TAMAM (N-1,N-2,N-3).** Sıra: P1.
+- **NOT (öğrenildi):** Agent `isolation:"worktree"` SESSION repo'sunu (k8s) izole ediyor, conductor-platform'u DEĞİL. Agent'lar kendi worktree'lerini açtı (cherry-pick ile merge edildi). Bundan sonra worktree-isolation YOK; agent'lar conductor-platform'da direkt, seri çalışır.
+- **N-4 (Postgres StateStore):** 🔄 Agent (direkt, no-worktree). Docker çalışıyor → gerçek PG container ile integration test. pgx + goose migration + conformance-suite (skip-if-no-DB) + lease atomik (FOR UPDATE/advisory-lock).
