@@ -81,8 +81,8 @@ Postgres-backed + operatör-CLI paylaşımlı store + events (PG LISTEN/NOTIFY) 
 
 ## P4 — ÜRETİM SERTLEŞTİRME (autonomous-safe, kullanıcı kararı GEREKMEYEN işler)
 - **P4-1: Dockerfile (multi-stage) + docker-compose** — ✅ done (603e131, push'lu). golang:1.26-alpine→alpine:3.21 (git+ca-certs+tini), static CGO-off, non-root uid 65532, ~41.7MB, secret yok. compose: postgres:16-alpine (healthcheck+volume) + conductor (migrate-on-start). **Bağımsız doğrulandı:** kendi docker build'im (aynı sha) + non-root + compose config valid + **kendi compose up'ım**: daemon started, backend=postgres (store+events), tick noop. Go-gate yeşil, .go değişmedi.
-- **P4-2: Daemon health/observability HTTP** (ŞİMDİ 🔄) — opsiyonel HTTP server (-http-addr, boş=kapalı): /healthz (liveness) + /readyz (store ping) + /status (son tick/heartbeat JSON). k8s probe'ları için. compose healthcheck'i /healthz'e bağla.
-- **P4-3: Makefile** (gate/build/run/migrate hedefleri) + dağıtım dokümanı.
+- **P4-2: Daemon health/observability HTTP** — ✅ done (340a360, push'lu). cmd/conductor/httpserver.go: -http-addr/env (boş=kapalı), /healthz (her zaman 200, store'a dokunmaz=liveness flap yok), /readyz (ListProjects 2s, 200/503), /status JSON (project/backend/governance/uptime/tick/last_outcome, DSN YOK). loop-mode'da goroutine, ctx-cancel'de graceful drain. Dockerfile EXPOSE 8080 + compose healthcheck /healthz. **Bağımsız doğrulandı:** gate+e2e+http-testleri yeşil, **canlı daemon'a kendi curl'üm**: /healthz 200 ok, /readyz 200 ready, /status temiz JSON (DSN sızıntısı yok). frozen untouched.
+- **P4-3: Makefile + DEPLOY dokümanı** (ŞİMDİ 🔄) — standart hedefler (gate/build/test/lint/fmt/run/migrate/docker/compose) + deploy rehberi.
 
 ## FOLLOW-UP (kullanıcı kararı / risk → sabah)
 - Abort (in-flight iptal): kalıcı aborting sinyali + tick ctx-honor (ADR-0020 follow-up).
