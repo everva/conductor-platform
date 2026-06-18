@@ -130,6 +130,13 @@ type config struct {
 	// loadCeiling is the governor's normalized-load ceiling (loadavg / NumCPU)
 	// above which new work is denied admission (ADR-0008 "host yük tavanı").
 	loadCeiling float64
+	// hostCap is the governor's PER-HOST concurrent-task cap (multi-host,
+	// agent-per-host, ADR-0024): the max tasks THIS host runs simultaneously,
+	// independent of the global cap across all hosts. 0 (the DEFAULT) = unlimited
+	// per host = the per-host cap is disabled (only global + repo + load apply,
+	// pre-2B-4 behavior). The governor counts this host's own active leases (by
+	// hostID) against it.
+	hostCap int
 	// heartbeatPath is where the daemon writes its liveness heartbeat each tick
 	// (ADR-0016). Empty = no heartbeat written (non-breaking no-op).
 	heartbeatPath string
@@ -284,6 +291,8 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		"governor: max concurrent tasks across all projects (lease-derived; ADR-0008)")
 	loadCeiling := fs.Float64("load-ceiling", envFloatOr("CONDUCTOR_LOAD_CEILING", governor.DefaultLoadCeiling),
 		"governor: normalized 1-min load ceiling (loadavg/NumCPU) above which new work is denied")
+	hostCap := fs.Int("host-cap", envIntOr("CONDUCTOR_HOST_CAP", 0),
+		"governor: PER-HOST max concurrent tasks on THIS host (multi-host, ADR-0024; counts this host's own active leases). 0 (default) = unlimited per host = disabled")
 	heartbeat := fs.String("heartbeat", envOr("CONDUCTOR_HEARTBEAT", ""),
 		"path the daemon writes its liveness heartbeat to each tick (ADR-0016); empty = disabled")
 	heartbeatStale := fs.Duration("heartbeat-stale", envDurationOr("CONDUCTOR_HEARTBEAT_STALE", defaultHeartbeatStale),
@@ -390,6 +399,7 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		capabilities:      splitCapabilities(*capabilities),
 		globalCap:         *globalCap,
 		loadCeiling:       *loadCeiling,
+		hostCap:           *hostCap,
 		heartbeatPath:     *heartbeat,
 		heartbeatStale:    *heartbeatStale,
 		heartbeatProgress: *heartbeatProgress,
@@ -577,10 +587,24 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 	gov, err := governor.New(store, governor.SystemLoadProbe{}, governor.Config{
 		GlobalCap:   cfg.globalCap,
 		LoadCeiling: cfg.loadCeiling,
+		// Per-host concurrent-task cap (multi-host, agent-per-host, ADR-0024, 2B-4):
+		// the governor counts this host's OWN active leases (by hostID) against
+		// hostCap. hostCap <= 0 leaves the per-host cap disabled (pre-2B-4 behavior).
+		HostID:  cfg.hostID,
+		HostCap: cfg.hostCap,
 	})
 	if err != nil {
 		closer()
 		return nil, fmt.Errorf("governor: %w", err)
+	}
+	if cfg.hostCap > 0 {
+		logger.Info("governor per-host cap enabled (ADR-0024 agent-per-host)",
+			slog.String("host", cfg.hostID),
+			slog.Int("host_cap", cfg.hostCap),
+			slog.Int("global_cap", cfg.globalCap))
+	} else {
+		logger.Info("governor per-host cap disabled (unlimited per host)",
+			slog.Int("global_cap", cfg.globalCap))
 	}
 
 	// Observability bus (ADR-0011, N-9): the event Emitter the tick publishes

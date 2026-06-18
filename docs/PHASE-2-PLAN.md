@@ -224,3 +224,20 @@ Deterministik kanıt = kalite kapısı (LLM asla karar mercii); sahte-yeşil ASL
   yalnız ADDITIVE (yeni exported `HostHeartbeatOwnerLive` + iki yeni test dosyası). Offline gate (build+test+vet+golangci
   v2.12.0) + e2e (E2E ./internal/conductor/) + `-race ./internal/reconcile/ ./internal/conductor/ ./internal/registry/`
   YEŞİL; gofmt temiz; yeni dep yok; secret yok.
+- **Dalga B — 2B-4 (host-başına kaynak cap + governor çok-host, ADR-0024 + ADR-0008)** ✅ done. Governor'a PER-HOST
+  eşzamanlı-task cap'i eklendi: bir host KENDİ kapasitesini aşmasın (Mac≠Linux). Global cap (tüm host'larda toplam
+  eşzamanlılık) KORUNUR; repo-per-1 + host-yük tavanı KORUNUR. **Cap mantığı:** `governor.Config`'a `HostCap int` +
+  `HostID string` (hangi host'um) eklendi; `Admit` zaten global cap için yaptığı TEK `ListLeases` okumasından bu-host'un
+  aktif lease'lerini (`l.HostID == g.cfg.HostID`) sayar (ekstra store round-trip YOK), `thisHostActive >= HostCap` ise
+  yeni `ReasonDenyHostCap = "deny:host-cap"` ile reddeder. **Kontrol sırası (deterministik, dokümante + testli):**
+  repo-busy → global-cap → host-cap → host-load (daha spesifik/yapısal limit, gürültülü çevresel olana kazanır).
+  **Geriye-uyum:** `HostCap <= 0` → per-host cap KAPALI (sadece global+repo+load, bugünkü davranış); New HostCap'i
+  defaultlamaz (non-positive = açık "sınırsız"). Mevcut governor/conductor/e2e testleri DEĞİŞMEDİ. **Daemon wiring:**
+  `-host-cap`/`CONDUCTOR_HOST_CAP` (int, default 0 = sınırsız) + daemon'ın host id'si governor `HostID`'ye geçirilir;
+  cap set ise loglanır. **Testler (governor_test, deterministik):** bu-host cap'te (host-A 2 aktif, HostCap=2) →
+  DenyHostCap; cap altında → admit; BAŞKA host'un lease'leri host-A cap'ine SAYILMAZ (host-B dolu olsa bile host-A
+  serbest); mixed-host yalnız bu-host sayılır; HostCap=0/negatif → host-cap'te asla reddetmez; precedence (repo-busy
+  host-cap'i, global-cap host-cap'i, host-cap host-load'u yener — iki limiti birden tetikleyen vakalarla assert).
+  engine.go + statestore imza + tools/builder DOKUNULMADI; yalnız ADDITIVE (yeni Reason + iki yeni Config alanı +
+  Decision alanları + yeni test). Offline gate (build+test+vet+golangci v2.12.0) + e2e (E2E ./internal/conductor/) +
+  `-race ./internal/governor/ ./internal/conductor/` YEŞİL; gofmt temiz; yeni dep yok; secret yok.
