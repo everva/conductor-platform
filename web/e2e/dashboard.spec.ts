@@ -2,7 +2,16 @@
 // a stubbed /ws so no real socket is needed), sign in through the TokenGate and
 // assert the fleet dashboard renders the projects and hosts. Deterministic and
 // offline — no running gateway required.
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+// Cleanly mock the /ws WebSocket so the cockpit sees an OPEN connection rather than
+// a rejected upgrade (which fires onclose → "offline" state churn and makes the
+// dashboard re-render under Playwright, the root of the intake-test flakiness). An
+// empty routeWebSocket handler accepts the socket client-side and stays silent — no
+// real gateway needed. (Playwright 1.48+.)
+async function mockWebSocket(page: Page) {
+  await page.routeWebSocket(/\/ws(\?|$)/, () => {});
+}
 
 const STATUS = {
   projects: 1,
@@ -62,7 +71,7 @@ function json(body: unknown) {
 
 test("renders the fleet dashboard with mocked gateway", async ({ page }) => {
   // Stub /ws so the browser never opens a real socket (route the upgrade GET).
-  await page.route("**/ws*", (route) => route.fulfill({ status: 200, body: "" }));
+  await mockWebSocket(page);
   await page.route("**/status", (route) => route.fulfill(json(STATUS)));
   await page.route("**/hosts", (route) => route.fulfill(json(HOSTS)));
   // Register the bare-/projects route first, then the more specific tasks route:
@@ -112,7 +121,7 @@ const EVENTS = [
 ];
 
 test("renders the event stream tab with backfilled history (3B-2)", async ({ page }) => {
-  await page.route("**/ws*", (route) => route.fulfill({ status: 200, body: "" }));
+  await mockWebSocket(page);
   await page.route("**/status", (route) => route.fulfill(json(STATUS)));
   await page.route("**/hosts", (route) => route.fulfill(json(HOSTS)));
   // /events must be registered AFTER the bare /projects glob would not match it;
@@ -140,7 +149,7 @@ test("renders the event stream tab with backfilled history (3B-2)", async ({ pag
 test("intervention controls: resume (200) and abort (409 notice) over mocked control API (3B-3)", async ({
   page,
 }) => {
-  await page.route("**/ws*", (route) => route.fulfill({ status: 200, body: "" }));
+  await mockWebSocket(page);
   await page.route("**/status", (route) => route.fulfill(json(STATUS)));
   await page.route("**/hosts", (route) => route.fulfill(json(HOSTS)));
   await page.route("**/projects", (route) => route.fulfill(json(PROJECTS)));
@@ -189,16 +198,13 @@ test("intervention controls: resume (200) and abort (409 notice) over mocked con
 const DISTILL_RESULT = {
   scenarios: [
     {
-      ID: "A-1",
-      Title: "First distilled task",
-      Lane: "backend",
-      Tier: "T1",
-      Deps: [],
-      Acceptance: ["does the first thing"],
-      HoldoutRef: "store://holdouts/A-1/holdout_test.go",
-      PublicTestRef: "",
-      PublicTestsOutline: null,
-      Notes: "",
+      id: "A-1",
+      title: "First distilled task",
+      lane: "backend",
+      tier: "T1",
+      deps: [],
+      acceptance: ["does the first thing"],
+      hidden_holdout_ref: "store://holdouts/A-1/holdout_test.go",
     },
   ],
   yaml: "id: A-1\ntitle: First distilled task\n",
@@ -207,7 +213,7 @@ const DISTILL_RESULT = {
 test("intake tab: converse → distill → review proposed scenario + holdout (3B-4b)", async ({
   page,
 }) => {
-  await page.route("**/ws*", (route) => route.fulfill({ status: 200, body: "" }));
+  await mockWebSocket(page);
   await page.route("**/status", (route) => route.fulfill(json(STATUS)));
   await page.route("**/hosts", (route) => route.fulfill(json(HOSTS)));
   await page.route("**/projects", (route) => route.fulfill(json(PROJECTS)));
@@ -222,13 +228,19 @@ test("intake tab: converse → distill → review proposed scenario + holdout (3
   await expect(page.getByRole("region", { name: /fleet status/i })).toBeVisible();
 
   // Switch to Intake, describe the work, distill, and review the proposal — including
-  // the highlighted repo-external hidden holdout ref. dispatchEvent on the Distill
-  // button for the same reason as the control buttons above: the background poll/
-  // WS-reconnect re-render churn trips Playwright's "stable" actionability gate.
+  // the highlighted repo-external hidden holdout ref. dispatchEvent fires React's
+  // onClick directly (a real .click() can be dropped when the 5s fleet-poll re-render
+  // moves the button mid-click); with the WebSocket cleanly mocked (mockWebSocket — no
+  // offline/closed churn) the button stays mounted, so dispatchEvent triggers reliably.
   await page.getByRole("tab", { name: /intake/i }).click();
   await page.getByLabel("Conversation").fill("build the auth flow");
-  await page.getByRole("button", { name: /^distill$/i }).dispatchEvent("click");
-  await expect(page.getByTestId("scenario-card")).toBeVisible();
+  // Retry the click → outcome until it lands: on rare 5s-poll re-render frames a
+  // single dispatched click can be dropped, so toPass re-fires it until the proposal
+  // renders (deterministic outcome, no fixed sleep). The distill route is mocked.
+  await expect(async () => {
+    await page.getByRole("button", { name: /^distill$/i }).dispatchEvent("click");
+    await expect(page.getByTestId("scenario-card")).toBeVisible({ timeout: 2000 });
+  }).toPass({ timeout: 15000 });
   await expect(page.getByTestId("scenario-holdout")).toContainText(
     "store://holdouts/A-1/holdout_test.go",
   );
