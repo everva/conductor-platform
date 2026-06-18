@@ -44,27 +44,52 @@ const (
 	// It is detected ahead of plain Node so a Playwright web app gets the visual
 	// recipe rather than the generic Node one.
 	StackWeb Stack = "web"
+	// StackIOS is a mobile/iOS project driven by maestro UI-flows. Its recipe
+	// mirrors the web one (ADR-0023): a build/test leg (xcodebuild/swift test, run
+	// LIVE on a Mac host in Dalga B), a maestro UI-flow gate, and the SAME
+	// deterministic visual-diff gate (imagediff) the web recipe uses. The
+	// iOS-build capability hook (`requires: ios-build`) routes its live run to a
+	// Mac host (ADR-0008, routing itself is Dalga-B 2B-2). It is detected ahead of
+	// plain stacks so a maestro/Xcode project gets the mobile recipe.
+	StackIOS Stack = "ios"
 )
 
 // String returns the stack identifier (its underlying string), so a Stack prints
 // as "go"/"node"/… in logs and the generated draft.
 func (s Stack) String() string { return string(s) }
 
-// detectionRules is the ordered marker-file table that drives DetectStack. Order
-// is significant and defines primary-stack precedence for multi-stack repos:
-// earlier rules win. The order is deliberate, not alphabetical — see DetectStack.
-var detectionRules = []struct {
+// detectionRule is one entry in the ordered marker table. A rule matches when ANY
+// of its markers is present in the repo root. A marker is either an exact name
+// (file OR directory, see markerExists) or a glob pattern (e.g. "*.xcodeproj")
+// matched against the directory's entries — the glob support lets the iOS rule key
+// off Xcode bundles whose names vary per project.
+type detectionRule struct {
 	stack   Stack
 	markers []string
-}{
-	{StackGo, []string{"go.mod"}},
-	{StackRust, []string{"Cargo.toml"}},
-	{StackPython, []string{"pyproject.toml", "requirements.txt", "setup.py", "setup.cfg"}},
+	// globs are filepath.Match patterns matched against the repo root's entries
+	// (file OR directory). Used for variably-named markers like "*.xcodeproj".
+	globs []string
+}
+
+// detectionRules is the ordered marker table that drives DetectStack. Order is
+// significant and defines primary-stack precedence for multi-stack repos: earlier
+// rules win. The order is deliberate, not alphabetical — see DetectStack.
+var detectionRules = []detectionRule{
+	{stack: StackGo, markers: []string{"go.mod"}},
+	{stack: StackRust, markers: []string{"Cargo.toml"}},
+	{stack: StackPython, markers: []string{"pyproject.toml", "requirements.txt", "setup.py", "setup.cfg"}},
+	// iOS/mobile (maestro-driven) is probed BEFORE web/Node so a maestro+Xcode
+	// project gets the mobile recipe (maestro UI-flow + visual gate, ADR-0023)
+	// rather than a generic stack. Markers (any one matches): a `maestro/` flows
+	// directory, an Xcode project/workspace bundle (`*.xcodeproj`/`*.xcworkspace`),
+	// or an iOS-app `Project.swift` (Tuist). These are clean, documented mobile
+	// markers; a plain `Package.swift` library is NOT treated as iOS.
+	{stack: StackIOS, markers: []string{"maestro", "Project.swift"}, globs: []string{"*.xcodeproj", "*.xcworkspace"}},
 	// Web (Node + Playwright) is probed BEFORE plain Node so a Playwright web app
 	// gets the visual-diff recipe (ADR-0023). Its markers are the Playwright config
 	// files; a package.json without one stays plain Node.
-	{StackWeb, []string{"playwright.config.ts", "playwright.config.js", "playwright.config.mjs"}},
-	{StackNode, []string{"package.json"}},
+	{stack: StackWeb, markers: []string{"playwright.config.ts", "playwright.config.js", "playwright.config.mjs"}},
+	{stack: StackNode, markers: []string{"package.json"}},
 }
 
 // Detection is the deterministic result of inspecting a repo directory: the
@@ -94,7 +119,7 @@ type Detection struct {
 func DetectStack(dir string) Detection {
 	var all []Stack
 	for _, rule := range detectionRules {
-		if anyFileExists(dir, rule.markers) {
+		if anyFileExists(dir, rule.markers) || anyDirExists(dir, rule.markers) || anyGlobMatches(dir, rule.globs) {
 			all = append(all, rule.stack)
 		}
 	}
@@ -117,6 +142,41 @@ func anyFileExists(dir string, names []string) bool {
 	return false
 }
 
+// anyDirExists reports whether any of names exists as a DIRECTORY directly in dir.
+// It complements anyFileExists for markers that are directories (e.g. iOS's
+// `maestro/` flows dir), so a directory marker is not silently missed.
+func anyDirExists(dir string, names []string) bool {
+	for _, name := range names {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err == nil && info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+// anyGlobMatches reports whether any of the filepath.Match patterns matches an
+// entry (file OR directory) directly in dir. It backs variably-named markers like
+// `*.xcodeproj`/`*.xcworkspace` whose exact name is project-specific. A malformed
+// pattern is ignored (treated as no match), never panicking detection.
+func anyGlobMatches(dir string, patterns []string) bool {
+	if len(patterns) == 0 {
+		return false
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, pattern := range patterns {
+		for _, e := range entries {
+			if ok, merr := filepath.Match(pattern, e.Name()); merr == nil && ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Profile is the per-stack recipe template ADR-0009 selects: the deterministic
 // gate commands the verify step runs (ADR-0003) and the develop command the
 // CommandEngine drives (ADR-0002). Each command is an argv slice (program +
@@ -133,20 +193,35 @@ type Profile struct {
 	Vet []string
 	// Lint is the argv for the stack's linter (gate).
 	Lint []string
+	// Maestro is the OPTIONAL maestro UI-flow gate argv (2A-3): it runs a maestro
+	// test flow (`maestro test <flow>`) whose exit code is the gate verdict — a
+	// command gate like any other. Empty for stacks without a UI-flow recipe; set
+	// for StackIOS. The maestro binary is operator-provided; if absent the gate
+	// FAILS deterministically (missing-binary, fix-#1 pattern) — never a silent
+	// skip. On a Mac host this drives a simulator (LIVE in Dalga B); the gate
+	// DEFINITION here is offline-verifiable (round-trip + missing-binary FAIL).
+	Maestro []string
 	// Visual is the OPTIONAL deterministic visual-diff gate argv (ADR-0023): it
 	// renders/produces a screenshot and runs the imagediff tool against a
 	// repo-external reference (holdout-injected) at a threshold. Empty for stacks
-	// without a visual recipe (Go/Node/Python/Rust); set for StackWeb. It runs
-	// AFTER the standard gates so a build/test/lint failure surfaces first.
+	// without a visual recipe (Go/Node/Python/Rust); set for StackWeb and StackIOS.
+	// It runs AFTER the standard gates so a build/test/lint failure surfaces first.
 	Visual []string
+	// Capability is the OPTIONAL host capability this stack's live gate run
+	// REQUIRES (ADR-0008 lane `requires`). Empty for stacks runnable on any host;
+	// "ios-build" for StackIOS so Dalga-B capability routing (2B-2) sends its live
+	// xcodebuild/maestro-on-simulator run to a Mac host. It is the routing HOOK;
+	// the routing itself is Dalga B.
+	Capability string
 }
 
 // Gates returns the profile's gate commands in deterministic order
-// (build, test, vet, lint, visual), each as an argv slice, skipping any that are
-// empty. This is the shape verify consumes (one Gate per command). The visual gate
-// (ADR-0023) is last so a build/test/lint failure surfaces before it.
+// (build, test, vet, lint, maestro, visual), each as an argv slice, skipping any
+// that are empty. This is the shape verify consumes (one Gate per command). The
+// maestro UI-flow (2A-3) and visual-diff (ADR-0023) gates run LAST so a
+// build/test/lint failure surfaces before them.
 func (p Profile) Gates() [][]string {
-	candidates := [][]string{p.Build, p.Test, p.Vet, p.Lint, p.Visual}
+	candidates := [][]string{p.Build, p.Test, p.Vet, p.Lint, p.Maestro, p.Visual}
 	gates := make([][]string, 0, len(candidates))
 	for _, c := range candidates {
 		if len(c) > 0 {
@@ -170,6 +245,20 @@ const (
 	VisualActualPath       = ".conductor/visual/actual.png"
 	VisualReferencePath    = ".conductor/visual/reference.png"
 	DefaultVisualThreshold = "0.02"
+)
+
+// The iOS/mobile maestro recipe conventions (2A-3). They mirror the web visual
+// recipe so the iOS profile reuses the SAME deterministic visual gate (imagediff):
+//
+//   - MaestroFlowPath: the maestro UI-flow file the maestro gate runs. The render
+//     leg (`maestro test`) drives a simulator on a Mac host (LIVE in Dalga B) and
+//     can capture the screenshot the visual gate then diffs at VisualActualPath.
+//   - CapabilityIOSBuild: the host capability the iOS lane REQUIRES (ADR-0008
+//     `requires`), so Dalga-B routing (2B-2) sends the live build/maestro run to a
+//     Mac host. It is the routing hook; the routing itself is Dalga B.
+const (
+	MaestroFlowPath    = "maestro/flow.yaml"
+	CapabilityIOSBuild = "ios-build"
 )
 
 // profiles is the data-driven per-stack registry (ADR-0009 per-stack profile
@@ -204,6 +293,29 @@ var profiles = map[Stack]Profile{
 		Vet:    []string{"npm", "run", "typecheck"},
 		Lint:   []string{"npx", "eslint", "."},
 		Visual: []string{"imagediff", VisualActualPath, VisualReferencePath, "-threshold", DefaultVisualThreshold},
+	},
+	// StackIOS is the maestro-driven mobile/iOS recipe (2A-3). It mirrors StackWeb
+	// (ADR-0023) on a Mac host:
+	//   - Build/Test: `xcodebuild test` — compiles + runs the iOS test suite. This
+	//     REQUIRES Xcode/an iOS toolchain, so it runs LIVE only on a Mac host
+	//     (Dalga B); it is recorded here as the deterministic build/test leg.
+	//   - Maestro: `maestro test <flow>` — a UI-flow gate whose exit code is the
+	//     verdict (a command gate like any other). It drives a simulator on the Mac
+	//     host (LIVE, Dalga B) and can capture the screenshot.
+	//   - Visual: the SAME deterministic imagediff gate the web recipe uses — the
+	//     produced screenshot vs the holdout-injected reference at the threshold.
+	// The xcodebuild/maestro binaries are operator-provided; if absent the gate
+	// FAILS deterministically (missing-binary, fix-#1 pattern) — never a silent
+	// skip. The visual DECISION (imagediff) is offline-verifiable here; the live
+	// iOS-build + maestro-on-simulator run is deferred to Dalga B (Mac host),
+	// routed there via Capability = "ios-build" (ADR-0008; routing is 2B-2).
+	StackIOS: {
+		Stack:      StackIOS,
+		Build:      []string{"xcodebuild", "build-for-testing"},
+		Test:       []string{"xcodebuild", "test"},
+		Maestro:    []string{"maestro", "test", MaestroFlowPath},
+		Visual:     []string{"imagediff", VisualActualPath, VisualReferencePath, "-threshold", DefaultVisualThreshold},
+		Capability: CapabilityIOSBuild,
 	},
 	StackPython: {
 		Stack: StackPython,
@@ -250,6 +362,9 @@ var readinessProbes = map[Stack]func(dir string) bool{
 	// A web project is a Node project at heart: the same test-infrastructure
 	// probe applies (the visual gate is additive, not a substitute for tests).
 	StackWeb: hasNodeTests,
+	// An iOS project's deterministic gate is its maestro UI-flow and/or an Xcode
+	// test target; hasIOSTests looks for either (the visual gate is additive).
+	StackIOS: hasIOSTests,
 }
 
 // readinessHints names, per stack, the test signal we look for, so the
@@ -260,6 +375,7 @@ var readinessHints = map[Stack]string{
 	StackPython: "a tests/ directory or test_*.py / *_test.py file",
 	StackRust:   "#[test] functions or a tests/ directory",
 	StackWeb:    `a "test" script in package.json or a test/__tests__ directory`,
+	StackIOS:    "a maestro/ flows directory (*.yaml/*.yml) or an Xcode *Tests target/dir",
 }
 
 // AssessReadiness applies the readiness-gate for the given stack against dir
@@ -345,6 +461,28 @@ func hasRustTests(dir string) bool {
 	})
 }
 
+// hasIOSTests reports whether the iOS repo has a deterministic UI/test gate: a
+// `maestro/` flows directory containing at least one flow file (*.yaml/*.yml), or
+// an Xcode test target (a name containing "Tests" — a *Tests dir or *Tests.swift
+// file). Either is enough for the maestro/visual recipe; the visual gate is
+// additive and not a substitute for it.
+func hasIOSTests(dir string) bool {
+	flows := filepath.Join(dir, "maestro")
+	if info, err := os.Stat(flows); err == nil && info.IsDir() {
+		if walkAnyFile(flows, func(name string) bool {
+			return strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml")
+		}) {
+			return true
+		}
+	}
+	// An Xcode test target: a directory or Swift file whose name carries "Tests".
+	return walkAnyFile(dir, func(name string) bool {
+		return strings.HasSuffix(name, "Tests.swift") || strings.HasSuffix(name, "Tests.m")
+	}) || walkAnyDir(dir, func(name string) bool {
+		return strings.HasSuffix(name, "Tests")
+	})
+}
+
 // packageJSONHasTestScript reports whether path is a package.json declaring a
 // non-empty, non-placeholder "test" script. The classic `npm init` placeholder
 // (which exits 1) does NOT count as a real gate.
@@ -388,6 +526,33 @@ func walkAnyFile(dir string, match func(base string) bool) bool {
 			return nil
 		}
 		if match(d.Name()) {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
+}
+
+// walkAnyDir walks dir's tree and returns true at the first DIRECTORY whose base
+// name satisfies match. It skips VCS/dependency dirs like walkAnyFile so detection
+// is fast and not fooled by third-party directories. The repo root itself is not
+// matched (a walk starts at it but it is skipped via shouldSkipDir's root guard
+// only for pruning; the root's own name is still passed, so callers should use
+// suffix matches specific enough not to match the root).
+func walkAnyDir(dir string, match func(base string) bool) bool {
+	found := false
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || found {
+			return nil
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		if shouldSkipDir(d.Name(), path, dir) {
+			return filepath.SkipDir
+		}
+		if path != dir && match(d.Name()) {
 			found = true
 			return filepath.SkipAll
 		}
@@ -479,6 +644,12 @@ type recipeDoc struct {
 	BaseBranch string `yaml:"base_branch"`
 	// Readiness is the onboarding readiness verdict (ready / not-ready).
 	Readiness recipeReadiness `yaml:"readiness"`
+	// Requires is the OPTIONAL host capability this recipe's live gate run needs
+	// (ADR-0008 lane `requires`): e.g. "ios-build" for the iOS recipe, so Dalga-B
+	// capability routing (2B-2) sends its live build/maestro run to a Mac host. It
+	// is the routing HOOK recorded on the recipe; the routing itself is Dalga B.
+	// Omitted for stacks runnable on any host.
+	Requires string `yaml:"requires,omitempty"`
 	// Recipe holds the develop command and verify gate commands.
 	Recipe recipeCommands `yaml:"recipe"`
 }
@@ -507,9 +678,12 @@ type recipeGates struct {
 	Test  []string `yaml:"test,omitempty"`
 	Vet   []string `yaml:"vet,omitempty"`
 	Lint  []string `yaml:"lint,omitempty"`
+	// Maestro is the optional maestro UI-flow gate (2A-3): the argv that runs a
+	// maestro test flow whose exit code is the verdict. Omitted for non-iOS stacks.
+	Maestro []string `yaml:"maestro,omitempty"`
 	// Visual is the optional deterministic visual-diff gate (ADR-0023): the argv
 	// that runs the imagediff tool against the rendered screenshot and the
-	// holdout-injected reference. Omitted for non-web stacks.
+	// holdout-injected reference. Omitted for non-visual stacks (set for web + iOS).
 	Visual []string `yaml:"visual,omitempty"`
 }
 
@@ -532,17 +706,22 @@ func GenerateDraft(dir, baseBranch string) (Draft, error) {
 		Readiness:  recipeReadiness(readiness),
 	}
 	if hasProfile {
+		// Record the lane's host-capability requirement (ADR-0008 routing hook):
+		// e.g. iOS's "ios-build" so Dalga-B routing (2B-2) sends its live run to a
+		// Mac host. Empty for stacks runnable on any host (omitted from the YAML).
+		doc.Requires = profile.Capability
 		doc.Recipe = recipeCommands{
 			// The develop command is the performer entrypoint; the profile does not
 			// prescribe it (it is engine/host wiring), so onboarding records the
 			// platform default placeholder for a human to confirm (ADR-0009).
 			Develop: developPlaceholder(),
 			Verify: recipeGates{
-				Build:  profile.Build,
-				Test:   profile.Test,
-				Vet:    profile.Vet,
-				Lint:   profile.Lint,
-				Visual: profile.Visual,
+				Build:   profile.Build,
+				Test:    profile.Test,
+				Vet:     profile.Vet,
+				Lint:    profile.Lint,
+				Maestro: profile.Maestro,
+				Visual:  profile.Visual,
 			},
 		}
 	}
@@ -667,8 +846,13 @@ type Recipe struct {
 	// per-project performer entrypoint the CommandEngine runs (engine.RecipeConfig.DevelopCmd).
 	Develop []string
 	// Gates are the verify gate commands in deterministic order (build, test, vet,
-	// lint), empty slots skipped. Same shape LoadRecipeGates returns.
+	// lint, maestro, visual), empty slots skipped. Same shape LoadRecipeGates returns.
 	Gates []GateSpec
+	// Requires is the OPTIONAL host capability this recipe's live gate run needs
+	// (ADR-0008 lane `requires`): e.g. "ios-build" for iOS. Empty for stacks
+	// runnable on any host. It is the Dalga-B (2B-2) capability-routing hook read
+	// back from the recipe; routing itself is Dalga B.
+	Requires string
 }
 
 // LoadRecipe reads <repoDir>/.conductor/config.yaml and returns the full recipe:
@@ -706,6 +890,7 @@ func LoadRecipe(repoDir string) (Recipe, error) {
 		{"test", g.Test},
 		{"vet", g.Vet},
 		{"lint", g.Lint},
+		{"maestro", g.Maestro},
 		{"visual", g.Visual},
 	}
 	gates := make([]GateSpec, 0, len(slots))
@@ -717,7 +902,7 @@ func LoadRecipe(repoDir string) (Recipe, error) {
 	if len(gates) == 0 {
 		return Recipe{}, fmt.Errorf("scaffolder: recipe config %s declares no verify gates", path)
 	}
-	return Recipe{Develop: doc.Recipe.Develop, Gates: gates}, nil
+	return Recipe{Develop: doc.Recipe.Develop, Gates: gates, Requires: doc.Requires}, nil
 }
 
 // SupportedStacks returns the stacks the scaffolder can onboard, in a stable

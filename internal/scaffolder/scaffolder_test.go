@@ -31,6 +31,8 @@ func TestDetectStack(t *testing.T) {
 		// A Node repo carrying a playwright.config.* is the "web" stack; Node is
 		// still reported in All (it has a package.json) but Web wins precedence.
 		{"web", "web-repo", StackWeb, []Stack{StackWeb, StackNode}},
+		// iOS: a maestro/ flows dir + an *.xcodeproj bundle marks the mobile stack.
+		{"ios", "ios-repo", StackIOS, []Stack{StackIOS}},
 		{"unknown", "empty-unknown", StackUnknown, nil},
 		// Multi-stack: Go marker wins precedence over Node; both are reported.
 		{"multistack-go-primary", "multistack", StackGo, []Stack{StackGo, StackNode}},
@@ -275,7 +277,7 @@ func TestWriteDraftEmptyConfig(t *testing.T) {
 
 func TestSupportedStacks(t *testing.T) {
 	got := SupportedStacks()
-	want := []Stack{StackGo, StackNode, StackPython, StackRust, StackWeb}
+	want := []Stack{StackGo, StackIOS, StackNode, StackPython, StackRust, StackWeb}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("SupportedStacks() = %v, want %v", got, want)
 	}
@@ -543,6 +545,116 @@ func TestLoadRecipe_NoGates(t *testing.T) {
 	_, err := LoadRecipe(dir)
 	if err == nil || errors.Is(err, ErrNoRecipe) {
 		t.Fatalf("LoadRecipe(no gates): err = %v, want a hard 'no verify gates' error", err)
+	}
+}
+
+// TestIOSProfile proves the iOS/mobile maestro recipe profile (2A-3): a build/test
+// leg (xcodebuild, Dalga-B-LIVE on a Mac host), a maestro UI-flow gate, the SAME
+// deterministic visual-diff gate the web recipe uses (imagediff), and the
+// `ios-build` capability routing hook (ADR-0008). The maestro + visual gates run
+// LAST in deterministic order.
+func TestIOSProfile(t *testing.T) {
+	p, ok := ProfileFor(StackIOS)
+	if !ok {
+		t.Fatal("ProfileFor(ios) not found")
+	}
+	if want := []string{"xcodebuild", "test"}; !reflect.DeepEqual(p.Test, want) {
+		t.Errorf("iOS Test = %v, want %v (xcodebuild, Dalga-B-live)", p.Test, want)
+	}
+	wantMaestro := []string{"maestro", "test", MaestroFlowPath}
+	if !reflect.DeepEqual(p.Maestro, wantMaestro) {
+		t.Errorf("iOS Maestro gate = %v, want %v", p.Maestro, wantMaestro)
+	}
+	// The visual gate is BYTE-IDENTICAL to the web recipe's — the SAME imagediff
+	// decision (gate reuse, ADR-0023 / task 2A-3 requirement (b)).
+	web, _ := ProfileFor(StackWeb)
+	if !reflect.DeepEqual(p.Visual, web.Visual) {
+		t.Errorf("iOS Visual gate = %v, want SAME as web %v (imagediff reuse)", p.Visual, web.Visual)
+	}
+	if p.Capability != CapabilityIOSBuild {
+		t.Errorf("iOS Capability = %q, want %q (ios-build routing hook)", p.Capability, CapabilityIOSBuild)
+	}
+	// Ordered gates: build, test, maestro, visual (no vet/lint for iOS); maestro
+	// and visual are LAST so a build/test failure surfaces before them.
+	gates := p.Gates()
+	want := [][]string{
+		{"xcodebuild", "build-for-testing"},
+		{"xcodebuild", "test"},
+		wantMaestro,
+		web.Visual,
+	}
+	if !reflect.DeepEqual(gates, want) {
+		t.Fatalf("iOS Gates() = %v, want %v", gates, want)
+	}
+}
+
+// TestIOSReadiness proves the iOS readiness probe: a maestro/ flows dir (or an
+// Xcode test target) is READY; a bare repo is NOT-READY with the ADR-0009 remedy.
+func TestIOSReadiness(t *testing.T) {
+	if r := AssessReadiness(fixture(t, "ios-repo"), StackIOS); !r.Ready {
+		t.Errorf("ios-repo should be READY (has maestro/flow.yaml): %s", r.Reason)
+	}
+	// A repo with an Xcode bundle but NO maestro flow / test target is NOT-READY.
+	bare := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(bare, "App.xcodeproj"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	r := AssessReadiness(bare, StackIOS)
+	if r.Ready {
+		t.Error("an iOS repo with no maestro flow / test target must be NOT-READY")
+	}
+	if !strings.Contains(r.Reason, "ADR-0009") {
+		t.Errorf("not-ready reason must reference ADR-0009, got %q", r.Reason)
+	}
+}
+
+// TestLoadRecipe_IOSRoundTrip proves the iOS recipe round-trips (2A-3 proof (a)):
+// GenerateDraft on an iOS repo emits the build/test + maestro + visual gates AND
+// the `requires: ios-build` routing hook into .conductor/config.yaml, and
+// LoadRecipe reads the four ordered gates back (build, test, maestro, visual) plus
+// the capability — so the daemon runs the SAME gates the scaffolder drafted, and
+// Dalga-B routing (2B-2) can read where to run them.
+func TestLoadRecipe_IOSRoundTrip(t *testing.T) {
+	draft, err := GenerateDraft(fixture(t, "ios-repo"), "develop")
+	if err != nil {
+		t.Fatalf("GenerateDraft: %v", err)
+	}
+	if draft.Detection.Primary != StackIOS {
+		t.Fatalf("primary stack = %q, want ios", draft.Detection.Primary)
+	}
+	if !draft.Readiness.Ready {
+		t.Fatalf("ios repo with a maestro flow should be READY: %s", draft.Readiness.Reason)
+	}
+	// The capability routing hook must be serialized into the YAML.
+	if !strings.Contains(string(draft.Config), "requires: ios-build") {
+		t.Fatalf("rendered iOS config missing `requires: ios-build` routing hook:\n%s", draft.Config)
+	}
+
+	dir := t.TempDir()
+	confDir := filepath.Join(dir, ".conductor")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(confDir, "config.yaml"), draft.Config, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	rec, err := LoadRecipe(dir)
+	if err != nil {
+		t.Fatalf("LoadRecipe: %v", err)
+	}
+	web, _ := ProfileFor(StackWeb)
+	want := []GateSpec{
+		{Name: "build", Argv: []string{"xcodebuild", "build-for-testing"}},
+		{Name: "test", Argv: []string{"xcodebuild", "test"}},
+		{Name: "maestro", Argv: []string{"maestro", "test", MaestroFlowPath}},
+		{Name: "visual", Argv: web.Visual},
+	}
+	if !reflect.DeepEqual(rec.Gates, want) {
+		t.Fatalf("iOS gates = %+v, want %+v", rec.Gates, want)
+	}
+	if rec.Requires != CapabilityIOSBuild {
+		t.Fatalf("recipe Requires = %q, want %q (routing hook round-trips)", rec.Requires, CapabilityIOSBuild)
 	}
 }
 

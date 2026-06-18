@@ -80,4 +80,13 @@ PNG'leri doğrudan vererek (browser'sız) kanıtlanır — e2e böyle koşar.
 ## Durum
 ✅ Tamam (2A-2). Deterministik image-diff gate (`cmd/imagediff`) + web reçete profili +
 referans-holdout entegrasyonu; e2e: visual PASS→merge / FAIL→blocked (browser'sız). Playwright
-render canlı doğrulandı. iOS/maestro görsel reçetesi 2A-3 (aynı gate deseni, render=maestro).
+render canlı doğrulandı.
+
+✅ iOS/maestro görsel reçetesi (2A-3) TANIMLI: scaffolder `StackIOS` profili AYNI gate desenini
+kullanır — render=maestro (`maestro test <flow>` UI-flow gate) + AYNI deterministik visual gate
+(`imagediff`, web ile byte-byte aynı argv) + `xcodebuild build/test` (Mac-host, Dalga-B-canlı). Lane
+`requires: ios-build` capability hook'u `.conductor/config.yaml`'a serialize olur (ADR-0008;
+yönlendirme 2B-2). maestro/xcodebuild operatör-kurar; yoksa gate deterministik FAIL (sessiz-skip YOK).
+**Offline kanıt:** reçete round-trip (`LoadRecipe`→build/test/maestro/visual + Requires), visual-gate
+reuse (imagediff PASS/FAIL), eksik-binary→FAIL, eksik-actual→FAIL. **Dalga-B'ye ertelendi (Mac-host):**
+canlı `xcodebuild test` + maestro-on-simulator (gerçek ekran-görüntüsü üretip visual gate'e besler).

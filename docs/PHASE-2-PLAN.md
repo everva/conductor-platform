@@ -141,3 +141,22 @@ Deterministik kanıt = kalite kapısı (LLM asla karar mercii); sahte-yeşil ASL
   doğrulandı:** `npx playwright install chromium` başardı, `file://` HTML `#box` screenshot'landı, aynı-sayfa re-render vs
   referans→PASS exit 0 / farklı sayfa→FAIL exit 1 (gerçek render→diff→exit). engine.go + statestore frozen DOKUNULMADI
   (additive); tools/builder dokunulmadı. Gate (build+test+vet+golangci v2.12.0) + e2e + race YEŞİL; gofmt temiz; yeni Go dep yok; secret yok. ADR-0023 ✅.
+- **Dalga A — 2A-3 (mobil/iOS maestro reçetesi, ADR-0023)** ✅ done (reçete TANIMLI; canlı iOS-build Dalga-B'ye ertelendi).
+  Görsel-verify ile AYNI deterministik gate desenini iOS'a taşır. **Scaffolder `StackIOS`** (maestro/Xcode-driven mobil),
+  Go/Rust/Python'dan SONRA, web/Node'dan ÖNCE algılanır — markerlar (biri yeterli): `maestro/` flows dizini,
+  `*.xcodeproj`/`*.xcworkspace` bundle (glob), veya `Project.swift`. Detection dir/glob marker desteği additive
+  (`anyDirExists`+`anyGlobMatches`+rule.globs). **Profil gate'leri (sıralı):** build/test = `xcodebuild build-for-testing`/
+  `xcodebuild test` (Mac gerekir → **Dalga-B-canlı**) + **maestro UI-flow gate** `maestro test maestro/flow.yaml` (exit-code'lu
+  komut-gate; Mac simülatörde canlı, Dalga-B) + **AYNI deterministik visual gate** `imagediff .conductor/visual/{actual,reference}.png
+  -threshold 0.02` (web ile BYTE-BYTE aynı argv — gate reuse). maestro+visual EN SON. **Routing hook:** `Profile.Capability="ios-build"`
+  → `.conductor/config.yaml` top-level `requires: ios-build` serialize (ADR-0008; lane→Mac-host yönlendirmesi 2B-2). Additive
+  `recipeGates.maestro` + `recipeDoc.Requires`; `LoadRecipe` altı slotu sıralı okur (build,test,vet,lint,maestro,visual) +
+  `Recipe.Requires` döner. iOS readiness probe (`hasIOSTests`): maestro/ flow (*.yaml/*.yml) VEYA Xcode `*Tests` target → READY.
+  **Offline-deterministik kanıt (Xcode/maestro YOK):** (a) detection (ios-repo: maestro/ + .xcodeproj) + reçete round-trip
+  (`TestLoadRecipe_IOSRoundTrip`: GenerateDraft→LoadRecipe build/test/maestro/visual gate'leri + `requires:ios-build` round-trip);
+  readiness (maestro flow→READY, bare→NOT-READY+ADR-0009); (b) **visual-gate reuse** (`internal/verify/ios_recipe_test.go`: iOS
+  profilinin `Visual` argv'i web ile birebir; gerçek derlenmiş imagediff ile eşit ekran→PASS / farklı→FAIL); (c) **eksik binary→
+  deterministik FAIL** (PATH boş → maestro/xcodebuild gate'leri `runGate` üzerinden FAIL, sessiz-skip YOK; eksik actual.png→imagediff
+  exit 2→FAIL). **Dalga-B'ye AÇIKÇA ertelendi (Mac-host):** gerçek `xcodebuild test` derleme/koşma + maestro-on-simulator canlı
+  (gerçek ekran-görüntüsü üretip visual gate'e besleyen render). engine.go + statestore frozen DOKUNULMADI (additive);
+  tools/builder dokunulmadı. Gate (build+test+vet+golangci v2.12.0) + e2e YEŞİL; gofmt temiz; yeni Go dep yok; secret yok.
