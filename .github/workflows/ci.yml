@@ -103,8 +103,18 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
+      # On the self-hosted runner there is no auto-sudo like GitHub-hosted images,
+      # so install Playwright's system libraries (apt) AS ROOT via the runner's
+      # sudo password — kept in the RUNNER_SUDO_PASSWORD Actions secret, NEVER in
+      # the repo. `env "PATH=$PATH"` preserves the runner user's PATH so npx (from
+      # setup-node's tool cache) is found under sudo; running install-deps as root
+      # makes Playwright skip its own nested sudo.
+      - name: Install Playwright system deps (root via sudo)
+        run: echo "${{ secrets.RUNNER_SUDO_PASSWORD }}" | sudo -S -p '' env "PATH=$PATH" npx playwright install-deps chromium
+      # The browser binary installs into the runner user's cache (no root needed),
+      # so the e2e step — which runs as that user — finds it.
+      - name: Install Playwright browser (chromium)
+        run: npx playwright install chromium
 
       - name: E2E (Playwright)
         run: npm run e2e
