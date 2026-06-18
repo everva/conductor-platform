@@ -22,6 +22,8 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+
+	"github.com/everva/conductor-platform/internal/envsafe"
 )
 
 // realAdvisorEnabled reports whether the real `claude -p` advisor is enabled. Even
@@ -74,7 +76,13 @@ func realClaudeRunner(ctx context.Context, argv []string, dir string, stdin []by
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // argv is the operator-supplied advisor command.
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), env...)
+	// SECURITY (R-2 / review F7 parity): sanitize the inherited env before the
+	// advisor `claude -p` subprocess. The advisor runs in the DAEMON process, whose
+	// env carries GH_TOKEN/GITHUB_TOKEN/CONDUCTOR_* — secrets the gray-zone advisor
+	// never needs. envsafe.Sanitize strips those while preserving the subscription
+	// claude auth, mirroring engine.execRunner (which this runner documents itself as
+	// mirroring) and intake's distiller runner.
+	cmd.Env = append(envsafe.Sanitize(os.Environ()), env...)
 	cmd.Stdin = bytes.NewReader(stdin)
 
 	var buf bytes.Buffer
