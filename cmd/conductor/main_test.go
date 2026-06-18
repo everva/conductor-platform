@@ -657,15 +657,19 @@ func equalStrs(a, b []string) bool {
 	return true
 }
 
-// TestResolveGates_DefaultIsBuildTestVet proves the daemon's DEFAULT verify recipe
-// (no -recipe-dir) is the always-available Go toolchain trio: go build + go test +
-// go vet (FIX #1). golangci-lint is intentionally absent from the default so the
-// shipped daemon/container without it does not break.
-func TestResolveGates_DefaultIsBuildTestVet(t *testing.T) {
-	cfg := config{} // recipeDir empty -> default gates.
-	gates, err := resolveGates(cfg, newTestLogger())
+// TestResolveRecipe_DefaultIsFlagAndBuildTestVet proves the daemon's DEFAULT recipe
+// (no -recipe-dir) is the global -develop-cmd flag PLUS the always-available Go
+// toolchain trio: go build + go test + go vet (2A-1 backward compat). golangci-lint
+// is intentionally absent from the default so the shipped daemon/container without
+// it does not break.
+func TestResolveRecipe_DefaultIsFlagAndBuildTestVet(t *testing.T) {
+	cfg := config{developCmd: []string{"claude", "-p"}} // recipeDir empty -> flag + default gates.
+	develop, gates, err := resolveRecipe(cfg, newTestLogger())
 	if err != nil {
-		t.Fatalf("resolveGates(default): %v", err)
+		t.Fatalf("resolveRecipe(default): %v", err)
+	}
+	if want := []string{"claude", "-p"}; !equalStrs(develop, want) {
+		t.Fatalf("default develop = %v, want flag %v", develop, want)
 	}
 	got := make([]string, len(gates))
 	for i, g := range gates {
@@ -677,25 +681,28 @@ func TestResolveGates_DefaultIsBuildTestVet(t *testing.T) {
 	}
 }
 
-// TestResolveGates_NoConfigInDirFallsBack proves a -recipe-dir that has NO
-// .conductor/config.yaml falls back to the default gates (backward compatible),
-// not an error.
-func TestResolveGates_NoConfigInDirFallsBack(t *testing.T) {
-	cfg := config{recipeDir: t.TempDir()} // empty dir, no .conductor/config.yaml.
-	gates, err := resolveGates(cfg, newTestLogger())
+// TestResolveRecipe_NoConfigInDirFallsBack proves a -recipe-dir that has NO
+// .conductor/config.yaml falls back to the -develop-cmd flag + default gates
+// (backward compatible), not an error.
+func TestResolveRecipe_NoConfigInDirFallsBack(t *testing.T) {
+	cfg := config{recipeDir: t.TempDir(), developCmd: []string{"claude", "-p"}}
+	develop, gates, err := resolveRecipe(cfg, newTestLogger())
 	if err != nil {
-		t.Fatalf("resolveGates(no config): %v", err)
+		t.Fatalf("resolveRecipe(no config): %v", err)
+	}
+	if want := []string{"claude", "-p"}; !equalStrs(develop, want) {
+		t.Fatalf("develop = %v, want flag fallback %v", develop, want)
 	}
 	if len(gates) != 3 {
 		t.Fatalf("want 3 default gates when dir has no config, got %d: %+v", len(gates), gates)
 	}
 }
 
-// TestResolveGates_FromConductorConfig proves a scaffolder-emitted
-// .conductor/config.yaml UPGRADES the recipe: the daemon reads its verify gates
-// (incl. an opt-in golangci-lint lint gate) directly from the config, closing the
-// N-8 scaffolder→daemon recipe gap.
-func TestResolveGates_FromConductorConfig(t *testing.T) {
+// TestResolveRecipe_FromConductorConfig proves a scaffolder-emitted
+// .conductor/config.yaml supplies the PER-PROJECT recipe: BOTH the develop command
+// and the verify gates (incl. an opt-in golangci-lint lint gate) come from the
+// config, closing the per-project recipe gap (2A-1).
+func TestResolveRecipe_FromConductorConfig(t *testing.T) {
 	dir := t.TempDir()
 	confDir := filepath.Join(dir, ".conductor")
 	if err := os.MkdirAll(confDir, 0o755); err != nil {
@@ -705,7 +712,7 @@ func TestResolveGates_FromConductorConfig(t *testing.T) {
 stack: go
 base_branch: develop
 recipe:
-  develop: ["echo", "x"]
+  develop: ["my-performer", "--go"]
   verify:
     build: ["go", "build", "./..."]
     test: ["go", "test", "./..."]
@@ -716,10 +723,14 @@ recipe:
 		t.Fatalf("write config: %v", err)
 	}
 
-	cfg := config{recipeDir: dir}
-	gates, err := resolveGates(cfg, newTestLogger())
+	cfg := config{recipeDir: dir, developCmd: []string{"claude", "-p"}}
+	develop, gates, err := resolveRecipe(cfg, newTestLogger())
 	if err != nil {
-		t.Fatalf("resolveGates(config): %v", err)
+		t.Fatalf("resolveRecipe(config): %v", err)
+	}
+	// Per-project develop overrides the global flag.
+	if want := []string{"my-performer", "--go"}; !equalStrs(develop, want) {
+		t.Fatalf("develop = %v, want per-project %v", develop, want)
 	}
 	got := make([]string, len(gates))
 	for i, g := range gates {
@@ -728,5 +739,57 @@ recipe:
 	want := []string{"go build ./...", "go test ./...", "go vet ./...", "golangci-lint run"}
 	if !equalStrs(got, want) {
 		t.Fatalf("config gates = %v, want %v (lint must be honored)", got, want)
+	}
+}
+
+// TestResolveRecipe_PlaceholderDevelopFallsBackToFlag proves an un-reviewed draft
+// whose develop command is still the inert placeholder does NOT silently launch a
+// no-op performer: the daemon falls back to the global -develop-cmd flag, while
+// still honoring the recipe's gates.
+func TestResolveRecipe_PlaceholderDevelopFallsBackToFlag(t *testing.T) {
+	dir := t.TempDir()
+	confDir := filepath.Join(dir, ".conductor")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	yaml := `version: 1
+stack: go
+base_branch: develop
+recipe:
+  develop: ["echo", "configure-develop-command"]
+  verify:
+    test: ["go", "test", "./..."]
+`
+	if err := os.WriteFile(filepath.Join(confDir, "config.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg := config{recipeDir: dir, developCmd: []string{"claude", "-p"}}
+	develop, gates, err := resolveRecipe(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("resolveRecipe(placeholder): %v", err)
+	}
+	if want := []string{"claude", "-p"}; !equalStrs(develop, want) {
+		t.Fatalf("develop = %v, want flag fallback %v (placeholder must not run)", develop, want)
+	}
+	if len(gates) != 1 || strings.Join(gates[0].Argv, " ") != "go test ./..." {
+		t.Fatalf("gates = %+v, want the recipe's gates", gates)
+	}
+}
+
+// TestResolveRecipe_CorruptConfigFailsLoud proves a present-but-broken recipe is a
+// HARD error, never a silent fallback to weaker gates (Rule#9 anti-fake-green).
+func TestResolveRecipe_CorruptConfigFailsLoud(t *testing.T) {
+	dir := t.TempDir()
+	confDir := filepath.Join(dir, ".conductor")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(confDir, "config.yaml"), []byte("recipe: [bad: yaml\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg := config{recipeDir: dir, developCmd: []string{"claude", "-p"}}
+	if _, _, err := resolveRecipe(cfg, newTestLogger()); err == nil {
+		t.Fatal("resolveRecipe(corrupt): err = nil, want a hard parse error")
 	}
 }

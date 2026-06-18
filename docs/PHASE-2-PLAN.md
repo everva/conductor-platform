@@ -106,4 +106,19 @@ Deterministik kanıt = kalite kapısı (LLM asla karar mercii); sahte-yeşil ASL
   unit (helper doğrudan); tick-level push-failed → task done + event. engine.go + statestore frozen dokunulmadı;
   builder dokunulmadı; gate (build+test+vet+golangci v2.12.0) + e2e + race yeşil; gofmt temiz; token leak yok.
 - **🏁 FAZ-1.5 TAMAM (1.5-a/b/c) — hepsi bağımsız doğrulandı, push'lu.** ADR-0022 ✅.
-- **Dalga A — 2A-1 (reçete altyapısı + Node/Python)** 🔄 ŞİMDİ: .conductor/config.yaml reçetesini tam pipe (develop-cmd + gates + verify-tipi, per-project); scaffolder profillerini gerçek çalışan reçetelere bağla; Node + Python canlı (onboard→gate→merge).
+- **Dalga A — 2A-1 (reçete altyapısı + Node/Python)** ✅ done. Per-project reçete tam pipe: scaffolder additive
+  `LoadRecipe(dir) (Recipe{Develop, Gates}, error)` — `.conductor/config.yaml`'ı recipeDoc'tan develop argv + sıralı
+  gate argv (build/test/vet/lint, boşlar atlanır) okur; dosya yok → `ErrNoRecipe` sentinel (caller fallback); corrupt /
+  gate-siz → HARD error (sahte-yeşil yok). `LoadRecipeGates` artık `LoadRecipe`'a delege eder (false,nil contract korunur).
+  Daemon: `resolveRecipe(cfg)` HEM develop-cmd HEM gate'leri seçer — `-recipe-dir`+`.conductor/config.yaml` varsa
+  ikisi de dosyadan (per-project performer), yoksa `-develop-cmd` flag + default gate'ler (build+test+vet). Recipe'in
+  develop'ı boş VEYA inert placeholder (`echo configure-develop-command`) ise flag'e düşer (onaylanmamış draft no-op
+  performer başlatamaz). Aktif kaynak loglanır (file vs flag). **Backward-compat:** `.conductor` yoksa = bugünkü
+  davranış (engine `DevelopCmd` flag'den, default gate'ler). Engine.go + statestore frozen DOKUNULMADI (additive);
+  tools/builder dokunulmadı. **Canlı kanıt (throwaway /tmp repo, docker PG :55671):** Node (package.json `npm test`→
+  `node --test`) + Python (`pytest`, stdlib) için scaffolder draft'ı node/python profilini doğru üretti; onboard→
+  deterministik develop-wrapper (kodu düzeltir+verdict JSON yayar, gerçek claude yok)→ projenin KENDİ gate'i koştu→
+  yeşil→squash-merge: Node mergeSHA `c18e8f9` + `[task:node-pos]`, Python mergeSHA `3e5cdd3` + `[task:py-pos]`.
+  NEGATİF (hâlâ-bozuk fix, verdict yalan-`pass`): bağımsız gate `review=changes-requested`→retry→**blocked**, merge YOK,
+  develop'ta 1 commit + trailer yok (Node `node-neg`, Python `py-neg`). Gate+e2e+golangci v2.12.0+race YEŞİL; gofmt temiz;
+  yeni Go dep yok; secret yok.

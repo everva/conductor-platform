@@ -1,6 +1,7 @@
 package scaffolder
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -333,6 +334,150 @@ func TestLoadRecipeGates_NoConfig(t *testing.T) {
 	}
 	if found {
 		t.Fatal("found = true, want false for a repo with no .conductor/config.yaml")
+	}
+}
+
+// TestLoadRecipe_RoundTrip proves the full per-project recipe (2A-1) round-trips:
+// GenerateDraft → LoadRecipe yields BOTH the develop command and the ordered gates
+// for go/node/python, reusing the EXACT on-disk shape. The develop command of a
+// fresh draft is the inert onboarding placeholder (un-reviewed), which LoadRecipe
+// reports faithfully — the daemon decides whether to honor it.
+func TestLoadRecipe_RoundTrip(t *testing.T) {
+	cases := []struct {
+		name      string
+		repoDir   func(t *testing.T) string
+		wantGates []GateSpec
+	}{
+		{
+			name:    "go",
+			repoDir: goRepoDir,
+			wantGates: []GateSpec{
+				{Name: "build", Argv: []string{"go", "build", "./..."}},
+				{Name: "test", Argv: []string{"go", "test", "./..."}},
+				{Name: "vet", Argv: []string{"go", "vet", "./..."}},
+				{Name: "lint", Argv: []string{"golangci-lint", "run"}},
+			},
+		},
+		{
+			name:    "node",
+			repoDir: func(t *testing.T) string { return fixture(t, "node-repo") },
+			wantGates: []GateSpec{
+				{Name: "build", Argv: []string{"npm", "run", "build"}},
+				{Name: "test", Argv: []string{"npm", "test"}},
+				{Name: "vet", Argv: []string{"npm", "run", "typecheck"}},
+				{Name: "lint", Argv: []string{"npx", "eslint", "."}},
+			},
+		},
+		{
+			name:    "python",
+			repoDir: func(t *testing.T) string { return fixture(t, "python-repo") },
+			wantGates: []GateSpec{
+				{Name: "build", Argv: []string{"python", "-m", "build"}},
+				{Name: "test", Argv: []string{"pytest"}},
+				{Name: "vet", Argv: []string{"mypy", "."}},
+				{Name: "lint", Argv: []string{"ruff", "check", "."}},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			draft, err := GenerateDraft(tc.repoDir(t), "develop")
+			if err != nil {
+				t.Fatalf("GenerateDraft: %v", err)
+			}
+			dir := t.TempDir()
+			confDir := filepath.Join(dir, ".conductor")
+			if err := os.MkdirAll(confDir, 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(confDir, "config.yaml"), draft.Config, 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			rec, err := LoadRecipe(dir)
+			if err != nil {
+				t.Fatalf("LoadRecipe: %v", err)
+			}
+			// A fresh draft carries the inert placeholder develop command.
+			if !reflect.DeepEqual(rec.Develop, developPlaceholder()) {
+				t.Fatalf("develop = %v, want placeholder %v", rec.Develop, developPlaceholder())
+			}
+			if !reflect.DeepEqual(rec.Gates, tc.wantGates) {
+				t.Fatalf("gates = %+v, want %+v", rec.Gates, tc.wantGates)
+			}
+		})
+	}
+}
+
+// TestLoadRecipe_CustomDevelop proves LoadRecipe surfaces a human-confirmed develop
+// command (not the placeholder) verbatim — the per-project performer.
+func TestLoadRecipe_CustomDevelop(t *testing.T) {
+	dir := t.TempDir()
+	confDir := filepath.Join(dir, ".conductor")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	cfg := "version: 1\nstack: node\nbase_branch: develop\nrecipe:\n" +
+		"  develop: [my-performer, --task]\n  verify:\n    test: [node, --test]\n"
+	if err := os.WriteFile(filepath.Join(confDir, "config.yaml"), []byte(cfg), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	rec, err := LoadRecipe(dir)
+	if err != nil {
+		t.Fatalf("LoadRecipe: %v", err)
+	}
+	if want := []string{"my-performer", "--task"}; !reflect.DeepEqual(rec.Develop, want) {
+		t.Fatalf("develop = %v, want %v", rec.Develop, want)
+	}
+	if want := []GateSpec{{Name: "test", Argv: []string{"node", "--test"}}}; !reflect.DeepEqual(rec.Gates, want) {
+		t.Fatalf("gates = %+v, want %+v", rec.Gates, want)
+	}
+}
+
+// TestLoadRecipe_NoConfig proves a repo with no .conductor/config.yaml returns the
+// ErrNoRecipe sentinel so the daemon falls back to its flag/default recipe.
+func TestLoadRecipe_NoConfig(t *testing.T) {
+	_, err := LoadRecipe(t.TempDir())
+	if !errors.Is(err, ErrNoRecipe) {
+		t.Fatalf("LoadRecipe(no config): err = %v, want ErrNoRecipe", err)
+	}
+}
+
+// TestLoadRecipe_Corrupt proves an unparseable config is a HARD error (not a silent
+// fallback): a corrupt recipe must not degrade the merge gate.
+func TestLoadRecipe_Corrupt(t *testing.T) {
+	dir := t.TempDir()
+	confDir := filepath.Join(dir, ".conductor")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(confDir, "config.yaml"), []byte("recipe: [this is: not valid\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := LoadRecipe(dir)
+	if err == nil {
+		t.Fatal("LoadRecipe(corrupt): err = nil, want parse error")
+	}
+	if errors.Is(err, ErrNoRecipe) {
+		t.Fatalf("LoadRecipe(corrupt): got ErrNoRecipe, want a hard parse error: %v", err)
+	}
+}
+
+// TestLoadRecipe_NoGates proves a present config declaring no verify gates is a HARD
+// error — never a silent degrade.
+func TestLoadRecipe_NoGates(t *testing.T) {
+	dir := t.TempDir()
+	confDir := filepath.Join(dir, ".conductor")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	cfg := "version: 1\nstack: unknown\nbase_branch: develop\nrecipe:\n  develop: [echo, x]\n"
+	if err := os.WriteFile(filepath.Join(confDir, "config.yaml"), []byte(cfg), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := LoadRecipe(dir)
+	if err == nil || errors.Is(err, ErrNoRecipe) {
+		t.Fatalf("LoadRecipe(no gates): err = %v, want a hard 'no verify gates' error", err)
 	}
 }
 

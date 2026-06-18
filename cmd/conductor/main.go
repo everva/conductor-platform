@@ -291,7 +291,7 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 	holdoutCmd := fs.String("holdout-cmd", envOr("CONDUCTOR_HOLDOUT_CMD", defaultHoldoutCmd),
 		"argv that runs the injected holdout suite in the verify-worktree (quote-aware, no shell expansion); used only when -holdout-store is set")
 	recipeDir := fs.String("recipe-dir", envOr("CONDUCTOR_RECIPE_DIR", ""),
-		"repo dir whose .conductor/config.yaml (ADR-0009) supplies the verify gate recipe; empty = built-in default gates (go build + go test + go vet). A configured recipe may opt into golangci-lint, which must then be installed or the gate fails")
+		"repo dir whose .conductor/config.yaml (ADR-0009) supplies the PER-PROJECT recipe: BOTH the develop command and the verify gates (2A-1). Empty = built-in default gates (go build + go test + go vet) + the -develop-cmd flag. A recipe's develop command overrides -develop-cmd unless it is empty/the inert placeholder; a recipe may opt into golangci-lint, which must then be installed or the gate fails")
 	holdoutPrivateCache := fs.String("holdout-private-cache", envOr("CONDUCTOR_HOLDOUT_PRIVATE_CACHE", ""),
 		"cache dir the private: holdout backing (ADR-0018) clones private holdout repos under; empty = private: scheme unconfigured (a private: locator then errors clearly). Path is logged, the gh-token is not")
 	push := fs.Bool("push", envBoolOr("CONDUCTOR_PUSH", false),
@@ -484,8 +484,19 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		return nil, fmt.Errorf("provisioner: %w", err)
 	}
 
+	// Per-project recipe (2A-1): resolve BOTH the develop command and the verify
+	// gates from the project's .conductor/config.yaml when a -recipe-dir is
+	// configured and present; otherwise fall back to the global -develop-cmd flag +
+	// default gates (backward compatible). Resolved before the engine so the engine
+	// drives the project's OWN performer when the recipe declares one.
+	developCmd, gates, err := resolveRecipe(cfg, logger)
+	if err != nil {
+		closer()
+		return nil, fmt.Errorf("resolve recipe: %w", err)
+	}
+
 	eng := engine.NewCommandEngine(engine.RecipeConfig{
-		DevelopCmd: cfg.developCmd,
+		DevelopCmd: developCmd,
 		Timeout:    cfg.timeout,
 	})
 
@@ -555,15 +566,6 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 	// high-tier (T3/T4) and untiered tasks after a green gate; -governance=false
 	// leaves it nil so every green task auto-merges (pre-N-10 behavior).
 	policy := newPolicy(cfg, logger)
-
-	// Verify gate recipe (FIX #1): the deterministic merge gate. It defaults to the
-	// always-available Go toolchain trio (build + test + vet) and can be UPGRADED by
-	// a scaffolder-emitted .conductor/config.yaml (e.g. to add golangci-lint).
-	gates, err := resolveGates(cfg, logger)
-	if err != nil {
-		closer()
-		return nil, fmt.Errorf("resolve gates: %w", err)
-	}
 
 	cond, err := conductor.New(conductor.Deps{
 		Store:       store,
@@ -733,51 +735,82 @@ func defaultGates() []verify.Gate {
 	}
 }
 
-// resolveGates picks the verify gate recipe (FIX #1). When cfg.recipeDir is set
-// and that repo has a scaffolder-emitted .conductor/config.yaml, the gates come
-// from that config (reusing the scaffolder's exact shape, closing the N-8
-// scaffolder→daemon gap) — this is how an operator opts INTO golangci-lint. When
-// no recipe dir is configured, OR the configured dir has no .conductor/config.yaml,
-// it falls back to defaultGates (build+test+vet) so a config-less project keeps
-// working unchanged (backward compatible).
+// resolveRecipe picks the PER-PROJECT recipe (2A-1): both the develop command and
+// the verify gates. When cfg.recipeDir is set AND that repo has a scaffolder-emitted
+// .conductor/config.yaml, BOTH the develop command and the gates come from that
+// config (reusing the scaffolder's exact shape, closing the N-8 scaffolder→daemon
+// gap) — this is how a PROJECT declares its OWN performer/recipe and how an operator
+// opts INTO golangci-lint. When no recipe dir is configured, OR the configured dir
+// has no .conductor/config.yaml, it falls back to the global -develop-cmd flag
+// (cfg.developCmd) + defaultGates (build+test+vet) so a config-less project keeps
+// working EXACTLY as before (backward compatible).
+//
+// The recipe's develop command is honored ONLY when it is non-empty AND not the
+// inert onboarding placeholder (developPlaceholder, an un-reviewed draft): a
+// placeholder/empty develop falls back to the global -develop-cmd flag so an
+// un-confirmed recipe can never silently launch a no-op performer. The chosen
+// develop SOURCE is logged (file vs flag).
 //
 // A configured recipe that opts into golangci-lint does NOT make the daemon check
 // for the binary here: a missing golangci-lint is caught at gate-run time, where
 // the gate FAILS deterministically with the exec error (never silently skipped —
 // that would be a fake-green). Operators who configure golangci must install it.
-func resolveGates(cfg config, logger *slog.Logger) ([]verify.Gate, error) {
+func resolveRecipe(cfg config, logger *slog.Logger) (develop []string, gates []verify.Gate, err error) {
 	if cfg.recipeDir == "" {
-		logger.Info("verify recipe selected",
-			slog.String("source", "default"),
+		logger.Info("recipe selected",
+			slog.String("source", "flags/default (no -recipe-dir)"),
+			slog.String("develop", "from -develop-cmd flag"),
 			slog.String("gates", "go build, go test, go vet"))
-		return defaultGates(), nil
+		return cfg.developCmd, defaultGates(), nil
 	}
 
-	specs, found, err := scaffolder.LoadRecipeGates(cfg.recipeDir)
-	if err != nil {
+	rec, lerr := scaffolder.LoadRecipe(cfg.recipeDir)
+	if lerr != nil {
+		if errors.Is(lerr, scaffolder.ErrNoRecipe) {
+			logger.Info("recipe selected",
+				slog.String("source", "flags/default (no .conductor/config.yaml in recipe-dir)"),
+				slog.String("recipe_dir", cfg.recipeDir),
+				slog.String("develop", "from -develop-cmd flag"),
+				slog.String("gates", "go build, go test, go vet"))
+			return cfg.developCmd, defaultGates(), nil
+		}
 		// A present-but-broken recipe must fail loud, not degrade to weaker gates.
-		return nil, err
-	}
-	if !found {
-		logger.Info("verify recipe selected",
-			slog.String("source", "default (no .conductor/config.yaml in recipe-dir)"),
-			slog.String("recipe_dir", cfg.recipeDir),
-			slog.String("gates", "go build, go test, go vet"))
-		return defaultGates(), nil
+		return nil, nil, lerr
 	}
 
-	gates := make([]verify.Gate, 0, len(specs))
-	names := make([]string, 0, len(specs))
-	for _, s := range specs {
+	gates = make([]verify.Gate, 0, len(rec.Gates))
+	names := make([]string, 0, len(rec.Gates))
+	for _, s := range rec.Gates {
 		gates = append(gates, verify.Gate{Name: s.Name, Argv: s.Argv})
 		names = append(names, s.Name)
 	}
-	logger.Info("verify recipe selected",
+
+	// Per-project develop: honor the recipe's develop command only when it is a
+	// real, human-confirmed command — not empty and not the inert placeholder. An
+	// un-reviewed draft falls back to the global flag rather than running a no-op.
+	develop = cfg.developCmd
+	developSource := "from -develop-cmd flag (recipe develop empty/placeholder)"
+	if len(rec.Develop) > 0 && !isDevelopPlaceholder(rec.Develop) {
+		develop = rec.Develop
+		developSource = "from .conductor/config.yaml (per-project)"
+	}
+
+	logger.Info("recipe selected",
 		slog.String("source", ".conductor/config.yaml"),
 		slog.String("recipe_dir", cfg.recipeDir),
+		slog.String("develop", developSource),
 		slog.String("gates", strings.Join(names, ", ")),
 		slog.String("note", "a configured golangci-lint gate requires the binary installed; a missing binary fails the gate deterministically"))
-	return gates, nil
+	return develop, gates, nil
+}
+
+// isDevelopPlaceholder reports whether argv is the scaffolder's inert onboarding
+// develop placeholder (`echo configure-develop-command`). An un-reviewed draft
+// carries this no-op so the daemon never silently launches it as a performer; the
+// daemon falls back to the global -develop-cmd flag instead. It mirrors
+// scaffolder.developPlaceholder (which is unexported) by value, not by importing it.
+func isDevelopPlaceholder(argv []string) bool {
+	return len(argv) == 2 && argv[0] == "echo" && argv[1] == "configure-develop-command"
 }
 
 // newVerifier constructs the independent verify gate (B-2) with the holdout store

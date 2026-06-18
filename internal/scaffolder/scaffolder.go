@@ -17,6 +17,7 @@
 package scaffolder
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -573,18 +574,71 @@ type GateSpec struct {
 // A present-but-unparseable or gate-less config is an error: a corrupt recipe must
 // not silently degrade the merge gate (that would be a fake-green).
 func LoadRecipeGates(repoDir string) ([]GateSpec, bool, error) {
+	rec, err := LoadRecipe(repoDir)
+	if err != nil {
+		if errors.Is(err, ErrNoRecipe) {
+			// No `.conductor/config.yaml` — the caller falls back to its built-in
+			// default gates. Preserve the original (false, nil) contract.
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return rec.Gates, true, nil
+}
+
+// ErrNoRecipe is the sentinel LoadRecipe returns when a repo has NO
+// `.conductor/config.yaml`. It is the "no recipe declared" signal that lets a
+// caller (the daemon) fall back to its built-in develop command and default
+// gates — a config-less repo is unchanged (backward compatible). Detect it with
+// errors.Is; any OTHER error from LoadRecipe (unreadable / corrupt / gate-less)
+// is a hard failure that must NOT silently degrade the merge gate.
+var ErrNoRecipe = errors.New("scaffolder: no .conductor/config.yaml recipe")
+
+// Recipe is the full per-project recipe read back from a `.conductor/config.yaml`
+// (ADR-0009): the develop command the CommandEngine drives (ADR-0002) AND the
+// ordered verify gate commands the verify step runs (ADR-0003). It is the
+// read-side mirror of the recipeDoc GenerateDraft EMITS, so the daemon consumes
+// the SAME recipe the scaffolder drafts — closing the per-project recipe gap
+// (2A-1): a project declares BOTH its performer and its gates in one file.
+//
+// Develop may be empty when a draft was generated for a repo with no profile
+// (an unknown stack), or it may still be the inert onboarding placeholder
+// (developPlaceholder) if a human has not yet replaced it. Callers decide
+// whether an empty/placeholder develop is acceptable; LoadRecipe reports the
+// file faithfully and does not invent a command.
+type Recipe struct {
+	// Develop is the develop command argv (program + args), no shell. It is the
+	// per-project performer entrypoint the CommandEngine runs (engine.RecipeConfig.DevelopCmd).
+	Develop []string
+	// Gates are the verify gate commands in deterministic order (build, test, vet,
+	// lint), empty slots skipped. Same shape LoadRecipeGates returns.
+	Gates []GateSpec
+}
+
+// LoadRecipe reads <repoDir>/.conductor/config.yaml and returns the full recipe:
+// the develop command argv plus the ordered verify gates (build, test, vet,
+// lint; empty slots skipped). It is the per-project counterpart of GenerateDraft's
+// emitter and reuses the EXACT on-disk shape (recipeDoc) so the daemon honors
+// whatever the scaffolder drafted (develop command + gates, incl. an opt-in lint
+// gate).
+//
+// A MISSING file returns ErrNoRecipe (detect with errors.Is) so the caller falls
+// back to its built-in defaults — a config-less repo is unchanged. A present-but-
+// unreadable or unparseable config, or one declaring no verify gates, is a hard
+// error: a corrupt recipe must not silently degrade the merge gate (a fake-green).
+func LoadRecipe(repoDir string) (Recipe, error) {
 	path := filepath.Join(repoDir, ".conductor", "config.yaml")
 	data, err := os.ReadFile(path) //nolint:gosec // path is the operator-supplied repo dir's recipe config.
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, false, nil
+			return Recipe{}, ErrNoRecipe
 		}
-		return nil, false, fmt.Errorf("scaffolder: read recipe config %s: %w", path, err)
+		return Recipe{}, fmt.Errorf("scaffolder: read recipe config %s: %w", path, err)
 	}
 
 	var doc recipeDoc
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, false, fmt.Errorf("scaffolder: parse recipe config %s: %w", path, err)
+		return Recipe{}, fmt.Errorf("scaffolder: parse recipe config %s: %w", path, err)
 	}
 
 	g := doc.Recipe.Verify
@@ -604,9 +658,9 @@ func LoadRecipeGates(repoDir string) ([]GateSpec, bool, error) {
 		}
 	}
 	if len(gates) == 0 {
-		return nil, false, fmt.Errorf("scaffolder: recipe config %s declares no verify gates", path)
+		return Recipe{}, fmt.Errorf("scaffolder: recipe config %s declares no verify gates", path)
 	}
-	return gates, true, nil
+	return Recipe{Develop: doc.Recipe.Develop, Gates: gates}, nil
 }
 
 // SupportedStacks returns the stacks the scaffolder can onboard, in a stable
