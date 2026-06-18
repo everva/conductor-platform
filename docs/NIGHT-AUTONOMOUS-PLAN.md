@@ -83,7 +83,19 @@ Postgres-backed + operatör-CLI paylaşımlı store + events (PG LISTEN/NOTIFY) 
 - **P4-1: Dockerfile (multi-stage) + docker-compose** — ✅ done (603e131, push'lu). golang:1.26-alpine→alpine:3.21 (git+ca-certs+tini), static CGO-off, non-root uid 65532, ~41.7MB, secret yok. compose: postgres:16-alpine (healthcheck+volume) + conductor (migrate-on-start). **Bağımsız doğrulandı:** kendi docker build'im (aynı sha) + non-root + compose config valid + **kendi compose up'ım**: daemon started, backend=postgres (store+events), tick noop. Go-gate yeşil, .go değişmedi.
 - **P4-2: Daemon health/observability HTTP** — ✅ done (340a360, push'lu). cmd/conductor/httpserver.go: -http-addr/env (boş=kapalı), /healthz (her zaman 200, store'a dokunmaz=liveness flap yok), /readyz (ListProjects 2s, 200/503), /status JSON (project/backend/governance/uptime/tick/last_outcome, DSN YOK). loop-mode'da goroutine, ctx-cancel'de graceful drain. Dockerfile EXPOSE 8080 + compose healthcheck /healthz. **Bağımsız doğrulandı:** gate+e2e+http-testleri yeşil, **canlı daemon'a kendi curl'üm**: /healthz 200 ok, /readyz 200 ready, /status temiz JSON (DSN sızıntısı yok). frozen untouched.
 - **P4-3: Makefile + DEPLOY dokümanı** — ✅ done (0df9ae7, push'lu). Makefile (help/build/test/e2e/vet/lint/fmt/gate/run/check/docker-build/compose-up-down/db-up-down/itest/clean, ?= override) + docs/DEPLOY.md + .gitignore (/bin, /heartbeat.json). **Bağımsız doğrulandı:** kendi `make gate`'im GREEN, help 9 hedef, .gitignore güvenli, tree clean.
-- **P4-4: k8s manifestleri** (ŞİMDİ 🔄) — Deployment (/healthz liveness + /readyz readiness probe, non-root securityContext uid 65532) + Service + ConfigMap (gizli-olmayan env) + Secret (placeholder: DSN/gh-token, gerçek değer YOK) + Postgres (StatefulSet+PVC, dev) + stall-detector CronJob (`conductor -check`, ADR-0016) + kustomization. kubectl/kustomize ile dry-run doğrula. Kullanıcı k8s/ArgoCD ortamında → uygun.
+- **P4-4: k8s manifestleri** — ✅ done (f79d581, push'lu). deploy/k8s/: namespace+configmap+secret(placeholder)+deployment(liveness→/healthz, readiness→/readyz, non-root uid 65532, drop-ALL caps, seccomp RuntimeDefault)+service+postgres(StatefulSet+PVC)+cronjob-stallcheck(/readyz'e external HTTP check, ADR-0016 bağımsız gözlemci)+kustomization+README. **Bağımsız doğrulandı:** kendi `kustomize build | kubectl --dry-run=client`'im 9/9 resource valid, gerçek secret yok (sadece CHANGEME/REPLACE_ME), Go-gate yeşil.
+
+## 🏁 GECE BİTTİ — TAM, ÜRETİME-DEPLOY-EDİLEBİLİR MİLESTONE (durdum: kalan iş kullanıcı kararı gerektiriyor)
+**FINAL aggregate doğrulama:** 16 paket build, tüm testler PASS, vet/lint 0, gofmt clean, e2e PASS, realclaude gate-dışı, docker build OK, kustomize OK. Gece **20 task-commit** + docs. `develop` push'lu, tree clean.
+### Tamamlanan (hepsi bağımsız + gerçek-PG/gerçek-binary doğrulandı)
+N-1..N-11 (Faz-1b çekirdek) + P3-1..P3-5 (daemon üretim-entegrasyon) + ADR-0020 + P4-1..P4-4 (Docker/health-HTTP/Makefile+DEPLOY/k8s).
+### Artefakt envanteri
+Postgres-backed daemon (cmd/conductor) + operatör CLI (cmd/conductorctl, paylaşılan -dsn) + events(PG LISTEN/NOTIFY) + governance(tier-gate) + governor + heartbeat + pause/resume kontrol + CI(GitHub Actions) + README + DEPLOY.md + Makefile + Dockerfile + docker-compose + k8s manifestleri + 21 ADR.
+### KALAN (KULLANICI KARARI / RİSK → bilinçli ertelendi, gece-otonom yapılmadı)
+1. **Abort** (in-flight performer iptali) — process-group sinyali; ADR-0020 follow-up.
+2. **StateStore'a toplamsal UpdateProject** (frozen'ın kontrollü gevşetilmesi) → pause'u marker-task yerine Project-durumuna taşı (ADR-0020 önerisi). **Kullanıcı kararı:** frozen gevşetilsin mi?
+3. **Builder tick-bug kök-çözümü** — gece-otonom RİSKLİ (önceki oturumları dengesizleştirdi) → bilinçli ertelendi.
+4. (Opsiyonel) gerçek throwaway repo'da gerçek `claude -p` ile TAM tick (clone→develop→verify→merge) — N-6 parça-parça doğruladı; uçtan-uca canlı tek koşu gündüz yapılabilir.
 
 ## FOLLOW-UP (kullanıcı kararı / risk → sabah)
 - Abort (in-flight iptal): kalıcı aborting sinyali + tick ctx-honor (ADR-0020 follow-up).
