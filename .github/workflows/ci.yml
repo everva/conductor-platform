@@ -17,7 +17,9 @@ permissions:
 jobs:
   gate:
     name: build / test / vet / lint
-    runs-on: ubuntu-latest
+    # Organization-level self-hosted Linux runner (org-runner-1, labels
+    # self-hosted/Linux/X64) instead of GitHub-hosted ubuntu-latest.
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,7 +58,8 @@ jobs:
   # gateway/Postgres/claude is needed — the job is hermetic.
   frontend:
     name: web cockpit (tsc / eslint / vitest / build / e2e)
-    runs-on: ubuntu-latest
+    # Same org-level self-hosted Linux runner as the Go gate.
+    runs-on: [self-hosted, Linux, X64]
     defaults:
       run:
         working-directory: web
