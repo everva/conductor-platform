@@ -176,6 +176,35 @@ func TestPrivateRepoStore_Fetch_RejectsUnsafeRemote(t *testing.T) {
 	}
 }
 
+// TestPrivateRepoStore_Fetch_AuthConfiguredCloneFail_ErrorsRedacted closes the
+// review-sweep S-4 gap: when the private holdout repo is cloned WITH a gh-token
+// (the auth path) but the clone FAILS (here a never-resolving .invalid host, so the
+// test is deterministic + offline), Fetch must (1) surface an ERROR — never a
+// fake-green EMPTY holdout that would let verify pass without the hidden check —
+// and (2) NOT leak the token into that error (redaction holds even on the auth
+// clone-failure path, not just the synthetic redact() unit test).
+func TestPrivateRepoStore_Fetch_AuthConfiguredCloneFail_ErrorsRedacted(t *testing.T) {
+	const secret = "ghp_faketoken_must_not_leak_0xDEAD"
+	s, err := NewPrivate(PrivateConfig{CacheDir: t.TempDir(), GHToken: secret})
+	if err != nil {
+		t.Fatalf("NewPrivate: %v", err)
+	}
+	if !s.HasToken() {
+		t.Fatal("HasToken = false, want true (auth path must be active for this test)")
+	}
+
+	h, err := s.Fetch(context.Background(), "private:https://nonexistent.invalid/holdouts.git#holdouts/A-1")
+	if err == nil {
+		t.Fatal("auth-configured clone failure returned nil error — a missing/unreachable private holdout MUST surface, never a fake-green empty holdout")
+	}
+	if len(h.Files) != 0 {
+		t.Fatalf("clone failure must yield NO holdout files, got %d", len(h.Files))
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("token leaked in clone-failure error: %v", err)
+	}
+}
+
 // TestValidatePrivateRemote unit-checks the S-4 allowlist directly: https/ssh
 // accepted; file://, absolute, and traversal rejected.
 func TestValidatePrivateRemote(t *testing.T) {
