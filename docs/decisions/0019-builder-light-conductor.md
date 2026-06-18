@@ -27,4 +27,10 @@ deterministik (UI/maestro derdi yok). Builder aynı zamanda Faz-1a'nın canlı p
 - Builder, ürünün scope'una dahil değil; `tools/builder/` ayrı tutulur.
 
 ## Durum
-✅ Kapandı.
+✅ Kapandı. **EMEKLİYE AYRILDI (2026-06-18, kullanıcı onayı):** bootstrap görevi tamamlandı — ürün daemon'ı
+(`cmd/conductor`) artık otonom tick'i (claude -p develop → bağımsız verify+holdout → squash-merge) gerçek
+binary'lerle kanıtlanmış şekilde yapıyor (İş A/A.1). Builder'ın ~1dk tick-ölüm bug'ı kök-nedeni statik analizle
+çıkmadı (watchdog 20dk / launchd 300s / reconcile 180s — hiçbiri ~1dk'da ateşlemiyor) ve canlı launchd
+enstrümantasyonu riskli; neredeyse-obsolete bir araca yatırım yerine line-19'daki planlı emeklilik tetiklendi.
+`tools/builder/` referans/tarihçe olarak korunuyor (bkz. `tools/builder/DEPRECATED.md`); dogfood artık ürün
+daemon'ıyla yapılıyor (bkz. `docs/DOGFOOD.md`).

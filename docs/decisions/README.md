@@ -39,7 +39,7 @@ Not: builder tick-bug (~1dk tick-ölümü) nedeniyle A-3..C-2 Agent'larla kodlan
 | [0016](0016-liveness-recovery-somut.md) | Liveness/recovery (somut) | mkdir-lock, stale-steal, progress-aware watchdog (mtime), orphan-sweep, BAĞIMSIZ auto-reconcile job; Katman-2 → 1b | ✅ Kapandı |
 | [0017](0017-workspace-modeli.md) | Workspace modeli | Per-project clone + per-task worktree + cleanup; gh-token (deploy-key yasak); verify-worktree | ✅ Kapandı |
 | [0018](0018-holdout-izolasyon.md) | Holdout izolasyon | Public test repo'da, gizli holdout repo-DIŞI store; verify-worktree'ye geçici enjekte; negatif-test ile kanıt | ✅ Kapandı |
-| [0019](0019-builder-light-conductor.md) | İnşa aracı (builder) | xirigo'dan port light-conductor (`tools/builder/`); Go-gate; Faz-1a'yı otonom kodlar; ADR-0015/0016 canlı test; olgunlaşınca dogfood | ✅ Kapandı |
+| [0019](0019-builder-light-conductor.md) | İnşa aracı (builder) | xirigo'dan port light-conductor (`tools/builder/`); Go-gate; Faz-1a'yı otonom kodlar; ADR-0015/0016 canlı test; olgunlaşınca dogfood | ✅ Kapandı → **EMEKLİ** (ürün daemon'ı aştı; `tools/builder/DEPRECATED.md`, dogfood=`docs/DOGFOOD.md`) |
 | [0020](0020-control-pause-temsili.md) | Control/pause temsili | Pause+control vokabüleri (engine.Command); marker-task ilk temsil **→ ADR-0021 ile Project-durumuna taşındı (supersede)**; abort follow-up | ✅ Kapandı (pause temsili 0021'e taşındı) |
 | [0021](0021-statestore-additive-genisletme.md) | StateStore additive genişletme | "Frozen"=imza-bozan yasak ama **additive serbest** (kullanıcı onayı); UpdateProject eklendi; pause birinci-sınıf Project.Paused durumu (marker-task emekli); abort=Task.AbortRequested | ✅ Uygulandı (F-1 pause, F-2 abort) |
 
