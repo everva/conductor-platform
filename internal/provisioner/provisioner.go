@@ -359,9 +359,18 @@ func (p *Provisioner) cloneFromWorktree(wt string) (string, error) {
 // gitEnv returns the environment for git invocations. It is deterministic and
 // never injects ssh/deploy-key configuration (ADR-0017); HTTPS + the gh-token
 // credential helper is the only auth path.
+//
+// It also supplies an explicit committer identity (matching conductor.GitMerger's
+// gitEnv): the approve-re-verify base-merge runs `git merge --no-ff <base>`, which
+// CREATES a merge commit and therefore needs a committer. Relying on git's
+// auto-detection from the OS user/hostname is non-portable — it works on a dev
+// machine but FAILS with "Committer identity unknown" on a clean CI runner (GitHub-
+// hosted and many self-hosted), so we pin a deterministic identity here.
 func (p *Provisioner) gitEnv() []string {
 	return append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0", // never block on an interactive auth prompt.
+		"GIT_AUTHOR_NAME=conductor", "GIT_AUTHOR_EMAIL=conductor@local",
+		"GIT_COMMITTER_NAME=conductor", "GIT_COMMITTER_EMAIL=conductor@local",
 	)
 }
 
