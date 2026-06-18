@@ -80,8 +80,8 @@ Yeni yetenekler (N-4 PG, N-9 events, N-10 governance) kuruldu AMA daemon (cmd/co
 Postgres-backed + operatör-CLI paylaşımlı store + events (PG LISTEN/NOTIFY) + governance (tier-gate) + governor + heartbeat + pause/resume kontrol. Her biri bağımsız + gerçek-PG/gerçek-binary doğrulandı. 21 paket, gate yeşil. ADR-0020 eklendi.
 
 ## P4 — ÜRETİM SERTLEŞTİRME (autonomous-safe, kullanıcı kararı GEREKMEYEN işler)
-- **P4-1: Dockerfile (multi-stage) + docker-compose** (daemon + postgres) — "production çıkacak" için konteynerleştirme/deploy. (ŞİMDİ 🔄)
-- **P4-2: Daemon health/observability HTTP** (/healthz liveness + /readyz + heartbeat/tick durumu) — prod ops şart.
+- **P4-1: Dockerfile (multi-stage) + docker-compose** — ✅ done (603e131, push'lu). golang:1.26-alpine→alpine:3.21 (git+ca-certs+tini), static CGO-off, non-root uid 65532, ~41.7MB, secret yok. compose: postgres:16-alpine (healthcheck+volume) + conductor (migrate-on-start). **Bağımsız doğrulandı:** kendi docker build'im (aynı sha) + non-root + compose config valid + **kendi compose up'ım**: daemon started, backend=postgres (store+events), tick noop. Go-gate yeşil, .go değişmedi.
+- **P4-2: Daemon health/observability HTTP** (ŞİMDİ 🔄) — opsiyonel HTTP server (-http-addr, boş=kapalı): /healthz (liveness) + /readyz (store ping) + /status (son tick/heartbeat JSON). k8s probe'ları için. compose healthcheck'i /healthz'e bağla.
 - **P4-3: Makefile** (gate/build/run/migrate hedefleri) + dağıtım dokümanı.
 
 ## FOLLOW-UP (kullanıcı kararı / risk → sabah)
