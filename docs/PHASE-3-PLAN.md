@@ -143,6 +143,13 @@ Gateway (3A) olduğu gibi reuse; web bileşenleri (3B) fork panellerine (webview
   approve-ambiguous)→non-fatal warn, 401→onUnauthorized. ADR-0025 store-yansıma: UI refresh ile authoritative
   store'u gösterir, daemon-etkisini taklit etmez. Doğrulama (Rule#9): yalnız web/ + Go-unaffected + gate (tsc-0/
   lint-0/vitest-65/build) + Playwright 4-pass; confirm/optimistik-revert/error-mapping unit-test'li → ALL PASS.
-- Sıradaki: **3B-4** — intake-chat (kullanıcının çekirdek vizyonu): yazışma→distiller(claude -p, sunucu-tarafı)→
-  önerilen senaryo+holdout→insan review+onay→ledger. **Gateway'e yeni distill endpoint gerek** (Go, additive,
-  internal/intake.CommandDistiller reuse) + web chat UI. İki parçaya bölünebilir (3B-4a gateway distill, 3B-4b chat UI).
+- ✅ **3B-4a — Gateway distill endpoint** (2026-06-18, commit `07a1cf5`): `POST /projects/{id}/distill` (auth-gated)
+  — body `{conversation}` → `intake.Distiller` (üretim `NewCommandDistiller`=claude -p; test-inject runner) →
+  `{scenarios, yaml}`; yaml = `intake.LoadYAML`'in kabul ettiği çok-dokümanlı `---` stream (round-trip). Hata
+  haritası: empty→400, unknown-proj→404, ErrNoScenarios/ErrMalformed→422 (asla fabrike etmez), exec→502, nil→501.
+  Yalnız cmd/conductor-api; internal/intake REUSE (değişmedi). Bağımsız doğrulama (Rule#9): scope+gate (build/vet/
+  race/golangci-0/regresyon) + deterministik 8-case + double round-trip + **GERÇEK claude -p uçtan-uca**
+  (conversation→/distill 200→senaryo→yaml→/intake→**task A-1 persist**) kendi koştum → ALL PASS. (Not: distill = insan-
+  onaylı taslak yardımcısı, kalite kapısı DEĞİL; gateway'e additive control-bitişik yetenek.)
+- Sıradaki: **3B-4b** — intake-chat UI (kullanıcının çekirdek vizyonu): yazışma→`/distill`→önerilen senaryo+holdout
+  review/edit→onay→`/intake`→ledger; oluşan task'ları göster. Sonra DALGA 3B biter → DALGA 3C (uçtan-uca demo).
