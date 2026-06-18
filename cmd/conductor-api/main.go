@@ -39,6 +39,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/everva/conductor-platform/internal/events"
 	"github.com/everva/conductor-platform/internal/statestore"
 )
 
@@ -112,10 +113,22 @@ func run(ctx context.Context, argv []string, logger *slog.Logger, stderr io.Writ
 	// Release backend resources (the Postgres pgxpool) on exit. No-op for memory.
 	defer closeStore()
 
+	bus, closeBus, err := newBus(ctx, cfg, logger)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "conductor-api: %v\n", err)
+		return 1
+	}
+	// Release the event bus backend (its own pgxpool / subscriptions) on exit.
+	defer closeBus()
+
 	api := &apiServer{
 		store: store,
-		token: cfg.token,
-		clock: time.Now,
+		bus:   bus,
+		// Same concrete value backs history replay when it implements the additive
+		// EventReader seam (both real impls do); nil → GET /events returns 501.
+		reader: asReader(bus),
+		token:  cfg.token,
+		clock:  time.Now,
 	}
 
 	// Log ONLY the addr and the backend NAME — never the DSN or the token.
@@ -179,6 +192,32 @@ func newStore(ctx context.Context, cfg config, logger *slog.Logger) (statestore.
 	}
 	logger.Info("statestore backend selected", slog.String("backend", "postgres"))
 	return pg, pg.Close, nil
+}
+
+// newBus selects and constructs the event bus the gateway subscribes to (/ws)
+// and replays from (GET /events), mirroring the daemon's newEmitter and the
+// store's DSN-driven backend selection: an empty DSN selects the in-memory bus
+// (events observable in-process; dev/test); a non-empty DSN selects the Postgres
+// LISTEN/NOTIFY bus so the gateway sees events published by the daemon on other
+// processes/hosts in realtime. It returns the bus alongside a closer that
+// releases the backend resource (the PG bus's own pgxpool / the memory bus's
+// subscriptions); the closer is always non-nil so callers can defer it
+// unconditionally. The DSN (which carries the password) is NEVER logged — only
+// the backend name is emitted.
+func newBus(ctx context.Context, cfg config, logger *slog.Logger) (events.EventBus, func(), error) {
+	if cfg.dsn == "" {
+		bus := events.NewMemoryBus()
+		logger.Info("event bus backend selected", slog.String("backend", "memory"))
+		return bus, bus.Close, nil
+	}
+
+	bus, err := events.NewPostgresBus(ctx, cfg.dsn)
+	if err != nil {
+		// pgx does not echo the password in its error; we still never log cfg.dsn.
+		return nil, nil, fmt.Errorf("open postgres event bus: %w", err)
+	}
+	logger.Info("event bus backend selected", slog.String("backend", "postgres"))
+	return bus, bus.Close, nil
 }
 
 // storeBackendName maps the DSN to the human backend name surfaced at startup.

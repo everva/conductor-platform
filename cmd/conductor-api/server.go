@@ -19,6 +19,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/everva/conductor-platform/internal/events"
 	"github.com/everva/conductor-platform/internal/statestore"
 )
 
@@ -33,6 +34,15 @@ const readinessTimeout = 2 * time.Second
 type apiServer struct {
 	// store is the SHARED, FROZEN statestore — read-only here.
 	store statestore.StateStore
+	// bus is the event bus the daemon publishes lifecycle events on; /ws
+	// subscribes to it for realtime push. The same backend (memory/PG) the daemon
+	// uses, selected by DSN in main.
+	bus events.EventBus
+	// reader is the additive historical-replay seam backing GET /events. In
+	// practice the SAME concrete value as bus (both real impls satisfy both
+	// interfaces); it is nil only if a bus without EventReader is configured, in
+	// which case GET /events returns 501 rather than panicking.
+	reader events.EventReader
 	// token is the expected bearer token (constant-time compared, never echoed).
 	token string
 	// clock is the injectable time source for heartbeat-age and generated_at, so
@@ -64,6 +74,14 @@ func (s *apiServer) routes() http.Handler {
 	mux.Handle("GET /projects/{id}/tasks", s.requireAuth(http.HandlerFunc(s.handleProjectTasks)))
 	mux.Handle("GET /hosts", s.requireAuth(http.HandlerFunc(s.handleHosts)))
 	mux.Handle("GET /status", s.requireAuth(http.HandlerFunc(s.handleStatus)))
+
+	// Historical event replay: standard bearer auth (header only).
+	mux.Handle("GET /events", s.requireAuth(http.HandlerFunc(s.handleEvents)))
+
+	// Live event push (WebSocket). NOT wrapped by requireAuth: it does its own
+	// header-OR-?token= check (browsers cannot set an Authorization header on the
+	// WebSocket handshake) and must reject BEFORE the upgrade — see handleWS.
+	mux.HandleFunc("GET /ws", s.handleWS)
 
 	return mux
 }
