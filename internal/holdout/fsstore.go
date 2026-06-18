@@ -6,10 +6,12 @@
 // "store://holdouts/A-1/spec.yaml") to a directory UNDER an operator-configured
 // root that lives OUTSIDE any product repo, reads the holdout's injectable files
 // there, and returns them as a verify.Holdout for temporary injection. It is the
-// Faz-1a backing the daemon wires when -holdout-store is set; Faz-1b can swap a
-// Postgres or private-repo backing behind the same verify.HoldoutStore interface
-// without touching the verifier (the pg:// and private: schemes are reserved and
-// currently return a clear unsupported error).
+// store:// backing the daemon wires when -holdout-store is set; the pg:// and
+// private: backings (PGStore, PrivateRepoStore) implement the same
+// verify.HoldoutStore interface and are dispatched alongside this one by the
+// scheme-routing Router (Faz-1.5-a). FSStore.Fetch itself still rejects pg:// and
+// private: with a clear unsupported-scheme error so a direct caller fails loudly;
+// only the Router knows how to route those schemes to their own backing.
 //
 // SECURITY (ADR-0018):
 //   - The root is repo-EXTERNAL by construction (an operator-supplied directory),

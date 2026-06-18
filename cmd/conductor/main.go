@@ -51,6 +51,7 @@ import (
 	"github.com/everva/conductor-platform/internal/scaffolder"
 	"github.com/everva/conductor-platform/internal/statestore"
 	"github.com/everva/conductor-platform/internal/verify"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -149,6 +150,18 @@ type config struct {
 	// set; it defaults to `go test ./...` so a configured holdout runs the project's
 	// hidden test suite against the reviewed code.
 	holdoutCmd []string
+	// holdoutPrivateCache is the cache dir the private: holdout backing clones
+	// private holdout repos under (ADR-0017/0018, Faz-1.5-a). Empty (the DEFAULT)
+	// leaves the private: scheme UNconfigured — a private: locator then fails with a
+	// clear "scheme not configured" error rather than a silent skip. The path is
+	// operator config (logged for diagnosis), not a secret.
+	holdoutPrivateCache string
+	// holdoutGHToken is the gh-token the private: backing's credential helper uses
+	// for private HTTPS auth (ADR-0017; deploy-keys forbidden). It is read from env
+	// (CONDUCTOR_GH_TOKEN, falling back to GH_TOKEN) and is NEVER logged or
+	// committed; private: errors redact it. Empty disables the credential helper
+	// (e.g. a public/local holdout repo).
+	holdoutGHToken string
 	// recipeDir, when set, is the repo directory whose `.conductor/config.yaml`
 	// (emitted by the scaffolder, ADR-0009) the daemon reads the verify gate recipe
 	// from. Empty (the DEFAULT) uses the built-in default gates (go build + go test +
@@ -266,6 +279,8 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		"argv that runs the injected holdout suite in the verify-worktree (quote-aware, no shell expansion); used only when -holdout-store is set")
 	recipeDir := fs.String("recipe-dir", envOr("CONDUCTOR_RECIPE_DIR", ""),
 		"repo dir whose .conductor/config.yaml (ADR-0009) supplies the verify gate recipe; empty = built-in default gates (go build + go test + go vet). A configured recipe may opt into golangci-lint, which must then be installed or the gate fails")
+	holdoutPrivateCache := fs.String("holdout-private-cache", envOr("CONDUCTOR_HOLDOUT_PRIVATE_CACHE", ""),
+		"cache dir the private: holdout backing (ADR-0018) clones private holdout repos under; empty = private: scheme unconfigured (a private: locator then errors clearly). Path is logged, the gh-token is not")
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "conductor — Faz-1a tick daemon")
@@ -355,6 +370,11 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		holdoutStore:      *holdoutStore,
 		holdoutCmd:        hcmd,
 		recipeDir:         *recipeDir,
+		// private: holdout backing config. The cache dir is a flag (path, not a
+		// secret); the gh-token is env-ONLY so it never appears in the process argv
+		// (CONDUCTOR_GH_TOKEN, falling back to GH_TOKEN). It is never logged.
+		holdoutPrivateCache: *holdoutPrivateCache,
+		holdoutGHToken:      envOr("CONDUCTOR_GH_TOKEN", os.Getenv("GH_TOKEN")),
 	}, nil
 }
 
@@ -448,10 +468,17 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		Timeout:    cfg.timeout,
 	})
 
-	verf, err := newVerifier(cfg, logger)
+	verf, verfCloser, err := newVerifier(context.Background(), cfg, logger)
 	if err != nil {
 		closer()
 		return nil, fmt.Errorf("verifier: %w", err)
+	}
+	// Compose: release the holdout PG pool (if the pg:// backing opened one) AND the
+	// store on Close. verfCloser is always non-nil (a no-op when no pg pool).
+	storeOnlyCloser := closer
+	closer = func() {
+		verfCloser()
+		storeOnlyCloser()
 	}
 
 	merger := conductor.NewGitMerger(func(projectID string) string {
@@ -713,30 +740,94 @@ func resolveGates(cfg config, logger *slog.Logger) ([]verify.Gate, error) {
 }
 
 // newVerifier constructs the independent verify gate (B-2) with the holdout store
-// selected by cfg.holdoutStore (ADR-0018, A.1). When a -holdout-store root is
-// configured, it wires the filesystem-backed holdout.FSStore so each scenario's
-// repo-external HoldoutRef is fetched and injected into the verify-worktree, and
-// the holdout suite runs cfg.holdoutCmd. When no root is configured (the DEFAULT),
-// it keeps the inert noopHoldout + ["true"] so the daemon's behavior is unchanged
-// (backward compatible). It logs WHICH holdout mode is active — including the store
-// ROOT path, which is operator config, not a secret — but never holdout CONTENTS.
-func newVerifier(cfg config, logger *slog.Logger) (*verify.Verifier, error) {
-	if cfg.holdoutStore == "" {
-		logger.Info("holdout mode selected",
-			slog.String("mode", "noop"),
-			slog.String("detail", "no -holdout-store; merge gate rides on public recipe gates only (ADR-0018 holdout inert)"))
-		return verify.New(noopHoldout{}, verify.Config{HoldoutCmd: []string{"true"}}), nil
+// selected by config (ADR-0018, A.1, Faz-1.5-a). The holdout source is now a
+// SCHEME-ROUTING holdout.Router that dispatches each scenario's HoldoutRef by its
+// scheme to whichever backing the operator configured:
+//
+//	store://  -> filesystem FSStore       when -holdout-store <dir> is set
+//	pg://     -> Postgres PGStore         when -dsn is set (shares that DSN; the
+//	                                       holdouts table is created by the same
+//	                                       statestore migrations)
+//	private:  -> PrivateRepoStore         when -holdout-private-cache <dir> is set
+//	                                       (gh-token from CONDUCTOR_GH_TOKEN/GH_TOKEN)
+//
+// When NONE of these are configured (the DEFAULT) it keeps the inert noopHoldout
+// + ["true"] so the daemon's behavior is unchanged (backward compatible). A ref
+// whose scheme has no configured backing is a CLEAR runtime error at fetch time,
+// not a silent skip (Rule#9). It returns a closer that releases the holdout PG
+// pool (if the pg:// backing opened one); the closer is always non-nil.
+//
+// It logs WHICH schemes are active — including the fs root and private cache
+// paths, which are operator config, not secrets — but NEVER the DSN password or
+// the gh-token, and never holdout CONTENTS.
+func newVerifier(ctx context.Context, cfg config, logger *slog.Logger) (*verify.Verifier, func(), error) {
+	noClose := func() {}
+
+	var opts []holdout.RouterOption
+
+	// store:// filesystem backing.
+	if cfg.holdoutStore != "" {
+		fsStore, err := holdout.New(cfg.holdoutStore)
+		if err != nil {
+			return nil, noClose, err
+		}
+		opts = append(opts, holdout.WithFS(fsStore))
 	}
 
-	store, err := holdout.New(cfg.holdoutStore)
+	// pg:// Postgres backing. Auto-available when -dsn is set: it opens its OWN pgx
+	// pool against the same DSN (the frozen statestore exposes no pool accessor, so
+	// this mirrors the event bus), and the holdouts table is created by the
+	// statestore migrations the store already applied on startup.
+	closer := noClose
+	if cfg.dsn != "" {
+		pool, err := pgxpool.New(ctx, cfg.dsn)
+		if err != nil {
+			// pgx does not echo the password in its error; we still never log cfg.dsn.
+			return nil, noClose, fmt.Errorf("open holdout pg pool: %w", err)
+		}
+		pgStore, err := holdout.NewPG(pool)
+		if err != nil {
+			pool.Close()
+			return nil, noClose, err
+		}
+		opts = append(opts, holdout.WithPG(pgStore))
+		closer = pool.Close
+	}
+
+	// private: git-repo backing. Configured when a cache dir is supplied; the
+	// gh-token (env-only) is never logged.
+	if cfg.holdoutPrivateCache != "" {
+		privStore, err := holdout.NewPrivate(holdout.PrivateConfig{
+			CacheDir: cfg.holdoutPrivateCache,
+			GHToken:  cfg.holdoutGHToken,
+		})
+		if err != nil {
+			closer()
+			return nil, noClose, err
+		}
+		opts = append(opts, holdout.WithPrivate(privStore))
+	}
+
+	if len(opts) == 0 {
+		logger.Info("holdout mode selected",
+			slog.String("mode", "noop"),
+			slog.String("detail", "no holdout backing (-holdout-store / -dsn / -holdout-private-cache unset); merge gate rides on public recipe gates only (ADR-0018 holdout inert)"))
+		return verify.New(noopHoldout{}, verify.Config{HoldoutCmd: []string{"true"}}), noClose, nil
+	}
+
+	router, err := holdout.NewRouter(opts...)
 	if err != nil {
-		return nil, err
+		closer()
+		return nil, noClose, err
 	}
 	logger.Info("holdout mode selected",
-		slog.String("mode", "fs-store"),
-		slog.String("root", store.Root()),
+		slog.String("mode", "router"),
+		slog.String("schemes", strings.Join(router.ActiveSchemes(), ", ")),
+		slog.String("fs_root", cfg.holdoutStore),
+		slog.String("private_cache", cfg.holdoutPrivateCache),
+		slog.Bool("private_has_token", cfg.holdoutPrivateCache != "" && cfg.holdoutGHToken != ""),
 		slog.String("cmd", strings.Join(cfg.holdoutCmd, " ")))
-	return verify.New(store, verify.Config{HoldoutCmd: cfg.holdoutCmd}), nil
+	return verify.New(router, verify.Config{HoldoutCmd: cfg.holdoutCmd}), closer, nil
 }
 
 // noopHoldout is an inert HoldoutStore: the daemon's merge decision rides on the
