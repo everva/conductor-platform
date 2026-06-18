@@ -24,6 +24,9 @@ import { InterventionBanner } from "./InterventionBanner.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { NoticeStack } from "./NoticeStack.tsx";
 import { EventStreamView } from "../events/EventStreamView.tsx";
+import { IntakeChat } from "../intake/IntakeChat.tsx";
+import type { IntakeClient } from "../intake/IntakeChat.tsx";
+import { ApiClient } from "../api/client.ts";
 import "./fleet.css";
 
 export interface FleetDashboardProps {
@@ -34,21 +37,31 @@ export interface FleetDashboardProps {
   makeClient?: (token: string) => FleetClient;
   // makeControlClient is injectable for tests; defaults to the real ApiClient.
   makeControlClient?: (token: string) => ControlClient;
+  // makeIntakeClient is injectable for tests; defaults to the real ApiClient
+  // (distill + intake). The intake tab uses ONLY these two endpoints.
+  makeIntakeClient?: (token: string) => IntakeClient;
 }
 
 // DashboardTab toggles the cockpit between the fleet overview and the full event
 // stream (3B-2). The fleet view keeps the lightweight EventTicker; the stream view
 // is the full filterable/pausable feed.
-type DashboardTab = "fleet" | "events";
+type DashboardTab = "fleet" | "events" | "intake";
 
 export function FleetDashboard({
   token,
   onUnauthorized,
   makeClient,
   makeControlClient,
+  makeIntakeClient,
 }: FleetDashboardProps) {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [tab, setTab] = useState<DashboardTab>("fleet");
+
+  // The intake client defaults to the real ApiClient (distill + intake); tests
+  // inject a fake. Built lazily per-render is cheap and keeps the token in memory.
+  const intakeClient: IntakeClient = makeIntakeClient
+    ? makeIntakeClient(token)
+    : new ApiClient({ token });
 
   const fleet = useFleet({
     token,
@@ -115,6 +128,15 @@ export function FleetDashboard({
         >
           Events
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "intake"}
+          className={tab === "intake" ? "fleet-tab active" : "fleet-tab"}
+          onClick={() => setTab("intake")}
+        >
+          Intake
+        </button>
       </div>
 
       {tab === "fleet" ? (
@@ -149,12 +171,19 @@ export function FleetDashboard({
             </div>
           </div>
         </>
-      ) : (
+      ) : tab === "events" ? (
         <EventStreamView
           token={token}
           projects={fleet.projects.map((p) => p.id)}
           onUnauthorized={onUnauthorized}
           onInterventionAction={focusProject}
+        />
+      ) : (
+        <IntakeChat
+          projects={fleet.projects}
+          client={intakeClient}
+          onUnauthorized={onUnauthorized}
+          onViewTasks={focusProject}
         />
       )}
 

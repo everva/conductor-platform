@@ -3,7 +3,7 @@
 // fetch is mocked so the test is fully offline and deterministic. No real token
 // is used.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiClient, ApiError } from "./client.ts";
+import { ApiClient, ApiError, DistillNoScenariosError } from "./client.ts";
 
 const TEST_TOKEN = "test-token-123";
 
@@ -62,6 +62,62 @@ describe("ApiClient", () => {
     expect((init as RequestInit).body).toBe("id: s1\n");
     const headers = (init as RequestInit).headers as Record<string, string>;
     expect(headers["Content-Type"]).toContain("text/plain");
+  });
+
+  it("distill POSTs the conversation as JSON with bearer and parses {scenarios, yaml}", async () => {
+    const body = {
+      scenarios: [
+        {
+          ID: "A-1",
+          Title: "First",
+          Lane: "backend",
+          Tier: "T1",
+          Deps: [],
+          Acceptance: ["does a thing"],
+          HoldoutRef: "store://holdouts/A-1/holdout_test.go",
+          PublicTestRef: "",
+          PublicTestsOutline: null,
+          Notes: "",
+        },
+      ],
+      yaml: "id: A-1\n",
+    };
+    const fetchFn = mockFetch(() => jsonResponse(200, body));
+    const client = new ApiClient({ baseUrl: "https://gw.test", token: TEST_TOKEN });
+
+    const res = await client.distill("proj", "build the thing");
+
+    expect(res.yaml).toBe("id: A-1\n");
+    expect(res.scenarios[0].ID).toBe("A-1");
+    expect(res.scenarios[0].HoldoutRef).toBe("store://holdouts/A-1/holdout_test.go");
+    const [url, init] = fetchFn.mock.calls[0];
+    expect(String(url)).toBe("https://gw.test/projects/proj/distill");
+    expect((init as RequestInit).body).toBe(
+      JSON.stringify({ conversation: "build the thing" }),
+    );
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers.Authorization).toBe(`Bearer ${TEST_TOKEN}`);
+    expect(headers["Content-Type"]).toBe("application/json");
+  });
+
+  it("distill maps a 422 to the typed DistillNoScenariosError (never-fabricate)", async () => {
+    mockFetch(() =>
+      jsonResponse(422, { error: "no scenarios could be distilled from the conversation" }),
+    );
+    const client = new ApiClient({ baseUrl: "https://gw.test", token: TEST_TOKEN });
+
+    const err = await client.distill("proj", "hi").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DistillNoScenariosError);
+    expect((err as DistillNoScenariosError).message).toContain("no scenarios");
+  });
+
+  it("distill leaves a 401 as an ApiError for the caller to sign out", async () => {
+    mockFetch(() => jsonResponse(401, { error: "unauthorized" }));
+    const client = new ApiClient({ baseUrl: "https://gw.test", token: TEST_TOKEN });
+
+    const err = await client.distill("proj", "hi").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(401);
   });
 });
 

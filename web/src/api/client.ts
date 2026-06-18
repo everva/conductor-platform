@@ -8,6 +8,7 @@
 // messages. The WebSocket surface lives in useEventStream.ts (browsers cannot set
 // an Authorization header, so /ws takes ?token=).
 import type {
+  DistillResult,
   Event,
   EventQuery,
   Host,
@@ -26,6 +27,19 @@ export class ApiError extends Error {
     super(message);
     this.name = "ApiError";
     this.status = status;
+  }
+}
+
+// DistillNoScenariosError is the TYPED "nothing distillable" signal: the gateway
+// returned 422 because the distiller honestly produced no approvable scenario
+// (intake.ErrNoScenarios) or a block that failed validation
+// (intake.ErrMalformedScenarios). This is the never-fabricate contract surfaced to
+// the UI — it is guidance ("add more detail"), NOT a transport error. It carries the
+// gateway's secret-free reason and never the conversation or the token.
+export class DistillNoScenariosError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DistillNoScenariosError";
   }
 }
 
@@ -84,6 +98,29 @@ export class ApiClient {
       body.base_branch = baseBranch;
     }
     return this.request<Project>("POST", "/projects", body);
+  }
+
+  // distill POSTs a free-text conversation as JSON {"conversation":...} and returns
+  // the PROPOSED scenarios + an intake-ready YAML string (distillResultDTO). It
+  // persists NOTHING — this is the assisted-drafting step (ADR-0005/ADR-0012). The
+  // never-fabricate contract surfaces as a 422 when the model produced nothing
+  // usable (ErrNoScenarios) or a malformed block (ErrMalformedScenarios); this maps
+  // to a typed DistillNoScenariosError so the UI shows guidance, not a crash. The
+  // conversation is sent as the request body only — never logged or stored here.
+  distill(projectId: string, conversation: string): Promise<DistillResult> {
+    return this.request<DistillResult>(
+      "POST",
+      `/projects/${encodeURIComponent(projectId)}/distill`,
+      { conversation },
+    ).catch((err: unknown) => {
+      if (err instanceof ApiError && err.status === 422) {
+        // 422 is NOT a transport/auth failure: the distiller honestly produced
+        // nothing approvable. Re-throw as a distinct typed signal carrying the
+        // gateway's secret-free reason so the UI can render review guidance.
+        throw new DistillNoScenariosError(err.message);
+      }
+      throw err;
+    });
   }
 
   // intake POSTs RAW scenario YAML (text/plain), not JSON — mirrors handleIntake

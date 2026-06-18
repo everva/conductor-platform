@@ -64,6 +64,34 @@ export interface IntakeResult {
   skipped: string[];
 }
 
+// Scenario mirrors intake.Scenario (internal/intake/scenario.go) AS SERIALIZED BY
+// the distill endpoint's distillResultDTO. The Go struct carries only `yaml:` tags,
+// so encoding/json emits the Go FIELD NAMES verbatim (PascalCase) — these keys are
+// therefore PascalCase, NOT snake_case. This is the RICH proposed scenario the human
+// reviews before approving; HoldoutRef points at the repo-EXTERNAL hidden holdout
+// (ADR-0018) and MUST NOT be a repo-relative path.
+export interface Scenario {
+  ID: string;
+  Title: string;
+  Lane: string;
+  Tier: string;
+  Deps: string[] | null;
+  Acceptance: string[] | null;
+  HoldoutRef: string;
+  PublicTestRef: string;
+  PublicTestsOutline: string[] | null;
+  Notes: string;
+}
+
+// DistillResult mirrors distillResultDTO (POST /projects/{id}/distill): the
+// structured PROPOSED scenarios for the UI to render, and the intake-ready `yaml`
+// string that POST /projects/{id}/intake accepts VERBATIM. Nothing is persisted by
+// distill — the human reviews/edits the yaml, then approve re-POSTs it to /intake.
+export interface DistillResult {
+  scenarios: Scenario[];
+  yaml: string;
+}
+
 // Query params accepted by GET /events (and /ws), mirroring parseEventFilter in
 // events.go: project/task/phase/kind/intervention + since/limit for history.
 export interface EventQuery {

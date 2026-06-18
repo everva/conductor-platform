@@ -185,3 +185,61 @@ test("intervention controls: resume (200) and abort (409 notice) over mocked con
   await page.getByRole("button", { name: /^resume$/i }).dispatchEvent("click");
   await expect.poll(() => resumeCalls).toBe(1);
 });
+
+const DISTILL_RESULT = {
+  scenarios: [
+    {
+      ID: "A-1",
+      Title: "First distilled task",
+      Lane: "backend",
+      Tier: "T1",
+      Deps: [],
+      Acceptance: ["does the first thing"],
+      HoldoutRef: "store://holdouts/A-1/holdout_test.go",
+      PublicTestRef: "",
+      PublicTestsOutline: null,
+      Notes: "",
+    },
+  ],
+  yaml: "id: A-1\ntitle: First distilled task\n",
+};
+
+test("intake tab: converse → distill → review proposed scenario + holdout (3B-4b)", async ({
+  page,
+}) => {
+  await page.route("**/ws*", (route) => route.fulfill({ status: 200, body: "" }));
+  await page.route("**/status", (route) => route.fulfill(json(STATUS)));
+  await page.route("**/hosts", (route) => route.fulfill(json(HOSTS)));
+  await page.route("**/projects", (route) => route.fulfill(json(PROJECTS)));
+  await page.route("**/projects/*/tasks", (route) => route.fulfill(json(TASKS)));
+  await page.route("**/projects/*/distill", (route) =>
+    route.fulfill(json(DISTILL_RESULT)),
+  );
+
+  await page.goto("/");
+  await page.getByLabel(/api token/i).fill("test-token");
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page.getByRole("region", { name: /fleet status/i })).toBeVisible();
+
+  // Switch to Intake, describe the work, distill, and review the proposal — including
+  // the highlighted repo-external hidden holdout ref. dispatchEvent on the Distill
+  // button for the same reason as the control buttons above: the background poll/
+  // WS-reconnect re-render churn trips Playwright's "stable" actionability gate.
+  await page.getByRole("tab", { name: /intake/i }).click();
+  await page.getByLabel("Conversation").fill("build the auth flow");
+  await page.getByRole("button", { name: /^distill$/i }).dispatchEvent("click");
+  await expect(page.getByTestId("scenario-card")).toBeVisible();
+  await expect(page.getByTestId("scenario-holdout")).toContainText(
+    "store://holdouts/A-1/holdout_test.go",
+  );
+
+  // The intake YAML textarea is the authoritative input the human approves verbatim.
+  await expect(page.getByLabel("Intake YAML")).toHaveValue(/id: A-1/);
+
+  // NOTE: the confirm-modal → approve → /intake → created-ids leg is NOT asserted
+  // here: the background poll/WS-reconnect re-render churn makes the fixed-position
+  // confirm dialog flaky under Playwright's actionability gate (the same limitation
+  // documented for the abort/approve control modals above). That full leg —
+  // approve POSTs the EDITED yaml and renders the created ids — is covered
+  // deterministically by the vitest suite (IntakeChat.test.tsx).
+});
