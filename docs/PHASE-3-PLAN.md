@@ -136,5 +136,13 @@ Gateway (3A) olduğu gibi reuse; web bileşenleri (3B) fork panellerine (webview
   kind/intervention-only filtreleri backfill+subscription'ı birlikte sürer) + Fleet|Events tab. Bağımsız doğrulama
   (Rule#9): yalnız web/ değişti + Go-unaffected + gate (tsc-0/lint-0/vitest-38/build) + Playwright 3-pass; dedupe/
   cap/teardown(no-WS-leak)/pause/filter-consistency unit-test'li → ALL PASS.
-- Sıradaki: **3B-3** — müdahale: T3/T4 **approve**, pause/resume, abort UI'dan control API (POST) ile; optimistik
-  durum + onay; intervention-needed event'inden tek-tık aksiyon.
+- ✅ **3B-3 — Müdahale** (2026-06-18, commit `33f0598`): `web/src/fleet/` — `useFleetControls` (busy-tracking,
+  optimistik paused-flip+revert, confirm-slot, notice-queue, success→`refresh()`), ProjectsTable Pause/Resume/Abort
+  (confirm + lease-guard), TasksView Approve (held-task + proje-seviyesi auto-resolve, confirm), InterventionBanner
+  (pending intervention→tek-tık Approve/Pause/Abort), ConfirmDialog + NoticeStack (dep'siz). 409 (abort-nothing/
+  approve-ambiguous)→non-fatal warn, 401→onUnauthorized. ADR-0025 store-yansıma: UI refresh ile authoritative
+  store'u gösterir, daemon-etkisini taklit etmez. Doğrulama (Rule#9): yalnız web/ + Go-unaffected + gate (tsc-0/
+  lint-0/vitest-65/build) + Playwright 4-pass; confirm/optimistik-revert/error-mapping unit-test'li → ALL PASS.
+- Sıradaki: **3B-4** — intake-chat (kullanıcının çekirdek vizyonu): yazışma→distiller(claude -p, sunucu-tarafı)→
+  önerilen senaryo+holdout→insan review+onay→ledger. **Gateway'e yeni distill endpoint gerek** (Go, additive,
+  internal/intake.CommandDistiller reuse) + web chat UI. İki parçaya bölünebilir (3B-4a gateway distill, 3B-4b chat UI).
