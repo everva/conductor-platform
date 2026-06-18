@@ -101,7 +101,15 @@ Postgres-backed daemon (cmd/conductor) + operatör CLI (cmd/conductorctl, payla�
   - **🐞 BULGU (gerçek ürün açığı):** Daemon gizli holdout'u (ADR-0018) BAĞLAMIYOR — main.go:399 `noopHoldout`+`HoldoutCmd:["true"]` sabit, holdout vermek için flag yok. intake `hidden_holdout_ref`'i doğrulayıp saklıyor + verify holdout enjeksiyonunu tam destekliyor AMA daemon kullanmıyor. Çekirdek garanti çalışan binary'de pasif. → **İş A.1**.
 - **İş A.1 — Holdout'u daemon'a bağla** ✅ done (2a5a67a, push'lu). internal/holdout/fsstore.go (store://→repo-dışı `<root>/holdouts/<id>/inject/*`; pg/private "unsupported TODO"; ..-/symlink/traversal red). Daemon `-holdout-store`/`-holdout-cmd` (boş=noop backward-compat). conductor FIX: `task.ScenarioID` yerine gerçek `Scenario.HoldoutRef` Verify'a akıyor (resolveHoldoutRef). **Bağımsız doğrulandı:** engine untouched+additive, gate+race yeşil, CORE e2e (görünür-pass/holdout-fail→blocked) + 8 fsstore güvenlik testi PASS, **gerçek daemon binary+PG+repo-dışı holdout ile**: mode=fs-store, görünür test geçer ama gizli holdout fail→review=changes-requested→merge YOK. Çekirdek ADR-0018 garantisi artık daemon'da AKTİF.
 
-### İş B — Builder tick-bug (🔄 ŞİMDİ, A+A.1'den sonra). RİSKLİ: önce TANI (tick.sh/plist/reconcile oku, hipotez), sonra düzeltme; risk nedeniyle önce diagnoz raporlanır.
+### İş B (yeniden çerçevelendi: ürün-dogfood + builder emekliliği) — ✅ done
+- **TANI:** ~1dk-ölüm hiçbir bilinen zamanlayıcıya denk gelmiyor (watchdog 1200s / launchd 300s / reconcile 180s); canlı launchd-debug riskli. Builder bootstrap görevini bitirdi → ADR-0019 planlı emeklilik.
+- **B′-1 emeklilik** ✅ (3a991fb): tools/builder/DEPRECATED.md + ADR-0019 "EMEKLİ" + ADR-README; builder durmuş (launchd unload, canlı tick yok, teyit).
+- **B′-2 dogfood** ✅ (docs/DOGFOOD.md b8cf2c8, local/unpushed). **Bağımsız doğrulandı:** gerçek conductor daemon, conductor-platform KLONUNDA gerçek görevi (internal/util/clamp.go + test) claude -p ile otonom kodladı → bağımsız gate(build+test) + repo-dışı gizli holdout → squash-merge `[task:CLAMP-2]` (f6c94c4) → done. Gerçek remote'a push YOK; kaynak klon değişmedi.
+- **🐞 DOGFOOD'UN BULDUĞU ÜRÜN BUG'LARI (Rule#9, düzeltilmedi — kullanıcı kararı):**
+  1. **(ÖNEMLİ) Daemon verify-gate yalnız `go build`+`go test`** (main.go:484-487 HARDCODED); `go vet`+`golangci-lint` YOK → daemon'ın merge-gate'i CI/`make gate`'ten ZAYIF (vet/lint fail eden kod merge olabilir). Çekirdek "deterministik kalite kapısı" değer-önermesini zayıflatıyor.
+  2. **(GERÇEK) Verify-gate subprocess daemon env'ini miras alıyor** + platformun kendi `TestParseConfig/dsn_defaults_empty` testi env-izole değil (t.Setenv yok) → CONDUCTOR_DSN export'luyken gate platformun KENDİ testini false-block ediyor. Bağımsız tekrar üretildi (main_test.go:172 FAIL).
+  3. (minör) `-develop-cmd` whitespace-split, shell yok → çok-kelimeli prompt wrapper script gerektiriyor.
+  4. (rough edge) GitMerger başarısız re-merge sonrası base checkout'u kirli bırakıyor.
 - **İş B — Builder tick-bug kök-çözümü** (A'dan sonra). İzole/temiz ortam + enstrümantasyon + hipotez-daraltma (launchd throttle / reconcile-kill / SIGKILL / reparent) + 20dk+ stabil tick kanıtı. Risk yüksek.
 
 ## FOLLOW-UP (kullanıcı kararı / risk → sabah)
