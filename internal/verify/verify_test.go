@@ -223,3 +223,19 @@ func TestRunGate_StripsConductorEnv(t *testing.T) {
 		t.Fatalf("PATH did not reach the gate (over-sanitized env): %+v", c)
 	}
 }
+
+// TestRunGate_MissingBinaryFailsDeterministically proves a configured gate whose
+// binary is NOT installed (e.g. an opt-in golangci-lint on a host without it)
+// FAILS deterministically rather than being silently skipped (no fake-green,
+// Rule#9). The Evidence surfaces the exec error so the failure is diagnosable.
+func TestRunGate_MissingBinaryFailsDeterministically(t *testing.T) {
+	dir := t.TempDir()
+	g := Gate{Name: "golangci-lint", Argv: []string{"definitely-not-a-real-binary-xyz", "run"}}
+	c := runGate(context.Background(), dir, g)
+	if c.Result != checkFail {
+		t.Fatalf("missing-binary gate result = %q, want %q (must fail, never skip)", c.Result, checkFail)
+	}
+	if c.Evidence == "" || c.Evidence == "exit non-zero (no output)" {
+		t.Fatalf("missing-binary gate evidence = %q, want the exec error surfaced", c.Evidence)
+	}
+}

@@ -149,7 +149,16 @@ func runGate(ctx context.Context, dir string, g Gate) engine.Check {
 	cmd.Stderr = &buf
 	err := cmd.Run()
 	if err != nil {
-		return engine.Check{Name: g.Name, Result: checkFail, Evidence: firstLine(buf.Bytes())}
+		// A configured gate whose binary is MISSING (e.g. golangci-lint not installed)
+		// fails to even start: cmd.Run returns an exec error with NO captured output.
+		// Surface that error as the Evidence so the failure is a clear, deterministic
+		// "binary missing" signal rather than an opaque "no output" — the gate FAILS,
+		// it is never silently skipped (Rule#9, no fake-green).
+		evidence := firstLine(buf.Bytes())
+		if buf.Len() == 0 {
+			evidence = firstLine([]byte(err.Error()))
+		}
+		return engine.Check{Name: g.Name, Result: checkFail, Evidence: evidence}
 	}
 	return engine.Check{Name: g.Name, Result: checkPass, Evidence: "exit 0"}
 }

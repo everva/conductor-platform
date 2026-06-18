@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -606,4 +607,78 @@ func equalStrs(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestResolveGates_DefaultIsBuildTestVet proves the daemon's DEFAULT verify recipe
+// (no -recipe-dir) is the always-available Go toolchain trio: go build + go test +
+// go vet (FIX #1). golangci-lint is intentionally absent from the default so the
+// shipped daemon/container without it does not break.
+func TestResolveGates_DefaultIsBuildTestVet(t *testing.T) {
+	cfg := config{} // recipeDir empty -> default gates.
+	gates, err := resolveGates(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("resolveGates(default): %v", err)
+	}
+	got := make([]string, len(gates))
+	for i, g := range gates {
+		got[i] = strings.Join(g.Argv, " ")
+	}
+	want := []string{"go build ./...", "go test ./...", "go vet ./..."}
+	if !equalStrs(got, want) {
+		t.Fatalf("default gates = %v, want %v", got, want)
+	}
+}
+
+// TestResolveGates_NoConfigInDirFallsBack proves a -recipe-dir that has NO
+// .conductor/config.yaml falls back to the default gates (backward compatible),
+// not an error.
+func TestResolveGates_NoConfigInDirFallsBack(t *testing.T) {
+	cfg := config{recipeDir: t.TempDir()} // empty dir, no .conductor/config.yaml.
+	gates, err := resolveGates(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("resolveGates(no config): %v", err)
+	}
+	if len(gates) != 3 {
+		t.Fatalf("want 3 default gates when dir has no config, got %d: %+v", len(gates), gates)
+	}
+}
+
+// TestResolveGates_FromConductorConfig proves a scaffolder-emitted
+// .conductor/config.yaml UPGRADES the recipe: the daemon reads its verify gates
+// (incl. an opt-in golangci-lint lint gate) directly from the config, closing the
+// N-8 scaffolder→daemon recipe gap.
+func TestResolveGates_FromConductorConfig(t *testing.T) {
+	dir := t.TempDir()
+	confDir := filepath.Join(dir, ".conductor")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	yaml := `version: 1
+stack: go
+base_branch: develop
+recipe:
+  develop: ["echo", "x"]
+  verify:
+    build: ["go", "build", "./..."]
+    test: ["go", "test", "./..."]
+    vet: ["go", "vet", "./..."]
+    lint: ["golangci-lint", "run"]
+`
+	if err := os.WriteFile(filepath.Join(confDir, "config.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg := config{recipeDir: dir}
+	gates, err := resolveGates(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("resolveGates(config): %v", err)
+	}
+	got := make([]string, len(gates))
+	for i, g := range gates {
+		got[i] = strings.Join(g.Argv, " ")
+	}
+	want := []string{"go build ./...", "go test ./...", "go vet ./...", "golangci-lint run"}
+	if !equalStrs(got, want) {
+		t.Fatalf("config gates = %v, want %v (lint must be honored)", got, want)
+	}
 }

@@ -276,3 +276,76 @@ func TestSupportedStacks(t *testing.T) {
 		t.Errorf("SupportedStacks() = %v, want %v", got, want)
 	}
 }
+
+// TestLoadRecipeGates_RoundTrip proves the read-side LoadRecipeGates consumes the
+// EXACT config GenerateDraft emits: a drafted Go recipe round-trips back to its
+// four ordered gates (build, test, vet, lint), closing the scaffolder→daemon gap.
+func TestLoadRecipeGates_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	draft, err := GenerateDraft(dir, "develop")
+	if err != nil {
+		t.Fatalf("GenerateDraft: %v", err)
+	}
+	// Force a Go profile draft regardless of the empty temp dir's detection by
+	// writing the rendered config directly under .conductor.
+	goDraft, err := GenerateDraft(goRepoDir(t), "develop")
+	if err != nil {
+		t.Fatalf("GenerateDraft(go): %v", err)
+	}
+	_ = draft
+	confDir := filepath.Join(dir, ".conductor")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(confDir, "config.yaml"), goDraft.Config, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	gates, found, err := LoadRecipeGates(dir)
+	if err != nil {
+		t.Fatalf("LoadRecipeGates: %v", err)
+	}
+	if !found {
+		t.Fatal("found = false, want true (config present)")
+	}
+	want := []GateSpec{
+		{Name: "build", Argv: []string{"go", "build", "./..."}},
+		{Name: "test", Argv: []string{"go", "test", "./..."}},
+		{Name: "vet", Argv: []string{"go", "vet", "./..."}},
+		{Name: "lint", Argv: []string{"golangci-lint", "run"}},
+	}
+	if len(gates) != len(want) {
+		t.Fatalf("got %d gates, want %d: %+v", len(gates), len(want), gates)
+	}
+	for i := range want {
+		if gates[i].Name != want[i].Name || strings.Join(gates[i].Argv, " ") != strings.Join(want[i].Argv, " ") {
+			t.Fatalf("gate[%d] = %+v, want %+v", i, gates[i], want[i])
+		}
+	}
+}
+
+// TestLoadRecipeGates_NoConfig proves a repo with no .conductor/config.yaml
+// reports found=false with a nil error, so the daemon falls back to its defaults.
+func TestLoadRecipeGates_NoConfig(t *testing.T) {
+	_, found, err := LoadRecipeGates(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadRecipeGates(no config): unexpected error %v", err)
+	}
+	if found {
+		t.Fatal("found = true, want false for a repo with no .conductor/config.yaml")
+	}
+}
+
+// goRepoDir builds a minimal Go repo (go.mod + a _test.go) so GenerateDraft picks
+// the Go profile and emits its build/test/vet/lint gates.
+func goRepoDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n\ngo 1.26\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "x_test.go"), []byte("package x\n"), 0o644); err != nil {
+		t.Fatalf("write test: %v", err)
+	}
+	return dir
+}

@@ -48,6 +48,7 @@ import (
 	"github.com/everva/conductor-platform/internal/holdout"
 	"github.com/everva/conductor-platform/internal/provisioner"
 	"github.com/everva/conductor-platform/internal/registry"
+	"github.com/everva/conductor-platform/internal/scaffolder"
 	"github.com/everva/conductor-platform/internal/statestore"
 	"github.com/everva/conductor-platform/internal/verify"
 )
@@ -146,6 +147,13 @@ type config struct {
 	// set; it defaults to `go test ./...` so a configured holdout runs the project's
 	// hidden test suite against the reviewed code.
 	holdoutCmd []string
+	// recipeDir, when set, is the repo directory whose `.conductor/config.yaml`
+	// (emitted by the scaffolder, ADR-0009) the daemon reads the verify gate recipe
+	// from. Empty (the DEFAULT) uses the built-in default gates (go build + go test +
+	// go vet) so a config-less project keeps working unchanged. A configured recipe
+	// can opt INTO golangci-lint; if it does, golangci-lint MUST be installed or the
+	// gate fails deterministically (never silently skipped).
+	recipeDir string
 	// governance, when true (the DEFAULT), wires the risk-layered merge policy
 	// (governance.DefaultPolicy, ADR-0003/N-10) into the conductor so high-tier
 	// (T3/T4) and untiered tasks are HELD for a human after a green gate instead of
@@ -254,6 +262,8 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		"repo-EXTERNAL root dir the hidden holdout (ADR-0018) is resolved under; empty = inert noop holdout (backward compatible). Path is logged, contents are not")
 	holdoutCmd := fs.String("holdout-cmd", envOr("CONDUCTOR_HOLDOUT_CMD", defaultHoldoutCmd),
 		"argv that runs the injected holdout suite in the verify-worktree (space-split, no shell); used only when -holdout-store is set")
+	recipeDir := fs.String("recipe-dir", envOr("CONDUCTOR_RECIPE_DIR", ""),
+		"repo dir whose .conductor/config.yaml (ADR-0009) supplies the verify gate recipe; empty = built-in default gates (go build + go test + go vet). A configured recipe may opt into golangci-lint, which must then be installed or the gate fails")
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "conductor — Faz-1a tick daemon")
@@ -336,6 +346,7 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		governance:        *governance,
 		holdoutStore:      *holdoutStore,
 		holdoutCmd:        hcmd,
+		recipeDir:         *recipeDir,
 	}, nil
 }
 
@@ -474,6 +485,15 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 	// leaves it nil so every green task auto-merges (pre-N-10 behavior).
 	policy := newPolicy(cfg, logger)
 
+	// Verify gate recipe (FIX #1): the deterministic merge gate. It defaults to the
+	// always-available Go toolchain trio (build + test + vet) and can be UPGRADED by
+	// a scaffolder-emitted .conductor/config.yaml (e.g. to add golangci-lint).
+	gates, err := resolveGates(cfg, logger)
+	if err != nil {
+		closer()
+		return nil, fmt.Errorf("resolve gates: %w", err)
+	}
+
 	cond, err := conductor.New(conductor.Deps{
 		Store:       store,
 		Picker:      registry.NewRegistry(store),
@@ -481,14 +501,11 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		Engine:      eng,
 		Verifier:    verf,
 		Merger:      merger,
-		Recipe: conductor.Recipe{Gates: []verify.Gate{
-			{Name: "go build", Argv: []string{"go", "build", "./..."}},
-			{Name: "go test", Argv: []string{"go", "test", "./..."}},
-		}},
-		HostID:   cfg.hostID,
-		Governor: gov,
-		Emitter:  emitter,
-		Policy:   policy,
+		Recipe:      conductor.Recipe{Gates: gates},
+		HostID:      cfg.hostID,
+		Governor:    gov,
+		Emitter:     emitter,
+		Policy:      policy,
 		// Control reverse-channel pause-gate (ADR-0011 §4, P3-3): read the durable
 		// pause off the SAME store conductorctl writes it to, so `conductorctl pause`
 		// in a separate process makes this daemon's next tick a clean no-op.
@@ -624,6 +641,67 @@ func newPolicy(cfg config, logger *slog.Logger) conductor.Policy {
 	}
 	logger.Info("governance policy active", slog.String("mode", "risk-layered (T3/T4 + untiered held for human)"))
 	return governance.DefaultPolicy()
+}
+
+// defaultGates is the built-in deterministic verify recipe (FIX #1): go build +
+// go test + go vet. All three ship with the Go toolchain, so they are ALWAYS
+// available — vet is safe to include in the default, hardening the daemon's merge
+// gate to match the platform's own `make gate` for the build/test/vet legs.
+// golangci-lint is deliberately NOT here: it is an external binary the shipped
+// daemon/container may not have, so lint is opt-in via a .conductor recipe.
+func defaultGates() []verify.Gate {
+	return []verify.Gate{
+		{Name: "go build", Argv: []string{"go", "build", "./..."}},
+		{Name: "go test", Argv: []string{"go", "test", "./..."}},
+		{Name: "go vet", Argv: []string{"go", "vet", "./..."}},
+	}
+}
+
+// resolveGates picks the verify gate recipe (FIX #1). When cfg.recipeDir is set
+// and that repo has a scaffolder-emitted .conductor/config.yaml, the gates come
+// from that config (reusing the scaffolder's exact shape, closing the N-8
+// scaffolder→daemon gap) — this is how an operator opts INTO golangci-lint. When
+// no recipe dir is configured, OR the configured dir has no .conductor/config.yaml,
+// it falls back to defaultGates (build+test+vet) so a config-less project keeps
+// working unchanged (backward compatible).
+//
+// A configured recipe that opts into golangci-lint does NOT make the daemon check
+// for the binary here: a missing golangci-lint is caught at gate-run time, where
+// the gate FAILS deterministically with the exec error (never silently skipped —
+// that would be a fake-green). Operators who configure golangci must install it.
+func resolveGates(cfg config, logger *slog.Logger) ([]verify.Gate, error) {
+	if cfg.recipeDir == "" {
+		logger.Info("verify recipe selected",
+			slog.String("source", "default"),
+			slog.String("gates", "go build, go test, go vet"))
+		return defaultGates(), nil
+	}
+
+	specs, found, err := scaffolder.LoadRecipeGates(cfg.recipeDir)
+	if err != nil {
+		// A present-but-broken recipe must fail loud, not degrade to weaker gates.
+		return nil, err
+	}
+	if !found {
+		logger.Info("verify recipe selected",
+			slog.String("source", "default (no .conductor/config.yaml in recipe-dir)"),
+			slog.String("recipe_dir", cfg.recipeDir),
+			slog.String("gates", "go build, go test, go vet"))
+		return defaultGates(), nil
+	}
+
+	gates := make([]verify.Gate, 0, len(specs))
+	names := make([]string, 0, len(specs))
+	for _, s := range specs {
+		gates = append(gates, verify.Gate{Name: s.Name, Argv: s.Argv})
+		names = append(names, s.Name)
+	}
+	logger.Info("verify recipe selected",
+		slog.String("source", ".conductor/config.yaml"),
+		slog.String("recipe_dir", cfg.recipeDir),
+		slog.String("gates", strings.Join(names, ", ")),
+		slog.String("note", "a configured golangci-lint gate requires the binary installed; a missing binary fails the gate deterministically"))
+	return gates, nil
 }
 
 // newVerifier constructs the independent verify gate (B-2) with the holdout store

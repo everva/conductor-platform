@@ -547,6 +547,68 @@ func WriteDraft(targetDir string, draft Draft) (string, error) {
 	return confPath, nil
 }
 
+// GateSpec is one resolved verify gate read back from a `.conductor/config.yaml`:
+// a human Name (the slot it came from: build/test/vet/lint) and its argv (program
+// + args, executed without a shell). It is the read-side mirror of the recipeGates
+// the scaffolder EMITS, so the daemon consumes the SAME config the scaffolder
+// drafts (closing the N-8 scaffolder→daemon recipe gap). It is deliberately a
+// plain, dependency-free struct so cmd/conductor can map it onto verify.Gate
+// without this package importing internal/verify.
+type GateSpec struct {
+	// Name is the gate slot ("build"/"test"/"vet"/"lint"), surfaced in the Check.
+	Name string
+	// Argv is the command to run (program + args), no shell.
+	Argv []string
+}
+
+// LoadRecipeGates reads <repoDir>/.conductor/config.yaml and returns its verify
+// gates in deterministic order (build, test, vet, lint), skipping empty slots. It
+// is the read-side counterpart of GenerateDraft's emitter and reuses the EXACT
+// on-disk shape (recipeDoc) so the daemon honors whatever the scaffolder drafted
+// (incl. an opt-in lint gate).
+//
+// The bool reports whether a config file was present: false (with a nil error)
+// means the repo has no `.conductor/config.yaml`, so the caller falls back to its
+// built-in default gates (backward compatible — a config-less repo is unchanged).
+// A present-but-unparseable or gate-less config is an error: a corrupt recipe must
+// not silently degrade the merge gate (that would be a fake-green).
+func LoadRecipeGates(repoDir string) ([]GateSpec, bool, error) {
+	path := filepath.Join(repoDir, ".conductor", "config.yaml")
+	data, err := os.ReadFile(path) //nolint:gosec // path is the operator-supplied repo dir's recipe config.
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("scaffolder: read recipe config %s: %w", path, err)
+	}
+
+	var doc recipeDoc
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, false, fmt.Errorf("scaffolder: parse recipe config %s: %w", path, err)
+	}
+
+	g := doc.Recipe.Verify
+	slots := []struct {
+		name string
+		argv []string
+	}{
+		{"build", g.Build},
+		{"test", g.Test},
+		{"vet", g.Vet},
+		{"lint", g.Lint},
+	}
+	gates := make([]GateSpec, 0, len(slots))
+	for _, s := range slots {
+		if len(s.argv) > 0 {
+			gates = append(gates, GateSpec{Name: s.name, Argv: s.argv})
+		}
+	}
+	if len(gates) == 0 {
+		return nil, false, fmt.Errorf("scaffolder: recipe config %s declares no verify gates", path)
+	}
+	return gates, true, nil
+}
+
 // SupportedStacks returns the stacks the scaffolder can onboard, in a stable
 // sorted order, for help text and tests. StackUnknown is excluded — it is a
 // verdict, not a supported stack.
