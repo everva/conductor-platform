@@ -151,5 +151,15 @@ Gateway (3A) olduğu gibi reuse; web bileşenleri (3B) fork panellerine (webview
   race/golangci-0/regresyon) + deterministik 8-case + double round-trip + **GERÇEK claude -p uçtan-uca**
   (conversation→/distill 200→senaryo→yaml→/intake→**task A-1 persist**) kendi koştum → ALL PASS. (Not: distill = insan-
   onaylı taslak yardımcısı, kalite kapısı DEĞİL; gateway'e additive control-bitişik yetenek.)
-- Sıradaki: **3B-4b** — intake-chat UI (kullanıcının çekirdek vizyonu): yazışma→`/distill`→önerilen senaryo+holdout
-  review/edit→onay→`/intake`→ledger; oluşan task'ları göster. Sonra DALGA 3B biter → DALGA 3C (uçtan-uca demo).
+- ✅ **3B-4b — Intake-chat UI** (2026-06-18, commit `23f7542`): `web/src/intake/` — `IntakeChat` (proje-seç→
+  conversation→Distill→önerilen senaryo+**holdout vurgulu** review→**editable YAML (otoriter)**→Re-distill→
+  Approve&ledger confirm→`/intake`→created task ids→View-tasks) + ScenarioCard + `ApiClient.distill` +
+  `DistillNoScenariosError`. 422→"daha fazla detay" rehberi (never-fabricate dürüstçe yüzeye), 400-YAML→inline parse
+  hatası, 401→onUnauthorized. Fleet|Events|**Intake** tab. Bağımsız doğrulama (Rule#9): yalnız web/ + Go-unaffected +
+  gate (tsc-0/lint-0/vitest-73/build) + Playwright 5-pass; "Approve EDİTLENMİŞ yaml'i gönderir" + "422 dürüst"
+  unit-test'li → ALL PASS. (Minör: distill scenario JSON'ı PascalCase çıkıyor — intake.Scenario'da json-tag yok;
+  3C/sonra gateway DTO'ya snake_case json-tag eklenebilir, UI gerçeğe uyuyor.)
+- ✅✅ **DALGA 3B — WEB COCKPIT TAMAM** (3B-0 iskele · 3B-1 dashboard · 3B-2 event-akış · 3B-3 müdahale · 3B-4 intake-chat).
+  Kullanıcının "yazışarak senaryo üret" çekirdek vizyonu UI'da canlı (gerçek claude -p ile uçtan-uca kanıtlı, 3B-4a).
+- Sıradaki: **DALGA 3C — 3C-1** uçtan-uca cockpit demo (UI'dan gerçek task sür: intake-chat→senaryo→Kontaktör'ü izle→
+  approve→merge; auth sertleştirme; cockpit'in kendi CI gate'i Go+frontend).
