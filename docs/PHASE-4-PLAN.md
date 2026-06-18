@@ -1,0 +1,83 @@
+# Faz-4 Planı — Editör Fork (Code-OSS fork + webview extension) [compact-proof çıpa]
+
+> Faz-1 + Faz-2 + Faz-3 TAMAM (gateway + web cockpit + uçtan-uca; reviewed+hardened, CI org-self-hosted runner'da
+> yeşil). Bu plan Faz-4'ü tanımlar. Karar: **ADR-0027** (Code-OSS fork + built-in extension/webview, 3B reuse,
+> gateway reuse, token SecretStorage). develop @ (sweep'ten önce) ~18175ee.
+
+## Kullanıcı kararları (2026-06-18)
+- **Fork yapısı:** Code-OSS (MIT) fork + agent UI = built-in extension/webview (3B React reuse). Cursor/Windsurf modeli.
+- **Repo düzeni:** extension + paylaşılan UI `conductor-platform/editor/`; fork ayrı repo `everva/conductor-editor`
+  (Code-OSS + extension bundle + rebrand). Gateway yerinde.
+- **Sıra:** ÖNCE minör follow-up sweep → sonra Faz-4 (4A→4E).
+
+## Mekanizma (Faz-1/2/3 disiplini — DEĞİŞMEZ)
+Her iş: orchestrator spec → **Agent kodlar** (TDD, gate yeşil, frozen kontratlara ADDITIVE, sahte-yeşil ASLA) →
+orchestrator **BAĞIMSIZ gate + gerçek-koşu doğrular (Rule#9)** → squash-merge develop → push. Mimari karar → önce
+**ADR**. engine.go + statestore + EventBus imzaları frozen (additive, ADR-0021). Secret-leak yok. Canlı optiway
+(`~/optiway-conductor`)/xirigo'ya DOKUNMA. Yalnız subscription `claude -p`. Yalnız `develop`'a merge+push (fork repo
+ayrı; oluşunca kendi akışı). Her dalga sonu bağımsız doğrulama + İLERLEME KAYDI.
+
+---
+
+## FAZ-3.5 — Minör follow-up sweep (ÖNCE; hepsi blocker değildi, temiz Faz-4 girişi için)
+Sıra (ucuzdan der ine):
+- **S-1 distill JSON snake_case:** distill DTO scenario alanları PascalCase çıkıyor (intake.Scenario json-tag'siz);
+  gateway DTO'ya snake_case json-tag'li bir scenario-shape ekle (web tipi de güncellenir). Küçük, gateway+web.
+- **S-2 CI Playwright hard-gate kararı:** `org-runner-1`'de Playwright zaten geçiyor (libs kurulu) → `continue-on-error`
+  kaldır (strict) VEYA best-effort bırak. (Kullanıcı kararı; geçtiği kanıtlı → strict öneri.)
+- **S-3 Gerçek-claude advisor smoke:** sentinel gri-bölge advisor runner'ı için canlı claude -p smoke (kapsam boşluğu).
+- **S-4 private-repo auth-fail testi:** holdout private: şeması auth-fail yolu için deterministik test.
+- **S-5 iOS/maestro CANLI koşum:** `org-macos-1` self-hosted runner HAZIR (review sırasında doğrulandı) → iOS-lane
+  reçete+routing'i gerçek Mac-host'ta canlı koş (Dalga-2A'dan beri infra bekliyordu).
+- **S-6 sentinel Layer-1 zengin probe:** process-liveness probe'u zenginleştir (şu an signal-wire + backstop;
+  "clearly-dead→Kill" prod'da inert).
+- **S-7 recipe argv tam sandbox:** S-3 trust-gap (şu an doküman + shell-argv uyarısı + R-2 secret-containment).
+Sweep her madde: spec→(gerekirse Agent)→bağımsız gate doğrula→commit→push. Bitince Faz-4'e geç.
+
+---
+
+## DALGA 4A — Köprü hazırlığı (conductor-platform/web; fork'tan ÖNCE, Go-free)
+3B bileşenlerini hem web (fetch/WS) hem fork-webview (postMessage) transport'unda çalışır hale getir.
+- **4A-0 — KARAR ADR-0027** (✅ yazıldı).
+- **4A-1 — Transport seam:** `ApiClient` + `useEventStream` arkasına bir transport arayüzü (REST-call + event-subscribe
+  soyutlaması). Web impl = mevcut fetch/WebSocket (davranış değişmez). Fork impl (4B) = postMessage-köprüsü. Bileşenler
+  transport'u inject alır. Frontend gate (tsc/eslint/vitest) yeşil; mevcut web testleri değişmeden geçer.
+- **4A-2 — Paylaşılabilir UI:** fleet/events/interventions/intake-chat bileşenlerini `editor/` ve `web/`'in ikisinin de
+  tüketebileceği forma getir (paylaşılan src veya workspace paketi). events.gen.ts tek-kaynak korunur.
+
+## DALGA 4B — VS Code extension (conductor-platform/`editor/`, built-in)
+- **4B-0 — Extension iskele:** TS extension (esbuild/bundle), `editor/extension/`; activity-bar "Conductor" view
+  container + komut iskeleti; gate = tsc/eslint/vitest + `@vscode/test-electron` smoke.
+- **4B-1 — Bağlantı + auth:** gateway URL config + token **SecretStorage**'da; `/readyz` health; bağlan/çöz akışı.
+  Token asla log'a/webview'e girmez.
+- **4B-2 — Webview host + postMessage köprü:** extension-host gateway client'ı (REST+WS) → webview'e tipli postMessage
+  transport (4A-1 fork impl'i). Webview CSP sıkı; veri yalnız host'tan.
+- **4B-3 — Cockpit panelleri:** fleet dashboard + event-akış + müdahale + intake-chat webview'leri = **3B reuse**
+  (4A-2 paylaşılan bileşenler). Kabul: extension VS Code'da yüklenir, gerçek gateway'e bağlanır, paneller canlı veri gösterir.
+
+## DALGA 4C — Editör-native deneyim
+- **4C-0 — KARAR: diff kaynağı.** Gateway store/bus dışında repo görmüyor; task branch diff'i nereden? Seçenekler:
+  (a) KindDiff event'lerini render; (b) daemon-tarafı additive diff endpoint (gateway proxy); (c) editör daemon ile
+  aynı host'taysa yerel clone. Karar notu → sonra 4C-1.
+- **4C-1 — Native diff:** task branch diff'i VS Code native diff editor'de göster.
+- **4C-2 — Inline komutlar:** approve/abort/pause/resume command-palette + context-menu (control API).
+- **4C-3 — Bildirim/status:** intervention-needed → native notification + status-bar canlı durum; task'a atla.
+
+## DALGA 4D — Fork + paketleme (`everva/conductor-editor` ayrı repo) — AĞIR ALTYAPI
+- **4D-0 — Code-OSS fork + build:** Code-OSS fork, build zinciri (mac/linux/win); reproducible build doğrula.
+- **4D-1 — Extension'ı built-in bundle:** conductor extension'ı fork'a built-in göm.
+- **4D-2 — Rebrand:** product.json (ad/ikon/ürün), hafif tema; marketplace/telemetri Code-OSS-temiz kalır.
+- **4D-3 — CI/release:** fork CI + imzalı/paketli artifact (en az bir platform).
+
+## DALGA 4E — Uçtan-uca + sertleştirme
+- **4E-1 — Editör e2e:** forked editör'den gerçek task sür (intake-chat→senaryo→Kontaktör develop/verify→**native diff
+  review**→approve→merge), tamamı editör içinde; auth sertleştirme; editör'ün kendi CI gate'i. Kabul: uçtan-uca canlı,
+  bağımsız doğrulanır (köprü kanıtı: gateway + 3B bileşenleri reuse edildi).
+
+## Sıra / bağımlılık
+Sweep (3.5) → 4A (köprü, web) → 4B (extension) → 4C (native) → 4D (fork, ayrı repo) → 4E. 4A-0/4C-0 kararları kendi
+dalga başlarında.
+
+## İLERLEME KAYDI (her iş bitince güncelle)
+- Faz-4 planı + ADR-0027 oluşturuldu (2026-06-18). Kullanıcı: Code-OSS fork + webview extension; editor/ + ayrı fork
+  repo; önce sweep. Sıradaki: **FAZ-3.5 sweep — S-1 (distill snake_case) → S-2 (CI Playwright hard-gate) → …**
