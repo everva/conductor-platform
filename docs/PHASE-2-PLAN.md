@@ -79,4 +79,16 @@ Deterministik kanıt = kalite kapısı (LLM asla karar mercii); sahte-yeşil ASL
 ## İLERLEME KAYDI (her iş bitince güncelle)
 - Faz-2 planı oluşturuldu (2026-06-18).
 - **1.5-a holdout şemaları** ✅ done (b791d62, push'lu). internal/holdout: Router (şema-dispatch) + PGStore (`pg://holdouts/<id>`, table `holdouts(id,path,content)`, migration 00005) + PrivateRepoStore (`private:<repo>#<path>`, gh-token, repo-dışı klon). Daemon: -dsn→pg auto, -holdout-private-cache+CONDUCTOR_GH_TOKEN→private; backward-compat (fs-only çalışır); unconfigured-scheme→açık hata. **Bağımsız doğrulandı:** kendi docker PG'imde 5 PGStore testi (-race), private local-repo 7 testi, Router dispatch, gate+e2e+race yeşil, frozen untouched, secret-leak yok (token redact).
-- Sıradaki: 1.5-b (T3 human-hold canlı demo + approve akışı).
+- **1.5-b T3/T4 human-hold approve akışı + CANLI demo** ✅ done. Held semantiği rafine: held görev artık
+  `awaiting-approval` (blocked DEĞİL) statüsünde park edilir + doğrulanmış per-task BRANCH `Task.Branch`'e kaydedilir;
+  branch ref klonda korunur (Cleanup yalnız worktree siler). Additive: `Task.Approved bool` (migration 00006) +
+  `conductor.StatusAwaitingApproval`. `conductorctl approve --project <id> [--task <id>]` → StoreApprover (paylaşılan
+  store; -dsn ile cross-process). Tick, PickReady'den ÖNCE approved+held görevi çözer: korunmuş branch'i RE-ATTACH
+  eder (provisioner.WorkspaceForBranch — base'den yeni kesmez), GÜVENLİK için ucuz **re-verify** koşar (base drift'i
+  yakalar; sahte-yeşil yok), sonra squash-merge eder — **develop ASLA yeniden koşmaz**. Semantik kararı:
+  **re-verify-then-merge** (merge-directly yerine; base drift'e karşı Rule#9 koruması, LLM yeniden atılmaz).
+  Deterministik test: hold→approve→merge, develop tam 1 kez koştu (fake + gerçek-git e2e). **Canlı demo (PG :55463,
+  throwaway repo):** tick1=held (merge yok, branch korundu), `approve`, tick2=approved-merged (mergeSHA 3674435,
+  base'de `[task:T3-held]` trailer, develop hit-count=1). engine.go/builder dokunulmadı; gate+e2e+race yeşil;
+  golangci v2.12.0 temiz.
+- Sıradaki: 1.5-c (GitMerger remote-push modeli) veya Dalga A.

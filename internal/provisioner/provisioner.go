@@ -179,6 +179,63 @@ func (p *Provisioner) Workspace(ctx context.Context, project statestore.Project,
 	return engine.Workspace{Path: abs, Branch: branch}, nil
 }
 
+// WorkspaceForBranch RE-ATTACHES a worktree to an EXISTING per-task branch rather
+// than cutting a fresh one from the base (Faz-1.5-b, governance human-hold approve
+// flow). It exists for the ONE case where the verified work must NOT be discarded:
+// a T3/T4 task whose develop+verify already PASSED was HELD for a human, its
+// per-task branch left intact in the clone (Cleanup removes only the worktree, never
+// the branch ref). On operator APPROVAL the conductor needs that same VERIFIED
+// commit back in a worktree to merge it — so this checks the branch out as-is,
+// WITHOUT the `git branch -D` + re-cut-from-base that Workspace does (that would
+// roll the verified work back to a bare base, defeating the approval).
+//
+// It is additive on the provisioner (no frozen signature changed): the normal
+// develop path still uses Workspace. The named branch MUST already exist in the
+// clone (the preserved verified branch); a missing branch is a clear error rather
+// than a silent fresh cut, so an approval can never accidentally merge empty work.
+// It is idempotent: any stale worktree for the task is removed first, then the
+// existing branch is re-attached at its recorded tip.
+func (p *Provisioner) WorkspaceForBranch(ctx context.Context, project statestore.Project, task statestore.Task, branch string) (engine.Workspace, error) {
+	if task.ID == "" {
+		return engine.Workspace{}, fmt.Errorf("provisioner: workspace-for-branch: %w", errors.New("task ID is required"))
+	}
+	if branch == "" {
+		return engine.Workspace{}, fmt.Errorf("provisioner: workspace-for-branch: %w", errors.New("branch is required"))
+	}
+	// The clone must exist (the held task was developed in it, so it does); ensure
+	// it and refresh auth/base, but do NOT delete the per-task branch.
+	if err := p.EnsureClone(ctx, project); err != nil {
+		return engine.Workspace{}, err
+	}
+
+	clone := p.clonePath(project.ID)
+	wt := p.worktreePath(project.ID, task.ID)
+
+	// The verified branch MUST already exist — never fall back to a fresh cut.
+	if err := runGit(ctx, clone, p.gitEnv(), "rev-parse", "--verify", "refs/heads/"+branch); err != nil {
+		return engine.Workspace{}, fmt.Errorf("provisioner: workspace-for-branch: preserved branch %q not found in clone: %w", branch, err)
+	}
+
+	// Drop only a stale worktree for the task (not the branch), then re-attach the
+	// EXISTING branch — `worktree add <path> <branch>` (no -b) checks out the branch
+	// as-is at its recorded tip, preserving the verified commit.
+	if err := p.removeWorktree(ctx, clone, wt); err != nil {
+		return engine.Workspace{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(wt), 0o755); err != nil {
+		return engine.Workspace{}, fmt.Errorf("provisioner: prepare worktree dir: %w", err)
+	}
+	if err := runGit(ctx, clone, p.gitEnv(), "worktree", "add", wt, branch); err != nil {
+		return engine.Workspace{}, fmt.Errorf("provisioner: re-attach worktree for task %q on branch %q: %w", task.ID, branch, err)
+	}
+
+	abs, err := filepath.Abs(wt)
+	if err != nil {
+		return engine.Workspace{}, fmt.Errorf("provisioner: resolve worktree path: %w", err)
+	}
+	return engine.Workspace{Path: abs, Branch: branch}, nil
+}
+
 // Cleanup removes the worktree and prunes it (ADR-0017). It is idempotent: a
 // missing worktree is not an error. RetainBlocked is honored by the caller
 // (which decides whether to call Cleanup); Cleanup itself always removes.

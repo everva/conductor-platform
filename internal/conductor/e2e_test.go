@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/everva/conductor-platform/internal/engine"
+	"github.com/everva/conductor-platform/internal/governance"
 	"github.com/everva/conductor-platform/internal/provisioner"
 	"github.com/everva/conductor-platform/internal/registry"
 	"github.com/everva/conductor-platform/internal/statestore"
@@ -230,6 +231,176 @@ func TestE2E_GateBreakBlocksMerge(t *testing.T) {
 
 	t.Logf("NEGATIVE: ticks=%d finalOutcome=%s reviewResult=%q taskStatus=%s developCommits=%s noTrailer=ok",
 		ticks, last.Outcome, last.Review.Result, got.Status, count)
+}
+
+// TestE2E_HumanHold_ApproveMerges_NoReDevelop is the GOVERNANCE flow proof with
+// REAL git (Faz-1.5-b): a T3 task whose performer writes passing Go is HELD by the
+// human-required policy (no merge, no [task:<id>] trailer, verified branch
+// PRESERVED), an operator APPROVES it, and a later tick MERGES the preserved verified
+// branch WITHOUT re-developing. The performer writes a hit-count file; we prove it
+// stays at 1 — develop ran exactly once across both ticks.
+func TestE2E_HumanHold_ApproveMerges_NoReDevelop(t *testing.T) {
+	requireGit(t)
+	requireGo(t)
+	ctx := context.Background()
+
+	upstream := newProductRepo(t)
+
+	store := statestore.NewMemoryStore()
+	mustCreateProject(t, store, statestore.Project{ID: e2eProjectID, Repo: upstream, BaseBranch: "develop"})
+	mustCreateScenario(t, store, statestore.Scenario{ID: "scn-t3", ProjectID: e2eProjectID, Title: "a high-risk T3 change", HoldoutRef: "e2e-noop"})
+	mustCreateTask(t, store, statestore.Task{
+		ID: "T-hold", ProjectID: e2eProjectID, Lane: "build", Tier: "T3", // T3 -> human-required
+		Status: registry.StatusReady, ScenarioID: "scn-t3",
+	})
+
+	// A develop-cmd wrapper that bumps a HIT-COUNT file each invocation, then runs the
+	// good performer. The hit-count file proves how many times develop actually ran.
+	hitFile := filepath.Join(t.TempDir(), "develop-hits")
+	performer := writePerformer(t, hitCountingPerformerScript(hitFile))
+
+	root := t.TempDir()
+	cond := buildGovernedConductor(t, store, root, performer)
+	clone := filepath.Join(root, "clones", e2eProjectID)
+
+	// --- Tick 1: develop -> verify PASS -> HELD (no merge) --------------------
+	res1, err := cond.Tick(ctx, e2eProjectID)
+	if err != nil {
+		t.Fatalf("tick 1 error: %v", err)
+	}
+	if res1.Outcome != OutcomeHeld {
+		t.Fatalf("tick 1 outcome = %q, want held; res=%+v", res1.Outcome, res1)
+	}
+	// No [task:<id>] trailer on the base for a held task.
+	if msgs := gitT(t, clone, "log", "--format=%B", "develop"); strings.Contains(msgs, "[task:T-hold]") {
+		t.Fatalf("tick 1: held task must NOT land a trailer on base; got:\n%s", msgs)
+	}
+	if c := gitT(t, clone, "rev-list", "--count", "develop"); c != "1" {
+		t.Fatalf("tick 1: base advanced to %s commits, want 1 (held = no merge)", c)
+	}
+	held := mustGetTask(t, store, "T-hold")
+	if held.Status != StatusAwaitingApproval {
+		t.Fatalf("tick 1: status = %q, want %q", held.Status, StatusAwaitingApproval)
+	}
+	if held.Branch == "" {
+		t.Fatalf("tick 1: held task must record its verified branch")
+	}
+	// The verified branch survived the held tick's worktree cleanup (the proof the
+	// work is preserved, recoverable for the approve-merge).
+	if err := gitErr(clone, "rev-parse", "--verify", "refs/heads/"+held.Branch); err != nil {
+		t.Fatalf("tick 1: verified branch %q did not survive cleanup: %v", held.Branch, err)
+	}
+	if got := readHits(t, hitFile); got != 1 {
+		t.Fatalf("tick 1: develop ran %d times, want 1", got)
+	}
+
+	// --- approve (mirrors `conductorctl approve --project ...`) ----------------
+	approvedID, err := NewStoreApprover(store).RequestApprove(ctx, e2eProjectID, "")
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if approvedID != "T-hold" {
+		t.Fatalf("approved id = %q, want T-hold", approvedID)
+	}
+
+	// --- Tick 2: approved -> re-attach preserved branch -> re-verify -> MERGE --
+	res2, err := cond.Tick(ctx, e2eProjectID)
+	if err != nil {
+		t.Fatalf("tick 2 error: %v", err)
+	}
+	if res2.Outcome != OutcomeApprovedMerged {
+		t.Fatalf("tick 2 outcome = %q, want approved-merged; res=%+v", res2.Outcome, res2)
+	}
+	if res2.MergeSHA == "" {
+		t.Fatalf("tick 2: approved-merged but empty MergeSHA")
+	}
+
+	// THE PROOF: develop ran exactly ONCE total — the approve merged preserved work.
+	if got := readHits(t, hitFile); got != 1 {
+		t.Fatalf("develop hit-count = %d after approve-merge, want 1 (approve must NOT re-develop)", got)
+	}
+	// git truth: the [task:<id>] trailer now lands on the base, the new file landed,
+	// and the task is done.
+	tip := gitT(t, clone, "log", "-1", "--format=%B", "develop")
+	if !strings.Contains(tip, "[task:T-hold]") {
+		t.Fatalf("tick 2: base tip missing [task:T-hold] trailer; got:\n%s", tip)
+	}
+	files := gitT(t, clone, "ls-tree", "-r", "--name-only", "develop")
+	if !strings.Contains(files, "greeting.go") {
+		t.Fatalf("tick 2: greeting.go did not land on develop; tree:\n%s", files)
+	}
+	done := mustGetTask(t, store, "T-hold")
+	if done.Status != registry.StatusDone {
+		t.Fatalf("tick 2: final status = %q, want done", done.Status)
+	}
+
+	t.Logf("HUMAN-HOLD: tick1=held(noMerge,branchPreserved=%s) approve=ok tick2=approved-merged mergeSHA=%s developHits=1 trailer=ok done",
+		held.Branch, res2.MergeSHA[:min(12, len(res2.MergeSHA))])
+}
+
+// buildGovernedConductor wires the REAL components like buildConductor but ALSO
+// injects the human-required governance policy (so T3/T4 holds) and the store-backed
+// approver + re-attach-capable provisioner — the Faz-1.5-b approve flow.
+func buildGovernedConductor(t *testing.T, store *statestore.MemoryStore, root, performer string) *Conductor {
+	t.Helper()
+	prov, err := provisioner.New(provisioner.Config{RootDir: root})
+	if err != nil {
+		t.Fatalf("provisioner.New: %v", err)
+	}
+	eng := engine.NewCommandEngine(engine.RecipeConfig{DevelopCmd: []string{performer}, Timeout: 60 * time.Second})
+	verf := verify.New(noopHoldout{}, verify.Config{HoldoutCmd: []string{"true"}})
+	merger := NewGitMerger(func(projectID string) string { return filepath.Join(root, "clones", projectID) })
+
+	cond, err := New(Deps{
+		Store:       store,
+		Picker:      registry.NewRegistry(store),
+		Provisioner: prov,
+		Engine:      eng,
+		Verifier:    verf,
+		Merger:      merger,
+		Recipe: Recipe{Gates: []verify.Gate{
+			{Name: "go build", Argv: []string{"go", "build", "./..."}},
+			{Name: "go test", Argv: []string{"go", "test", "./..."}},
+		}},
+		HostID:   "e2e-host",
+		Policy:   governance.DefaultPolicy(),
+		Approver: NewStoreApprover(store),
+	})
+	if err != nil {
+		t.Fatalf("conductor.New: %v", err)
+	}
+	return cond
+}
+
+// hitCountingPerformerScript wraps the good performer with a hit-counter: it appends
+// a line to hitFile each time develop runs, so the test can prove develop ran exactly
+// once (approve must NOT re-roll develop).
+func hitCountingPerformerScript(hitFile string) string {
+	return "#!/bin/sh\nset -e\necho hit >> " + shellQuote(hitFile) + "\n" + goodPerformerScript[len("#!/bin/sh\n"):]
+}
+
+// shellQuote single-quotes a path for safe embedding in the /bin/sh performer.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// readHits returns the number of times the hit-counting performer ran (lines in
+// hitFile); a missing file means zero.
+func readHits(t *testing.T, hitFile string) int {
+	t.Helper()
+	b, err := os.ReadFile(hitFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatalf("read hit file: %v", err)
+	}
+	return strings.Count(string(b), "hit\n")
+}
+
+// gitErr runs a git command and returns its error (used for branch-existence checks).
+func gitErr(dir string, args ...string) error {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	return cmd.Run()
 }
 
 // --- wiring helpers ---------------------------------------------------------

@@ -475,9 +475,10 @@ func TestConductor_Tick_GovernorAdmit_Proceeds(t *testing.T) {
 
 // TestConductor_Tick_HumanRequiredTier_HeldNotMerged proves a high-tier task whose
 // independent gate PASSES is NOT auto-merged when a human-required governance policy
-// is injected: no merge call, the task is held (blocked) awaiting a human, the held
-// outcome + structured hold reason are surfaced, and an intervention-needed event is
-// emitted. The base never gets a [task:<id>] trailer for a held task.
+// is injected: no merge call, the task is parked in awaiting-approval (NOT blocked)
+// with its VERIFIED branch preserved on Task.Branch, the held outcome + structured
+// hold reason are surfaced, and an intervention-needed event is emitted. The base
+// never gets a [task:<id>] trailer for a held task.
 func TestConductor_Tick_HumanRequiredTier_HeldNotMerged(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, engine.Verdict{Result: "pass"}, nil, "pass", nil)
@@ -521,8 +522,12 @@ func TestConductor_Tick_HumanRequiredTier_HeldNotMerged(t *testing.T) {
 	if h.verf.calls != 1 {
 		t.Fatalf("verify calls = %d, want 1 (gate runs before the hold)", h.verf.calls)
 	}
-	if got := h.task(t).Status; got != registry.StatusBlocked {
-		t.Fatalf("held task status = %q, want blocked (awaiting human)", got)
+	heldTask := h.task(t)
+	if heldTask.Status != StatusAwaitingApproval {
+		t.Fatalf("held task status = %q, want %q (awaiting human, not blocked)", heldTask.Status, StatusAwaitingApproval)
+	}
+	if heldTask.Branch == "" {
+		t.Fatalf("held task must record its verified branch for the later approve-merge; got empty")
 	}
 	if !em.hasKind(events.KindInterventionNeeded) {
 		t.Fatalf("held task must emit intervention-needed; got kinds %v", em.kinds())

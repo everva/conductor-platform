@@ -76,9 +76,22 @@ const (
 	// OutcomeHeld means develop+verify passed but the governance policy requires a
 	// HUMAN approval for the task's risk tier (ADR-0003): the green gate is
 	// necessary but not sufficient, so the conductor did NOT merge. The task is
-	// held awaiting-human (blocked + HoldReason) and an intervention-needed event
-	// is emitted. No [task:<id>] trailer lands on the base for a held task.
+	// parked in the awaiting-approval status with its VERIFIED per-task branch
+	// recorded (preserved for a later merge), and an intervention-needed event is
+	// emitted. No [task:<id>] trailer lands on the base for a held task.
 	OutcomeHeld Outcome = "held"
+	// OutcomeApprovedMerged means an operator APPROVED a previously-held task
+	// (governance N-10, Faz-1.5-b) and this tick merged the PRESERVED verified
+	// branch WITHOUT re-developing: it re-attached the held task's verified branch,
+	// re-ran the cheap verify gate for base-drift safety, and squash-merged on a
+	// pass. The [task:<id>] trailer lands and the task is done. No develop ran.
+	OutcomeApprovedMerged Outcome = "approved-merged"
+	// OutcomeApprovedRejected means an operator approved a held task but the cheap
+	// re-verify of the preserved branch FAILED (the base drifted so the verified
+	// work no longer passes the gate): the conductor honestly did NOT merge and
+	// blocked the task instead of fake-greening it. The approval is cleared so a
+	// re-approval after a fix is a fresh decision.
+	OutcomeApprovedRejected Outcome = "approved-rejected"
 )
 
 // TickResult is the structured result of a single tick.
@@ -194,6 +207,34 @@ type Aborter interface {
 	ClearAbort(ctx context.Context, taskID string) error
 }
 
+// Approver is the OPTIONAL governance human-hold APPROVE seam (ADR-0003, N-10,
+// Faz-1.5-b). BEFORE PickReady, the tick consults it to learn whether the project
+// has an APPROVED task that was previously HELD awaiting a human (a T3/T4 task whose
+// gate passed). When one exists, the tick merges its PRESERVED verified branch
+// WITHOUT re-developing instead of picking new work. It is narrowed to
+// PendingApproval so the durable, cross-process approval check is the ONLY thing the
+// tick depends on; the operator-side RequestApprove lives behind the same store-
+// backed seam (StoreApprover) in conductorctl. The field is OPTIONAL on Deps — a nil
+// Approver means no approve-merge step runs (the pre-Faz-1.5-b behavior), so existing
+// wiring and tests are unaffected.
+type Approver interface {
+	// PendingApproval reports the project's approved-and-held task ready to merge,
+	// if any: the task and true when one exists, the zero task and false otherwise.
+	PendingApproval(ctx context.Context, projectID string) (statestore.Task, bool, error)
+}
+
+// ReAttacher is the OPTIONAL provisioner capability the approve-merge step needs
+// (Faz-1.5-b): re-attach a worktree to an EXISTING preserved branch (the held task's
+// verified branch) rather than cutting a fresh one from base. The conductor type-
+// asserts its Workspacer for this at approve time; a provisioner that does not
+// implement it makes an approval surface a clear error rather than silently re-
+// cutting (which would discard the verified work). *provisioner.Provisioner
+// satisfies it via WorkspaceForBranch. It is kept SEPARATE from Workspacer so the
+// frozen Workspacer seam is unchanged (additive).
+type ReAttacher interface {
+	WorkspaceForBranch(ctx context.Context, project statestore.Project, task statestore.Task, branch string) (engine.Workspace, error)
+}
+
 // Recipe carries the per-project gate/holdout binding the tick hands to the
 // verifier (ADR-0009). It is injected, not a global.
 type Recipe struct {
@@ -218,6 +259,7 @@ type Conductor struct {
 	policy   Policy
 	pauser   Pauser
 	aborter  Aborter
+	approver Approver
 	// abortPoll is how often the running-develop watcher polls the abort signal.
 	// Zero means the default (defaultAbortPoll); it is overridable so tests can
 	// drive the watcher deterministically without a wall-clock dependency.
@@ -274,6 +316,14 @@ type Deps struct {
 	// construction backward compatible — the daemon opts in by injecting a
 	// store-backed aborter.
 	Aborter Aborter
+	// Approver is the OPTIONAL governance human-hold APPROVE seam (ADR-0003, N-10,
+	// Faz-1.5-b). When set, the tick consults it BEFORE PickReady and, on an approved
+	// held task, MERGES its preserved verified branch without re-developing. A nil
+	// Approver means no approve-merge step runs (the pre-Faz-1.5-b behavior), keeping
+	// construction backward compatible — the daemon opts in by injecting a store-
+	// backed approver that reads the SHARED store so an approval set by a separate
+	// conductorctl process is honored.
+	Approver Approver
 	// AbortPoll overrides the running-develop watcher's poll interval. Zero selects
 	// the default (defaultAbortPoll). It exists so a test can drive the watcher
 	// deterministically (a tiny interval) without depending on wall-clock timing.
@@ -316,6 +366,7 @@ func New(d Deps) (*Conductor, error) {
 		policy:    d.Policy,
 		pauser:    d.Pauser,
 		aborter:   d.Aborter,
+		approver:  d.Approver,
 		abortPoll: d.AbortPoll,
 	}, nil
 }
@@ -376,6 +427,30 @@ func (c *Conductor) Tick(ctx context.Context, projectID string) (TickResult, err
 		}
 		if paused {
 			return TickResult{Outcome: OutcomePaused}, nil
+		}
+	}
+
+	// Governance human-hold APPROVE step (ADR-0003, N-10, Faz-1.5-b): BEFORE picking
+	// new work, check whether an operator APPROVED a previously-HELD task. Such a
+	// task's develop+verify already PASSED and its verified branch was PRESERVED; the
+	// approval merges THAT work WITHOUT re-developing. It is taken before PickReady so
+	// the approved merge lands before any new develop, and because the held task is
+	// parked in awaiting-approval (not ready) PickReady would never surface it anyway.
+	// A nil Approver skips this entirely (pre-Faz-1.5-b behavior). It acquires the
+	// repo lease (the merge mutates the clone) and releases it in a defer, mirroring
+	// the normal task path.
+	if c.approver != nil {
+		held, ok, aerr := c.approver.PendingApproval(ctx, projectID)
+		if aerr != nil {
+			return TickResult{}, fmt.Errorf("conductor: tick: pending-approval check for %q: %w", projectID, aerr)
+		}
+		if ok {
+			lease := statestore.Lease{ProjectID: projectID, HostID: c.hostID, TaskID: held.ID}
+			if err := c.picker.AcquireLease(ctx, lease); err != nil {
+				return TickResult{}, fmt.Errorf("conductor: tick: acquire lease for approve-merge %q: %w", projectID, err)
+			}
+			defer func() { _ = c.picker.ReleaseLease(context.WithoutCancel(ctx), projectID) }()
+			return c.mergeApproved(ctx, project, held)
 		}
 	}
 
@@ -478,7 +553,7 @@ func (c *Conductor) runTask(ctx context.Context, project statestore.Project, tas
 	// auto-merging. A nil policy means auto-merge-all (pre-N-10 behavior).
 	if c.policy != nil {
 		if dec := c.policy.MergeMode(task); dec.HumanRequired() {
-			return c.handleHumanRequired(ctx, task, verdict, review, dec)
+			return c.handleHumanRequired(ctx, task, ws, verdict, review, dec)
 		}
 	}
 
@@ -687,19 +762,26 @@ func (c *Conductor) handleChangesRequested(ctx context.Context, task statestore.
 // gate PASSED, but the task's risk tier (T3/T4 by the default policy) requires a
 // HUMAN approval before the merge may land. The conductor therefore does NOT merge
 // — no SquashMerge call, so the base branch gets NO [task:<id>] trailer for this
-// task — and instead HOLDS the task awaiting a human.
+// task — and instead HOLDS the task awaiting a human, PRESERVING the verified work so
+// an approval can later merge it WITHOUT re-developing (Faz-1.5-b).
 //
-// The hold reuses the existing blocked status (no new frozen status field): a held
-// task is, like a retry-capped or failed task, one a human must act on before it
-// proceeds (registry doc: "failed and is awaiting retry/recovery"). The distinction
-// is carried out-of-band by the OutcomeHeld + HoldReason on the TickResult and by
-// the emitted intervention-needed event (ADR-0011 human-gate), which name the
-// awaiting-human cause explicitly so a UI surfaces "müdahale gerek" rather than a
-// generic failure.
-func (c *Conductor) handleHumanRequired(ctx context.Context, task statestore.Task, verdict engine.Verdict, review engine.ReviewResult, dec governance.Decision) (TickResult, error) {
+// What "preserve" means concretely (the crux of the approve flow):
+//   - the task is parked in the DISTINCT, durable StatusAwaitingApproval status
+//     (NOT blocked): unambiguously an awaiting-human state, and one PickReady never
+//     re-develops (it picks only todo/ready);
+//   - the VERIFIED per-task branch (ws.Branch) is recorded on Task.Branch so the
+//     later approve-merge knows exactly which branch to re-attach;
+//   - the branch ref itself survives: the worktree Cleanup defer removes only the
+//     worktree, never the branch ref in the clone, so the verified commit persists
+//     until the approve-merge re-attaches it.
+//
+// The awaiting-human cause is also carried by OutcomeHeld + HoldReason on the
+// TickResult and by the emitted intervention-needed event (ADR-0011 human-gate), so a
+// UI surfaces "onay bekliyor" rather than a generic failure.
+func (c *Conductor) handleHumanRequired(ctx context.Context, task statestore.Task, ws engine.Workspace, verdict engine.Verdict, review engine.ReviewResult, dec governance.Decision) (TickResult, error) {
 	c.emit(ctx, task, events.PhaseReview, events.KindInterventionNeeded,
-		map[string]any{"reason": "human approval required", "tier": dec.Tier, "policy_reason": string(dec.Reason)})
-	if err := c.markBlocked(ctx, task); err != nil {
+		map[string]any{"reason": "human approval required", "tier": dec.Tier, "policy_reason": string(dec.Reason), "verified_branch": ws.Branch})
+	if err := c.holdForApproval(ctx, task, ws.Branch); err != nil {
 		return TickResult{}, fmt.Errorf("conductor: tick: hold for human %q: %w", task.ID, err)
 	}
 	return TickResult{
@@ -709,6 +791,132 @@ func (c *Conductor) handleHumanRequired(ctx context.Context, task statestore.Tas
 		Review:     review,
 		HoldReason: dec.Reason,
 	}, nil
+}
+
+// holdForApproval parks the verified task in StatusAwaitingApproval and records the
+// VERIFIED per-task branch on Task.Branch so the later approve-merge can re-attach
+// exactly that branch (no re-develop). It re-reads to avoid clobbering concurrent
+// store updates and leaves every other field intact. Approved is reset to false so a
+// re-held task (re-develop then re-hold after a prior cleared approval) does not
+// auto-merge on a stale approval.
+func (c *Conductor) holdForApproval(ctx context.Context, task statestore.Task, branch string) error {
+	cur, err := c.store.GetTask(ctx, task.ID)
+	if err != nil {
+		return fmt.Errorf("get task %q: %w", task.ID, err)
+	}
+	cur.Status = StatusAwaitingApproval
+	cur.Branch = branch
+	cur.Approved = false
+	if err := c.store.UpdateTask(ctx, cur); err != nil {
+		return fmt.Errorf("update task %q: %w", task.ID, err)
+	}
+	return nil
+}
+
+// mergeApproved lands an operator-APPROVED held task by merging its PRESERVED
+// verified branch WITHOUT re-developing (Faz-1.5-b, the approve flow's whole point).
+//
+// Chosen semantics: RE-VERIFY-THEN-MERGE (recommended over merge-directly). The
+// verified branch may have been held for an arbitrarily long time, during which the
+// base could have drifted (other tasks merged), so the conductor re-attaches the
+// preserved branch and re-runs the CHEAP deterministic verify gate over it before
+// merging. This guards Rule#9 (never fake-green): if the base drifted enough to break
+// the gate, the merge is honestly refused and the task blocked, rather than merging
+// stale work that no longer passes. Re-verify is cheap relative to re-develop and,
+// critically, it does NOT re-roll the LLM — the human approves the work they saw, not
+// a fresh roll. Develop NEVER runs here.
+//
+// Re-attach uses the ReAttacher capability (WorkspaceForBranch); a provisioner
+// lacking it makes the approval a clear error rather than a silent re-cut-from-base
+// (which would discard the verified work). The worktree is cleaned in a defer; the
+// branch ref persists in the clone regardless, so a blocked re-verify leaves the work
+// recoverable.
+func (c *Conductor) mergeApproved(ctx context.Context, project statestore.Project, task statestore.Task) (res TickResult, err error) {
+	reattacher, ok := c.prov.(ReAttacher)
+	if !ok {
+		return TickResult{}, fmt.Errorf("conductor: tick: approve-merge %q: provisioner cannot re-attach a preserved branch", task.ID)
+	}
+	if task.Branch == "" {
+		return TickResult{}, fmt.Errorf("conductor: tick: approve-merge %q: no preserved verified branch recorded", task.ID)
+	}
+
+	ws, err := reattacher.WorkspaceForBranch(ctx, project, task, task.Branch)
+	if err != nil {
+		return TickResult{}, fmt.Errorf("conductor: tick: approve-merge re-attach %q: %w", task.ID, err)
+	}
+	defer func() {
+		_ = c.prov.Cleanup(context.WithoutCancel(ctx), ws)
+	}()
+
+	c.emit(ctx, task, events.PhaseReview, events.KindDecision,
+		map[string]any{"result": "approved", "verified_branch": task.Branch})
+
+	// Cheap re-verify for base drift (re-verify-then-merge): NO develop. The merge
+	// rides on THIS independent result, never a self-report (Rule#9). The held
+	// task's verdict was already green; we pass a minimal verdict carrying the branch.
+	holdoutRef := c.resolveHoldoutRef(ctx, task)
+	c.emit(ctx, task, events.PhaseVerify, events.KindStarted, map[string]any{"reason": "re-verify approved work for base drift"})
+	review, _, verErr := c.verifier.Verify(ctx, engine.Verdict{Branch: ws.Branch}, ws, c.recipe.Gates, holdoutRef)
+	if verErr != nil || review.Result != reviewPass {
+		// Base drifted (or verify could not run): honestly refuse the merge and block.
+		// Clear Approved so a re-approval after a fix is a fresh decision, not a stale
+		// auto-merge.
+		c.emit(ctx, task, events.PhaseReview, events.KindInterventionNeeded,
+			map[string]any{"reason": "approved work failed re-verify (base drift); not merged", "review": review.Result})
+		if blockErr := c.blockApprovedReject(ctx, task); blockErr != nil {
+			return TickResult{}, fmt.Errorf("conductor: tick: approve-merge re-verify failed and block failed: %w", errors.Join(verErr, blockErr))
+		}
+		return TickResult{Outcome: OutcomeApprovedRejected, TaskID: task.ID, Review: review}, nil
+	}
+
+	// Re-verify passed: squash-merge the PRESERVED verified branch with the
+	// [task:<id>] trailer and mark done. NO develop ran.
+	sha, mErr := c.merger.SquashMerge(ctx, project, task, ws)
+	if mErr != nil {
+		if blockErr := c.blockApprovedReject(ctx, task); blockErr != nil {
+			return TickResult{}, fmt.Errorf("conductor: tick: approve-merge failed and block failed: %w", errors.Join(mErr, blockErr))
+		}
+		return TickResult{Outcome: OutcomeBlocked, TaskID: task.ID, Review: review},
+			fmt.Errorf("conductor: tick: approve squash-merge %q: %w", task.ID, mErr)
+	}
+	if err := c.markDoneClearApproval(ctx, task); err != nil {
+		return TickResult{}, fmt.Errorf("conductor: tick: approve-merge mark done %q: %w", task.ID, err)
+	}
+	c.emit(ctx, task, events.PhaseMerge, events.KindMerge, map[string]any{"merge_sha": sha, "approved": true})
+	return TickResult{Outcome: OutcomeApprovedMerged, TaskID: task.ID, Review: review, MergeSHA: sha}, nil
+}
+
+// blockApprovedReject blocks a task whose approved work failed re-verify/merge and
+// clears its Approved flag so a re-approval after a fix is a fresh decision rather
+// than an immediate stale auto-merge. It re-reads to avoid clobbering concurrent
+// updates.
+func (c *Conductor) blockApprovedReject(ctx context.Context, task statestore.Task) error {
+	cur, err := c.store.GetTask(ctx, task.ID)
+	if err != nil {
+		return fmt.Errorf("get task %q: %w", task.ID, err)
+	}
+	cur.Status = statusBlocked
+	cur.Approved = false
+	if err := c.store.UpdateTask(ctx, cur); err != nil {
+		return fmt.Errorf("update task %q: %w", task.ID, err)
+	}
+	return nil
+}
+
+// markDoneClearApproval marks the merged-on-approval task done and clears its
+// Approved flag, so the terminal record carries no dangling approval signal. It
+// re-reads to persist over the current store record.
+func (c *Conductor) markDoneClearApproval(ctx context.Context, task statestore.Task) error {
+	cur, err := c.store.GetTask(ctx, task.ID)
+	if err != nil {
+		return fmt.Errorf("get task %q: %w", task.ID, err)
+	}
+	cur.Status = statusDone
+	cur.Approved = false
+	if err := c.store.UpdateTask(ctx, cur); err != nil {
+		return fmt.Errorf("update task %q: %w", task.ID, err)
+	}
+	return nil
 }
 
 // markDone re-reads the task and sets it done (ADR-0004 terminal state). It

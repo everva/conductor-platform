@@ -550,6 +550,11 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		// so `conductorctl abort` in a separate process cancels this daemon's in-flight
 		// develop (killing the performer process group) and reverts the task to ready.
 		Aborter: conductor.NewStoreAborter(store),
+		// Governance human-hold APPROVE resolver (ADR-0003, N-10, Faz-1.5-b): read the
+		// durable per-task approval off the SAME store conductorctl writes it to, so
+		// `conductorctl approve` in a separate process makes this daemon's next tick
+		// MERGE the held task's PRESERVED verified branch without re-developing.
+		Approver: conductor.NewStoreApprover(store),
 	})
 	if err != nil {
 		closer()

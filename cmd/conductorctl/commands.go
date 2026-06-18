@@ -194,6 +194,26 @@ func (a *app) abort(ctx context.Context, projectID string) (string, error) {
 	return taskID, nil
 }
 
+// approve marks a HELD task APPROVED so the daemon's next tick merges its preserved
+// verified work WITHOUT re-developing (governance N-10 human-hold, Faz-1.5-b). It
+// resolves WHICH task: with a non-empty taskID it approves that specific task (after
+// validating it is awaiting-approval); with an empty taskID it auto-resolves the
+// project's UNIQUE awaiting-approval task (the common case), erroring clearly when
+// zero or many are held. It goes straight through the SHARED store (the source of
+// truth the daemon also reads) so a -dsn shared Postgres makes the approval
+// cross-process, mirroring abort. It returns the approved task id so the caller can
+// report exactly what it approved.
+func (a *app) approve(ctx context.Context, projectID, taskID string) (string, error) {
+	if projectID == "" {
+		return "", errors.New("approve: project is required")
+	}
+	id, err := conductor.NewStoreApprover(a.store).RequestApprove(ctx, projectID, taskID)
+	if err != nil {
+		return "", fmt.Errorf("approve: %w", err)
+	}
+	return id, nil
+}
+
 // joinDeps renders a dep list compactly for the table.
 func joinDeps(deps []string) string {
 	out := ""

@@ -80,6 +80,17 @@ type Task struct {
 	// not immediately re-aborted. It defaults to false and is an ADDITIVE field on
 	// the otherwise-frozen contract (ADR-0021: additive growth, no signature break).
 	AbortRequested bool
+	// Approved is the durable operator APPROVAL signal for a task HELD awaiting a
+	// human after a green gate (governance N-10, T3/T4; Faz-1.5-b). When the
+	// governance policy holds a verified task, the conductor parks it in the
+	// awaiting-approval status with its verified per-task Branch recorded; an
+	// operator then sets Approved=true via `conductorctl approve` (persisted on the
+	// SHARED store). A later tick sees the approved+held task, RE-ATTACHES the
+	// preserved verified branch (no re-develop), OPTIONALLY re-verifies for base
+	// drift, and squash-merges it. The conductor clears it as the task lands. It
+	// defaults to false and is an ADDITIVE field on the otherwise-frozen contract
+	// (ADR-0021: additive growth, no signature break).
+	Approved bool
 }
 
 // Lease is the repo-scoped, host-spanning exclusivity record enforcing

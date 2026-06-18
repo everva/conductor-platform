@@ -139,6 +139,8 @@ func run(ctx context.Context, a *app, argv []string, stderr io.Writer) int {
 		return runPauseResume(ctx, a, rest, stderr, true)
 	case "abort":
 		return runAbort(ctx, a, rest, stderr)
+	case "approve":
+		return runApprove(ctx, a, rest, stderr)
 	case "-h", "--help", "help":
 		_, _ = fmt.Fprint(a.out, usage())
 		return 0
@@ -298,6 +300,43 @@ func runAbort(ctx context.Context, a *app, args []string, stderr io.Writer) int 
 	return 0
 }
 
+// runApprove parses the approve flags and marks a HELD task approved so the daemon
+// merges its preserved verified work without re-developing (governance N-10 human-
+// hold, Faz-1.5-b). It mirrors abort UX: --project is required, --task is optional
+// (auto-resolves the unique awaiting-approval task when omitted), and it points at
+// the SAME store the daemon reads (-dsn shared Postgres) so the approval is cross-
+// process. "Nothing to approve" and "ambiguous" are reported as clear messages with
+// distinct exits — ErrNothingToApprove is a benign exit 0 (nothing was held), while
+// ambiguity is an exit 1 prompting the operator to disambiguate with --task.
+func runApprove(ctx context.Context, a *app, args []string, stderr io.Writer) int {
+	fs := flag.NewFlagSet("approve", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	project := fs.String("project", "", "project id whose held task to approve")
+	task := fs.String("task", "", "specific held task id to approve (optional; auto-resolves the unique awaiting-approval task when omitted)")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: conductorctl approve --project <id> [--task <id>]")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *project == "" {
+		fs.Usage()
+		return 2
+	}
+	taskID, err := a.approve(ctx, *project, *task)
+	if err != nil {
+		if errors.Is(err, conductor.ErrNothingToApprove) {
+			_, _ = fmt.Fprintf(a.out, "nothing to approve: no task awaiting approval for %s\n", *project)
+			return 0
+		}
+		_, _ = fmt.Fprintf(stderr, "conductorctl: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintf(a.out, "approved %s (task %s); the daemon will merge its verified work without re-developing\n", *project, taskID)
+	return 0
+}
+
 // usage is the top-level help text listing the subcommands.
 func usage() string {
 	var b strings.Builder
@@ -313,6 +352,7 @@ func usage() string {
 	b.WriteString("  pause             pause a project's loop (--project)\n")
 	b.WriteString("  resume            resume a project's loop (--project)\n")
 	b.WriteString("  abort             abort the project's running task (--project)\n")
+	b.WriteString("  approve           approve a held task so its verified work merges (--project [--task])\n")
 	return b.String()
 }
 

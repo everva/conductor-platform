@@ -359,6 +359,49 @@ func TestConductorctl_Abort_NothingRunning(t *testing.T) {
 	}
 }
 
+// TestConductorctl_Approve_MarksHeldTask proves `conductorctl approve` flips the
+// durable Approved flag on the project's awaiting-approval task through the SHARED
+// store (what the daemon's approve-merge resolver reads), auto-resolving the unique
+// held task when --task is omitted.
+func TestConductorctl_Approve_MarksHeldTask(t *testing.T) {
+	ctx := context.Background()
+	a, store, _, _ := newApp(t)
+	if err := store.CreateProject(ctx, statestore.Project{ID: "proj", Repo: "owner/repo", BaseBranch: "develop"}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	if err := store.CreateTask(ctx, statestore.Task{ID: "HELD-1", ProjectID: "proj", Status: conductor.StatusAwaitingApproval, Branch: "conductor/proj/HELD-1"}); err != nil {
+		t.Fatalf("seed held task: %v", err)
+	}
+
+	taskID, err := a.approve(ctx, "proj", "")
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if taskID != "HELD-1" {
+		t.Fatalf("approve resolved task = %q, want HELD-1", taskID)
+	}
+	task, err := store.GetTask(ctx, "HELD-1")
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if !task.Approved {
+		t.Fatalf("approve must set Approved on the held task, got %+v", task)
+	}
+}
+
+// TestConductorctl_Approve_NothingToApprove proves approving a project with no held
+// task surfaces ErrNothingToApprove (the benign "nothing to approve" path).
+func TestConductorctl_Approve_NothingToApprove(t *testing.T) {
+	ctx := context.Background()
+	a, store, _, _ := newApp(t)
+	if err := store.CreateProject(ctx, statestore.Project{ID: "proj", Repo: "owner/repo", BaseBranch: "develop"}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	if _, err := a.approve(ctx, "proj", ""); !errors.Is(err, conductor.ErrNothingToApprove) {
+		t.Fatalf("approve with nothing held: err = %v, want ErrNothingToApprove", err)
+	}
+}
+
 // --- dispatcher / exit-code tests -------------------------------------------
 
 func TestRun_UnknownSubcommand_NonZero(t *testing.T) {
