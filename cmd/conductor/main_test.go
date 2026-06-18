@@ -457,7 +457,11 @@ func TestParseConfig_CheckMode(t *testing.T) {
 func TestRunCheck_ExitCodes(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "hb.json")
-	at := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	// Stamp the FRESH heartbeat at the current wall-clock (not a fixed calendar
+	// instant) so its age is genuinely small at test time. A previously-hardcoded
+	// past date made this case time-dependent — it silently flipped to STALE once
+	// real time advanced past the threshold beyond that fixed stamp.
+	at := time.Now().UTC()
 
 	// MISSING: no file yet -> exit 2.
 	missingCfg := config{check: true, heartbeatPath: path, heartbeatStale: time.Minute}
