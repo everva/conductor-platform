@@ -107,5 +107,14 @@ Gateway (3A) olduğu gibi reuse; web bileşenleri (3B) fork panellerine (webview
   (gateway POST → conductorctl AYRI süreç + bağımsız `psql` ile store-mutasyonu doğrulandı: onboard→görüldü,
   intake→GW-1 task, pause→`paused=true`, resume→`false`, 409/401/404 error-kodları, secret-leak=0) → ALL PASS.
   ADR-0025 "store-yansıma kontrol, daemon'a doğrudan-komut yok" cross-process kanıtlandı.
-- **DALGA 3A ilerleme:** 3A-0 ✅, 3A-1 ✅, 3A-2 ✅, 3A-3 ✅ — kalan yalnız **3A-4** (paketleme: Dockerfile + k8s).
-- Sıradaki: **3A-4** (gateway paketleme: Dockerfile multi-binary + deploy/k8s Deployment/Service/Ingress; non-root; secret=token+DSN; dry-run valid).
+- ✅ **3A-4 — Gateway paketleme** (2026-06-18, commit `4af9d2b`): Dockerfile'a 3. binary `conductor-api`
+  (aynı imaj, daemon değişmedi) + `deploy/k8s/` gateway manifests — api-deployment (`command:["conductor-api"]`
+  override, **readOnlyRootFilesystem=true** çünkü gateway git/disk yazmaz, RollingUpdate, non-root, drop-ALL),
+  api-service (ClusterIP :8080), api-ingress (WS-uyumlu proxy-timeout, TLS-zorunlu notu, placeholder host),
+  secret'e `CONDUCTOR_API_TOKEN`, configmap'e `CONDUCTOR_API_ADDR`, kustomization'a 3 kaynak. Doğrulama (kendi
+  işim, doğrudan): `kustomize build`=13 obje, `kubectl --dry-run=client`=tüm objeler valid (3 yeni gateway dahil),
+  **`docker build`** başarılı, image'da conductor-api çalışıyor + empty-token reddi + 3 binary PATH'te. → ALL PASS.
+- ✅✅ **DALGA 3A — API GATEWAY TAMAM** (3A-0 karar · 3A-1 read · 3A-2 live-events · 3A-3 control · 3A-4 paketleme).
+  Frontend-agnostik HTTP/WS gateway hazır + canlı real-PG cross-process kanıtlı + paketli. Fork köprüsü ayakta.
+- Sıradaki: **DALGA 3B** — web cockpit. İlk iş **3B-0** (KARAR ADR-0026: React+Vite+TS stack + N-9 TS event tipleri
+  + token auth/session + frontend gate tsc/eslint/vitest/playwright + `.conductor` web reçetesi) → sonra 3B-1 dashboard.
