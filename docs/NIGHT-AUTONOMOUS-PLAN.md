@@ -96,9 +96,9 @@ Postgres-backed daemon (cmd/conductor) + operatör CLI (cmd/conductorctl, payla�
 - ✅ **F-2: Abort** (2cd334f, push'lu, ADR-0020/0021). `Task.AbortRequested` (additive) + migration 00004; `conductorctl abort --project` lease'ten çalışan task'ı çözer→flag; daemon develop'i child-ctx'te sarar + watcher (1s poll) abort'ta ctx-cancel→`exec.CommandContext`+Setpgid performer process-group'unu öldürür→task **ready**'e geri (re-runnable), flag temizlenir, verify/merge YOK. `Aborter` seam (nil=watcher yok). engine.go untouched, statestore additive. **Bağımsız doğrulandı:** gate+e2e+`-race` temiz, 7 abort testi PASS, **gerçek repo+PG+binary'lerle uçtan-uca**: onboard→intake→pick(todo)→clone+worktree→lease→develop(sleep) ÇALIŞIYOR → abort → outcome=aborted, task ready'e döndü, merge yok.
 - 🎁 **BONUS:** F-2 demo'su tam operatör-pipeline'ı gerçek git+PG+binary ile kanıtladı (onboard→intake→pick→provision→lease→develop). Kullanıcı kararları (F-1+F-2) TAMAM.
 
-### KALAN (sonraki)
-3. **Builder tick-bug kök-çözümü** — gece-otonom RİSKLİ → gündüz temiz ortam.
-4. (Opsiyonel) gerçek `claude -p` performer ile TAM tick (develop→verify→merge yeşil-yol) — pipeline F-2'de sleep-performer ile kanıtlandı; tek eksik canlı claude verdict→merge.
+### SIRADAKİ PLAN (kullanıcı onayı 2026-06-18): önce A, sonra B
+- **İş A — Canlı `claude -p` yeşil-yol tick** (🔄 ŞİMDİ). Onaylı kapsam: (1) gerçek Go modülü + failing test (gerçek gate), (2) görünür test + **gizli holdout** (ADR-0018 canlı), (3) **pozitif + negatif** (yeşil→squash-merge; bozuk/holdout-kıran→blocked, sahte-yeşil engeli canlı), (4) birkaç koşum OK (prompt iterasyonu). Local throwaway git repo + local docker PG + gerçek claude -p (N-6 auth yaklaşımı). DİKKAT: CommandEngine'in develop_cmd'e task'ı nasıl ilettiğini (stdin/argv, ADR-0014) okuyup develop-cmd+prompt'u doğru kur. Orchestrator (ben) sonucu BAĞIMSIZ doğrular: develop'ta gerçek [task:id] merge commit + done; negatifte blocked.
+- **İş B — Builder tick-bug kök-çözümü** (A'dan sonra). İzole/temiz ortam + enstrümantasyon + hipotez-daraltma (launchd throttle / reconcile-kill / SIGKILL / reparent) + 20dk+ stabil tick kanıtı. Risk yüksek.
 
 ## FOLLOW-UP (kullanıcı kararı / risk → sabah)
 - Abort (in-flight iptal): kalıcı aborting sinyali + tick ctx-honor (ADR-0020 follow-up).
