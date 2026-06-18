@@ -74,4 +74,13 @@ Gateway (3A) olduğu gibi reuse; web bileşenleri (3B) fork panellerine (webview
 - ✅ **3A-0 — ADR-0025 API gateway kararı** (2026-06-18): ayrı `cmd/conductor-api` servisi; read+control; daemon
   DEĞİŞMEZ; veri paylaşılan store/bus; kontrol mevcut conductor seam reuse (store-yansıması, daemon'a doğrudan
   komut YOK); REST+WS, bearer-auth; frontend-agnostik (fork köprüsü). Frozen kontratlara etki: yok (salt tüketim).
-- Sıradaki: **3A-1** (Read API: `GET /projects`,`/projects/{id}/tasks`,`/hosts`,`/status`,`/events`; bearer-auth; tipli JSON).
+- ✅ **3A-1 — Read API (REST)** (2026-06-18, commit `5f3daf7`): yeni ayrı `cmd/conductor-api` servisi —
+  `GET /projects`, `/projects/{id}/tasks` (404 unknown), `/hosts` (caps+heartbeat-yaşı), `/status` (filo
+  aggregate: projects/hosts/leases), `/healthz`, `/readyz`; bearer-token auth (env-only `CONDUCTOR_API_TOKEN`,
+  constant-time, empty→başlamayı reddet); saf-okuma frozen StateStore üzerinden (sıfır ekleme). **Kapsam notu:**
+  `/events?since=` historical REST 3A-1'den ÇIKARILDI → EventBus'ta geçmiş-sorgu seam'i yok; doğal yeri 3A-2
+  (live events), orada additive bir event-reader seam'iyle birlikte gelecek (sessiz düşürme değil, bilinçli sıra).
+  Bağımsız doğrulama (Rule#9): frozen dokunulmadı + gate (build/vet/golangci-0/fresh-race) + **canlı cross-process**
+  (conductorctl→docker-PG yazdı, conductor-api aynı DSN'den gerçek veri okudu) + auth(401/200) + empty-token-refuse
+  + secret-leak=0, hepsi kanıtlandı.
+- Sıradaki: **3A-2** (Live events WebSocket `/ws` + additive event-history reader seam → `/events?project=&since=` REST).
