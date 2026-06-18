@@ -106,20 +106,14 @@ jobs:
       - name: Build
         run: npm run build
 
-      # Playwright browser-e2e is BEST-EFFORT on the self-hosted runner (it is NOT
-      # the deterministic gate — tsc/eslint/vitest/build above are, and they block).
-      # The chromium browser binary installs into the runner user's cache (no root).
-      # Launching it needs system libraries (libnss3, libgbm, …). We do NOT run
-      # `apt`/sudo from CI (no sudo password in CI; it also breaks log masking and is
-      # fragile across runner distros). Instead, install those libs ONCE on the
-      # runner as a one-time admin task:  sudo npx playwright install-deps chromium
-      # Until then these two steps may fail to launch the browser; continue-on-error
-      # keeps that from reding the gate. Flip continue-on-error to false once the
-      # runner has the libs to make the e2e blocking.
+      # Playwright browser-e2e is a BLOCKING gate (sweep S-2): org-runner-1 has the
+      # browser system libraries and the e2e passes there, so it is enforced. The
+      # chromium binary installs into the runner user's cache (no root needed). We do
+      # NOT run apt/sudo from CI; if a runner ever lacks the system libs, install them
+      # ONCE as an admin task — `sudo npx playwright install-deps chromium` — rather
+      # than weakening this gate.
       - name: Install Playwright browser (chromium)
-        continue-on-error: true
         run: npx playwright install chromium
 
-      - name: E2E (Playwright, best-effort)
-        continue-on-error: true
+      - name: E2E (Playwright)
         run: npm run e2e
