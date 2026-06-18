@@ -127,6 +127,8 @@ func TestRun_ContextAlreadyCancelled(t *testing.T) {
 // Faz-1a constraint checks.
 func TestParseConfig(t *testing.T) {
 	t.Run("happy path with flags", func(t *testing.T) {
+		// Isolate the default-asserting field (baseBranch) from ambient daemon env.
+		t.Setenv("CONDUCTOR_BASE_BRANCH", "")
 		cfg, err := parseConfig([]string{
 			"-project", "p1", "-root", "/tmp/r", "-once",
 			"-develop-cmd", "claude -p --foo",
@@ -164,6 +166,11 @@ func TestParseConfig(t *testing.T) {
 	})
 
 	t.Run("dsn defaults empty (in-memory)", func(t *testing.T) {
+		// Isolate from ambient daemon env: a CONDUCTOR_DSN in the caller's
+		// environment (e.g. when the platform's own suite runs under a daemon-set
+		// env, or under the sanitized verify gate) must not flip this default
+		// assertion. t.Setenv("","") forces the empty-default branch deterministically.
+		t.Setenv("CONDUCTOR_DSN", "")
 		cfg, err := parseConfig([]string{"-project", "p1", "-root", "/tmp/r"}, io.Discard)
 		if err != nil {
 			t.Fatalf("parseConfig: %v", err)
@@ -239,6 +246,7 @@ func TestParseConfig(t *testing.T) {
 // flag wins over the env.
 func TestParseConfig_HTTPAddr(t *testing.T) {
 	t.Run("defaults empty (disabled)", func(t *testing.T) {
+		t.Setenv("CONDUCTOR_HTTP_ADDR", "") // isolate from ambient daemon env.
 		cfg, err := parseConfig([]string{"-project", "p1", "-root", "/tmp/r"}, io.Discard)
 		if err != nil {
 			t.Fatalf("parseConfig: %v", err)
@@ -308,6 +316,7 @@ func TestDaemon_HTTPDisabledByDefault(t *testing.T) {
 // CONDUCTOR_GOVERNANCE env fallback with the flag winning over env.
 func TestParseConfig_Governance(t *testing.T) {
 	t.Run("defaults true", func(t *testing.T) {
+		t.Setenv("CONDUCTOR_GOVERNANCE", "") // isolate from ambient daemon env.
 		cfg, err := parseConfig([]string{"-project", "p1", "-root", "/tmp/r"}, io.Discard)
 		if err != nil {
 			t.Fatalf("parseConfig: %v", err)

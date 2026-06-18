@@ -143,6 +143,7 @@ func runGate(ctx context.Context, dir string, g Gate) engine.Check {
 	}
 	cmd := exec.CommandContext(ctx, g.Argv[0], g.Argv[1:]...) //nolint:gosec // argv is the operator-supplied recipe gate.
 	cmd.Dir = dir
+	cmd.Env = sanitizedEnv()
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -223,6 +224,7 @@ func (v *Verifier) runHoldout(ctx context.Context, ws engine.Workspace, ref stri
 	}
 	cmd := exec.CommandContext(ctx, v.cfg.HoldoutCmd[0], v.cfg.HoldoutCmd[1:]...) //nolint:gosec // operator-supplied holdout runner.
 	cmd.Dir = vwt
+	cmd.Env = sanitizedEnv()
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -241,6 +243,27 @@ func nonRevealing(name, ref string) string {
 		return name
 	}
 	return ref
+}
+
+// sanitizedEnv returns the current process environment with every CONDUCTOR_*
+// variable removed. The verify gate runs `go build`/`go test`/etc. as
+// subprocesses over the GATED project; if the daemon's own config env (e.g.
+// CONDUCTOR_DSN) leaked into that project's process it could silently change the
+// project's behavior and break its OWN env-reading tests (a fake-red). We strip
+// only the daemon's `CONDUCTOR_`-prefixed config vars and keep everything else
+// (PATH, HOME, GOPATH, GOCACHE, …) so the toolchain still works. The daemon's env
+// is read once per gate command; it is not mutated.
+func sanitizedEnv() []string {
+	src := os.Environ()
+	out := make([]string, 0, len(src))
+	for _, kv := range src {
+		// Each entry is "KEY=VALUE"; strip those whose KEY starts with CONDUCTOR_.
+		if strings.HasPrefix(kv, "CONDUCTOR_") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // firstLine returns the first non-empty trimmed line of out, capped, as factual

@@ -189,3 +189,37 @@ func TestVerifier_DevelopWorktree_Unmutated(t *testing.T) {
 		t.Fatalf("develop worktree mutated by verify: head %s->%s status %q->%q", before, after, beforeStatus, afterStatus)
 	}
 }
+
+// TestRunGate_StripsConductorEnv proves the gate subprocess does NOT inherit the
+// daemon's own CONDUCTOR_* config env (FIX #2): a CONDUCTOR_DSN set in the parent
+// must be invisible to the gated project's commands, so it cannot leak into the
+// project's env-reading tests. The gate greps its env for CONDUCTOR_DSN and exits
+// non-zero (fails) if the variable is present; a passing gate proves it was
+// stripped. A control assertion confirms a NON-CONDUCTOR var (PATH) still passes
+// through so we only strip the daemon's config, not the whole environment.
+func TestRunGate_StripsConductorEnv(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	t.Setenv("CONDUCTOR_DSN", "postgres://leak:leak@host/db")
+
+	dir := t.TempDir()
+
+	// Gate fails (exit 1) iff CONDUCTOR_DSN is visible in its environment.
+	leakGate := Gate{Name: "no-conductor-env", Argv: []string{
+		"sh", "-c", `if env | grep -q '^CONDUCTOR_'; then exit 1; fi; exit 0`,
+	}}
+	c := runGate(context.Background(), dir, leakGate)
+	if c.Result != checkPass {
+		t.Fatalf("gate saw a CONDUCTOR_* var in its env (env not sanitized): %+v", c)
+	}
+
+	// Control: PATH (a non-CONDUCTOR var the toolchain needs) MUST still reach the
+	// gate, proving we strip only the daemon's config and not the whole env.
+	pathGate := Gate{Name: "has-path", Argv: []string{
+		"sh", "-c", `if [ -z "$PATH" ]; then exit 1; fi; exit 0`,
+	}}
+	if c := runGate(context.Background(), dir, pathGate); c.Result != checkPass {
+		t.Fatalf("PATH did not reach the gate (over-sanitized env): %+v", c)
+	}
+}
