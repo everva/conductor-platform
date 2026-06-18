@@ -1,0 +1,36 @@
+# Keep the build context lean: the builder only needs go.mod/go.sum + the Go
+# source under cmd/ and internal/. Everything below is excluded.
+
+# VCS + CI metadata
+.git
+.github
+.gitignore
+
+# Docs (not needed to compile)
+*.md
+docs/
+DESIGN-BRIEF.md
+
+# The bootstrap light-conductor is NOT the product image — never ship it.
+tools/
+
+# Test fixtures / generated artifacts
+**/testdata/
+**/*_test.go
+
+# Local build output / binaries (avoid shipping host-arch artifacts)
+/out/
+conductor
+conductorctl
+*.exe
+
+# Docker artifacts themselves
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.yaml
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/

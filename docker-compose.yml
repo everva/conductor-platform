@@ -1,0 +1,75 @@
+# docker-compose for the conductor-platform daemon + its Postgres backend (P4-1).
+#
+# QUICK START (out-of-the-box no-op tick — proves the stack wires up):
+#   docker compose up -d
+#   docker compose logs -f conductor      # watch "tick start" / "tick done"
+#   docker compose down -v                # tear down (drops the volume)
+#
+# The daemon migrates Postgres on start (P3-1) and then ticks every interval.
+# With no onboarded tasks it cleanly NO-OPS each tick (outcome=idle) — that is
+# the expected success state for a bare stack.
+#
+# TO ACTUALLY EXECUTE TASKS an operator must additionally supply:
+#   - a real performer command via CONDUCTOR_DEVELOP_CMD (e.g. "claude -p"),
+#     whose subscription/credential lives in the runtime env — NEVER in the image
+#   - a gh-token for the provisioner's git credential helper (writable pushes)
+#   - onboard a repo + intake a scenario via conductorctl against the same DSN:
+#       docker compose run --rm conductor sh -c \
+#         'conductorctl -dsn "$CONDUCTOR_DSN" onboard --base develop <repo>'
+#
+# The Postgres password below is a LOCAL DEV DEFAULT (conductor/conductor). It is
+# NOT a secret and MUST be overridden for any real deployment.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-conductor}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-conductor} # DEV-ONLY default; override in prod
+      POSTGRES_DB: ${POSTGRES_DB:-conductor}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Daemon only starts once Postgres can actually accept connections.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-conductor} -d ${POSTGRES_DB:-conductor}"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  conductor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: conductor-platform:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Shared Postgres store (the daemon migrates it on start). sslmode=disable
+      # because this is an in-network dev compose; use a TLS DSN in production.
+      CONDUCTOR_DSN: >-
+        postgres://${POSTGRES_USER:-conductor}:${POSTGRES_PASSWORD:-conductor}@postgres:5432/${POSTGRES_DB:-conductor}?sslmode=disable
+      # The project the daemon ticks. CreateProject is an idempotent upsert, so a
+      # bare project row is ensured even before any conductorctl onboard.
+      CONDUCTOR_PROJECT: ${CONDUCTOR_PROJECT:-demo}
+      CONDUCTOR_ROOT: /workspace
+      CONDUCTOR_BASE_BRANCH: ${CONDUCTOR_BASE_BRANCH:-develop}
+      CONDUCTOR_INTERVAL: ${CONDUCTOR_INTERVAL:-15s}
+      # Out-of-the-box the performer is the no-key subscription default. With no
+      # ready tasks it is never invoked, so the stack no-ops safely.
+      CONDUCTOR_DEVELOP_CMD: ${CONDUCTOR_DEVELOP_CMD:-claude -p}
+      CONDUCTOR_GOVERNANCE: ${CONDUCTOR_GOVERNANCE:-true}
+    # Override the image's default CMD (-h, which just prints usage) so the
+    # daemon runs its tick LOOP. All config comes from the env above; the only
+    # flag passed is the interval (also overridable via CONDUCTOR_INTERVAL).
+    command: ["-interval", "${CONDUCTOR_INTERVAL:-15s}"]
+    volumes:
+      # Persist clones/worktrees across restarts (the daemon's workspace root).
+      - workspace:/workspace
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  workspace:

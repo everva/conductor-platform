@@ -154,6 +154,31 @@ conductorctl pause   --project <id>                    # pause a project's loop
 conductorctl resume  --project <id>                    # resume a project's loop
 ```
 
+## Deployment (Docker)
+
+A multi-stage [`Dockerfile`](Dockerfile) builds static `conductor` + `conductorctl`
+binaries into a small (~42 MB) alpine runtime that carries `git` + `ca-certificates`
+and runs as a **non-root** user. **No secret is baked in** — the image is configured
+entirely by the `CONDUCTOR_*` env vars (see the Dockerfile header and
+`cmd/conductor/main.go`).
+
+```bash
+docker build -t conductor-platform:latest .
+
+# Daemon + Postgres, wired together. The daemon migrates Postgres on start and
+# then ticks; with no onboarded tasks it cleanly no-ops (outcome=noop).
+docker compose up -d
+docker compose logs -f conductor      # watch "tick start" / "tick done"
+docker compose down -v                # tear down (drops volumes)
+```
+
+The [`docker-compose.yml`](docker-compose.yml) Postgres password is a **dev-only
+default** (`conductor`/`conductor`) — override it for any real deployment. To
+actually execute tasks (not just no-op ticks) an operator supplies a real performer
+command (`CONDUCTOR_DEVELOP_CMD`, e.g. `claude -p`), a gh-token for the provisioner's
+git credential helper, and onboards a repo + intakes a scenario via `conductorctl`
+against the same DSN. None of these is ever part of the image.
+
 ## Repository layout
 
 ```
