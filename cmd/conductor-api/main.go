@@ -36,6 +36,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -103,6 +104,13 @@ func run(ctx context.Context, argv []string, logger *slog.Logger, stderr io.Writ
 	if cfg.token == "" {
 		_, _ = fmt.Fprintln(stderr,
 			"conductor-api: CONDUCTOR_API_TOKEN required: refusing to run an unauthenticated control plane")
+		return 2
+	}
+	// Auth hardening (3C-1): refuse a weak or placeholder token at startup so the
+	// gateway is never deployed with the secret.yaml placeholder or a trivially
+	// guessable secret. The message names the requirement WITHOUT echoing the token.
+	if err := validateToken(cfg.token); err != nil {
+		_, _ = fmt.Fprintf(stderr, "conductor-api: %v\n", err)
 		return 2
 	}
 
@@ -233,6 +241,26 @@ func storeBackendName(dsn string) string {
 		return "memory"
 	}
 	return "postgres"
+}
+
+// minTokenLen is the shortest bearer token the gateway will start with. A short
+// token is brute-forceable; 16 chars is a low floor (a real token should be a
+// long random secret) that still rejects obvious mistakes.
+const minTokenLen = 16
+
+// validateToken rejects a weak or placeholder bearer token at startup (auth
+// hardening, 3C-1). It enforces a minimum length and refuses any token that
+// still contains the secret.yaml placeholder marker, so the gateway cannot be
+// deployed with the template secret or a trivially short key. It NEVER includes
+// the token value in its error (no secret leak) — only the reason.
+func validateToken(token string) error {
+	if strings.Contains(token, "REPLACE_ME") {
+		return errors.New("CONDUCTOR_API_TOKEN is the template placeholder: set a real, strong random token")
+	}
+	if len(token) < minTokenLen {
+		return fmt.Errorf("CONDUCTOR_API_TOKEN too short (min %d chars): use a long random token", minTokenLen)
+	}
+	return nil
 }
 
 // envOr returns the value of env var key, or def when it is unset/empty.

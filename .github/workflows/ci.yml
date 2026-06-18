@@ -47,3 +47,61 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v2.12.0
+
+  # Frontend (web cockpit) deterministic gate — the TS analogue of the Go gate
+  # (ADR-0026): typecheck + lint + unit tests + build + Playwright e2e. The web/
+  # tree is an ISOLATED toolchain (its own web/go.mod carves it out of the Go
+  # module), so this runs as a separate job. The cockpit consumes the gateway's
+  # HTTP/WS surface; these tests mock it (vitest + Playwright page.route), so no
+  # gateway/Postgres/claude is needed — the job is hermetic.
+  frontend:
+    name: web cockpit (tsc / eslint / vitest / build / e2e)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Set up Go (for the event-type codegen sync check)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install (clean, from lockfile)
+        run: npm ci
+
+      - name: Verify event types are in sync with the Go source (N-9 codegen)
+        # The cockpit's event types are generated from internal/events (cmd/eventgen).
+        # Regenerate and fail if the committed file drifted from the Go source.
+        run: |
+          cd ..
+          go run ./cmd/eventgen -out web/src/types/events.gen.ts
+          git diff --exit-code -- web/src/types/events.gen.ts
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests (vitest)
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E (Playwright)
+        run: npm run e2e
