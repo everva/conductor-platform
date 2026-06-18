@@ -32,6 +32,8 @@ func runConformanceSuite(t *testing.T, newStore storeFactory) {
 		fn   func(t *testing.T, s StateStore)
 	}{
 		{"ProjectCRUD", confProjectCRUD},
+		{"UpdateProjectRoundTrip", confUpdateProject},
+		{"UpdateMissingProjectFails", confUpdateMissingProject},
 		{"TaskCRUD", confTaskCRUD},
 		{"ScenarioCRUD", confScenarioCRUD},
 		{"GetMissingReturnsErrNotFound", confGetMissing},
@@ -91,6 +93,62 @@ func confProjectCRUD(t *testing.T, s StateStore) {
 	// Empty id must be rejected.
 	if err := s.CreateProject(ctx, Project{}); err == nil {
 		t.Fatal("CreateProject empty id: want error, got nil")
+	}
+}
+
+// confUpdateProject proves the ADR-0021 additive UpdateProject round-trips a
+// full-row mutation through both stores, including the first-class pause field,
+// and defaults to not-paused on CreateProject.
+func confUpdateProject(t *testing.T, s StateStore) {
+	ctx := context.Background()
+	p := Project{
+		ID: "p1", Repo: "owner/name", BaseBranch: "develop", HostID: "h1",
+		Readiness: "ready", RecipePointer: ".conductor/recipe.yaml", GovernancePolicy: "tier-default",
+	}
+	if err := s.CreateProject(ctx, p); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	// CreateProject defaults to running (not paused).
+	if got, _ := s.GetProject(ctx, "p1"); got.Paused {
+		t.Fatalf("new project must default to not-paused, got %+v", got)
+	}
+
+	// Mutate every column, including the pause field, and persist it.
+	p.Repo = "owner/renamed"
+	p.HostID = "h2"
+	p.Readiness = "degraded"
+	p.GovernancePolicy = "tier-strict"
+	p.Paused = true
+	if err := s.UpdateProject(ctx, p); err != nil {
+		t.Fatalf("UpdateProject: %v", err)
+	}
+	got, err := s.GetProject(ctx, "p1")
+	if err != nil {
+		t.Fatalf("GetProject after update: %v", err)
+	}
+	if got != p {
+		t.Fatalf("UpdateProject round-trip = %+v, want %+v", got, p)
+	}
+	if !got.Paused {
+		t.Fatalf("pause field did not persist: %+v", got)
+	}
+
+	// Resume (clear pause) persists too.
+	p.Paused = false
+	if err := s.UpdateProject(ctx, p); err != nil {
+		t.Fatalf("UpdateProject resume: %v", err)
+	}
+	if got, _ := s.GetProject(ctx, "p1"); got.Paused {
+		t.Fatalf("resume did not persist: %+v", got)
+	}
+}
+
+// confUpdateMissingProject proves UpdateProject on an unknown id is ErrNotFound in
+// both stores (no silent insert).
+func confUpdateMissingProject(t *testing.T, s StateStore) {
+	ctx := context.Background()
+	if err := s.UpdateProject(ctx, Project{ID: "ghost", Repo: "x"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("UpdateProject missing: err = %v, want ErrNotFound", err)
 	}
 }
 

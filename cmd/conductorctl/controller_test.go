@@ -15,6 +15,9 @@ import (
 func TestStoreController_PersistsThroughSharedStore(t *testing.T) {
 	ctx := context.Background()
 	store := statestore.NewMemoryStore()
+	if err := store.CreateProject(ctx, statestore.Project{ID: "repo", Repo: "owner/repo", BaseBranch: "develop"}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
 	ctrl := NewStoreController(store)
 
 	if paused, err := ctrl.Paused(ctx, "repo"); err != nil || paused {

@@ -2,6 +2,7 @@ package conductor
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/everva/conductor-platform/internal/engine"
@@ -16,6 +17,9 @@ import (
 func TestStorePauser_PersistsAcrossFreshReader(t *testing.T) {
 	ctx := context.Background()
 	store := statestore.NewMemoryStore()
+	if err := store.CreateProject(ctx, statestore.Project{ID: projectID, Repo: "owner/repo", BaseBranch: "develop"}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
 
 	writer := NewStorePauser(store)
 	if paused, err := writer.Paused(ctx, projectID); err != nil || paused {
@@ -55,12 +59,16 @@ func TestStorePauser_PersistsAcrossFreshReader(t *testing.T) {
 	}
 }
 
-// TestStorePauser_MarkerInvisibleToLedger proves the pause marker never pollutes
-// the real project's ledger: ListTasks for the project returns only the real
-// task, not the reserved marker (its ProjectID is empty by construction).
-func TestStorePauser_MarkerInvisibleToLedger(t *testing.T) {
+// TestStorePauser_PauseCreatesNoTask proves pause is now a first-class Project
+// run-state (ADR-0021), NOT a task: pausing must NOT create any task and the
+// project's ledger is unchanged. This replaces the now-moot ADR-0020
+// marker-invisibility test (there is no marker task anymore).
+func TestStorePauser_PauseCreatesNoTask(t *testing.T) {
 	ctx := context.Background()
 	store := statestore.NewMemoryStore()
+	if err := store.CreateProject(ctx, statestore.Project{ID: projectID, Repo: "owner/repo", BaseBranch: "develop"}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
 	if err := store.CreateTask(ctx, statestore.Task{ID: "A-1", ProjectID: projectID, Status: registry.StatusReady}); err != nil {
 		t.Fatalf("seed real task: %v", err)
 	}
@@ -73,7 +81,25 @@ func TestStorePauser_MarkerInvisibleToLedger(t *testing.T) {
 		t.Fatalf("list tasks: %v", err)
 	}
 	if len(tasks) != 1 || tasks[0].ID != "A-1" {
-		t.Fatalf("pause marker must not surface in the project ledger, got %+v", tasks)
+		t.Fatalf("pause must not create or alter any task, got %+v", tasks)
+	}
+	// And the pause is reflected on the project itself (observable, first-class).
+	proj, err := store.GetProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("get project: %v", err)
+	}
+	if !proj.Paused {
+		t.Fatalf("pause must set Project.Paused=true, got %+v", proj)
+	}
+}
+
+// TestStorePauser_UnknownProjectErrors proves pausing an unknown project surfaces
+// a clear error (wrapped ErrNotFound) rather than silently succeeding.
+func TestStorePauser_UnknownProjectErrors(t *testing.T) {
+	ctx := context.Background()
+	store := statestore.NewMemoryStore()
+	if err := NewStorePauser(store).Pause(ctx, "ghost"); !errors.Is(err, statestore.ErrNotFound) {
+		t.Fatalf("pause unknown project: err = %v, want ErrNotFound", err)
 	}
 }
 
@@ -163,7 +189,7 @@ func TestTick_Paused_IsCleanNoOp(t *testing.T) {
 
 // TestTick_NilPauser_NeverPaused proves backward compatibility: with no Pauser
 // injected (the pre-P3-3 wiring), a tick proceeds to merge exactly as before even
-// when a pause marker happens to exist in the store for the project.
+// when the project's run-state is paused in the store.
 func TestTick_NilPauser_NeverPaused(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, engine.Verdict{Result: "pass"}, nil, reviewPass, nil) // no Pauser in Deps

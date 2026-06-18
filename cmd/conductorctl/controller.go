@@ -70,8 +70,9 @@ func (c *MemoryController) Resume(_ context.Context, projectID string) error {
 // state THROUGH the shared StateStore rather than an in-process map, so a
 // SEPARATE daemon process reading the SAME store honors it (ADR-0011 §4). It
 // delegates to conductor.StorePauser — the ONE place that owns the durable pause
-// representation — so conductorctl (operator side) and the daemon (pause-gate
-// side) agree on the shape. When pointed at the shared Postgres store (-dsn),
+// representation (the project's first-class Paused run-state, ADR-0021) — so
+// conductorctl (operator side) and the daemon (pause-gate side) agree on the
+// shape. When pointed at the shared Postgres store (-dsn),
 // `conductorctl pause` makes the daemon's next tick a clean no-op; `resume`
 // restores it.
 type StoreController struct {
@@ -87,19 +88,19 @@ func NewStoreController(store statestore.StateStore) *StoreController {
 // Compile-time assertion that *StoreController satisfies the seam.
 var _ Controller = (*StoreController)(nil)
 
-// Paused reports whether projectID is paused by reading the durable marker off
-// the shared store (never a cached flag).
+// Paused reports whether projectID is paused by reading the project's run-state
+// off the shared store (never a cached flag).
 func (c *StoreController) Paused(ctx context.Context, projectID string) (bool, error) {
 	return c.pauser.Paused(ctx, projectID)
 }
 
-// Pause persists the pause directive onto the project's durable marker through
-// the shared store. Idempotent.
+// Pause persists the pause directive onto the project's run-state through the
+// shared store. Idempotent.
 func (c *StoreController) Pause(ctx context.Context, projectID string) error {
 	return c.pauser.Pause(ctx, projectID)
 }
 
-// Resume persists the resume directive, flipping the marker back to running so
+// Resume persists the resume directive, clearing the project's pause run-state so
 // ticks proceed. Idempotent.
 func (c *StoreController) Resume(ctx context.Context, projectID string) error {
 	return c.pauser.Resume(ctx, projectID)

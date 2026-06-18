@@ -27,6 +27,7 @@ type stubStore struct{}
 func (*stubStore) CreateProject(context.Context, Project) error          { return nil }
 func (*stubStore) GetProject(context.Context, string) (Project, error)   { return Project{}, nil }
 func (*stubStore) ListProjects(context.Context) ([]Project, error)       { return nil, nil }
+func (*stubStore) UpdateProject(context.Context, Project) error          { return nil }
 func (*stubStore) CreateTask(context.Context, Task) error                { return nil }
 func (*stubStore) GetTask(context.Context, string) (Task, error)         { return Task{}, nil }
 func (*stubStore) ListTasks(context.Context, string) ([]Task, error)     { return nil, nil }

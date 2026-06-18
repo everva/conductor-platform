@@ -97,6 +97,21 @@ func (s *MemoryStore) ListProjects(ctx context.Context) ([]Project, error) {
 	return out, nil
 }
 
+// UpdateProject replaces the stored project with the same ID, or returns a
+// wrapped ErrNotFound if no project has that ID (ADR-0021 additive mutation).
+func (s *MemoryStore) UpdateProject(ctx context.Context, p Project) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.projects[p.ID]; !ok {
+		return fmt.Errorf("update project %q: %w", p.ID, ErrNotFound)
+	}
+	s.projects[p.ID] = cloneProject(p)
+	return nil
+}
+
 // CreateTask persists a new task, failing with ErrAlreadyExists on a duplicate ID.
 func (s *MemoryStore) CreateTask(ctx context.Context, t Task) error {
 	if err := ctx.Err(); err != nil {

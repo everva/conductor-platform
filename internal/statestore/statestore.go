@@ -40,6 +40,12 @@ type Project struct {
 	RecipePointer string
 	// GovernancePolicy names the tier→merge-mode policy applied (ADR-0003).
 	GovernancePolicy string
+	// Paused is the first-class run-state of the project's conductor loop
+	// (ADR-0021): true means ticks are a clean no-op (OutcomePaused) until
+	// resumed. It defaults to false (running) on CreateProject and is the
+	// observable replacement for the ADR-0020 pause marker-task. This is an
+	// ADDITIVE field on the otherwise-frozen contract.
+	Paused bool
 }
 
 // Task is a unit of work scheduled against a project (ADR-0010). Status is a
@@ -112,6 +118,12 @@ type StateStore interface {
 	GetProject(ctx context.Context, id string) (Project, error)
 	// ListProjects returns all registered projects.
 	ListProjects(ctx context.Context) ([]Project, error)
+	// UpdateProject persists changes to an existing project (by ID), or
+	// ErrNotFound if no project has that ID. It is the ADDITIVE mutation seam
+	// introduced by ADR-0021 (the contract grew; no existing signature changed),
+	// replacing the immutable-after-create restriction that forced the ADR-0020
+	// pause marker-task workaround.
+	UpdateProject(ctx context.Context, p Project) error
 
 	// CreateTask persists a new task.
 	CreateTask(ctx context.Context, t Task) error

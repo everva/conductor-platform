@@ -113,11 +113,11 @@ func (s *PostgresStore) CreateProject(ctx context.Context, p Project) error {
 		return fmt.Errorf("create project: %w: empty id", ErrInvalid)
 	}
 	const q = `
-INSERT INTO projects (id, repo, base_branch, host_id, readiness, recipe_pointer, governance_policy)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO projects (id, repo, base_branch, host_id, readiness, recipe_pointer, governance_policy, paused)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (id) DO NOTHING`
 	tag, err := s.pool.Exec(ctx, q,
-		p.ID, p.Repo, p.BaseBranch, p.HostID, p.Readiness, p.RecipePointer, p.GovernancePolicy)
+		p.ID, p.Repo, p.BaseBranch, p.HostID, p.Readiness, p.RecipePointer, p.GovernancePolicy, p.Paused)
 	if err != nil {
 		return fmt.Errorf("create project %q: %w", p.ID, err)
 	}
@@ -130,11 +130,11 @@ ON CONFLICT (id) DO NOTHING`
 // GetProject returns the project by ID, or a wrapped ErrNotFound.
 func (s *PostgresStore) GetProject(ctx context.Context, id string) (Project, error) {
 	const q = `
-SELECT id, repo, base_branch, host_id, readiness, recipe_pointer, governance_policy
+SELECT id, repo, base_branch, host_id, readiness, recipe_pointer, governance_policy, paused
 FROM projects WHERE id = $1`
 	var p Project
 	err := s.pool.QueryRow(ctx, q, id).Scan(
-		&p.ID, &p.Repo, &p.BaseBranch, &p.HostID, &p.Readiness, &p.RecipePointer, &p.GovernancePolicy)
+		&p.ID, &p.Repo, &p.BaseBranch, &p.HostID, &p.Readiness, &p.RecipePointer, &p.GovernancePolicy, &p.Paused)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Project{}, fmt.Errorf("get project %q: %w", id, ErrNotFound)
 	}
@@ -147,7 +147,7 @@ FROM projects WHERE id = $1`
 // ListProjects returns all registered projects ordered by ID.
 func (s *PostgresStore) ListProjects(ctx context.Context) ([]Project, error) {
 	const q = `
-SELECT id, repo, base_branch, host_id, readiness, recipe_pointer, governance_policy
+SELECT id, repo, base_branch, host_id, readiness, recipe_pointer, governance_policy, paused
 FROM projects ORDER BY id`
 	rows, err := s.pool.Query(ctx, q)
 	if err != nil {
@@ -158,7 +158,7 @@ FROM projects ORDER BY id`
 	for rows.Next() {
 		var p Project
 		if err := rows.Scan(
-			&p.ID, &p.Repo, &p.BaseBranch, &p.HostID, &p.Readiness, &p.RecipePointer, &p.GovernancePolicy); err != nil {
+			&p.ID, &p.Repo, &p.BaseBranch, &p.HostID, &p.Readiness, &p.RecipePointer, &p.GovernancePolicy, &p.Paused); err != nil {
 			return nil, fmt.Errorf("list projects: scan: %w", err)
 		}
 		out = append(out, p)
@@ -167,6 +167,26 @@ FROM projects ORDER BY id`
 		return nil, fmt.Errorf("list projects: %w", err)
 	}
 	return out, nil
+}
+
+// UpdateProject persists a full-row update to the project with the matching ID,
+// or returns a wrapped ErrNotFound if no row was affected (ADR-0021 additive
+// mutation; a real UPDATE, not an ON CONFLICT insert).
+func (s *PostgresStore) UpdateProject(ctx context.Context, p Project) error {
+	const q = `
+UPDATE projects
+SET repo = $2, base_branch = $3, host_id = $4, readiness = $5,
+    recipe_pointer = $6, governance_policy = $7, paused = $8
+WHERE id = $1`
+	tag, err := s.pool.Exec(ctx, q,
+		p.ID, p.Repo, p.BaseBranch, p.HostID, p.Readiness, p.RecipePointer, p.GovernancePolicy, p.Paused)
+	if err != nil {
+		return fmt.Errorf("update project %q: %w", p.ID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("update project %q: %w", p.ID, ErrNotFound)
+	}
+	return nil
 }
 
 // --- Tasks ------------------------------------------------------------------
