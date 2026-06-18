@@ -179,3 +179,22 @@ Deterministik kanıt = kalite kapısı (LLM asla karar mercii); sahte-yeşil ASL
   no-capabilities yolu). GERÇEK docker-PG (port 55464) conformance koşuldu YEŞİL (19/19, 4 host dahil) + teardown. engine.go +
   tools/builder DOKUNULMADI; mevcut imza değişMEDİ (additive). Offline gate (build+test+vet+golangci v2.12.0) + e2e + -race YEŞİL;
   gofmt temiz; yeni dep yok; secret yok.
+- **Dalga B — 2B-2 (capability routing, ADR-0024 agent-per-host + ADR-0008)** ✅ done. Artık her agent (daemon)
+  SADECE host'unun karşıladığı capability'leri isteyen task'ları çeker (pull-based): bir task bu host için ancak
+  `Task.Requires ⊆ host.Capabilities` ise pickable; aksi halde SKIP edilir (capable host'a bırakılır). **Additive registry
+  opsiyonu (Picker imzası DEĞİŞMEDİ):** `registry.Option` + `registry.WithCapabilities([]string)`; `NewRegistry(store,
+  opts ...Option)` variadic — opsiyonsuz çağrı pre-2B-2 davranış (mevcut çağıranlar dokunulmadı). Caps trim'lenir, boş entry
+  düşer, set'e normalize edilir. **PickReady'de capability-gate:** status (todo/ready) sonrası, depsDone öncesi
+  `capabilitiesSatisfy(t.Requires)` filtresi; başarısızsa `continue` (sıralama korunur, hata değil — bir sonraki ready task
+  değerlendirilir). **Filtre semantiği (net):** caps NON-EMPTY → `Requires ⊆ caps` ise pick; caps NİL/BOŞ → **UNCONSTRAINED**
+  = bugünkü davranış (Requires'a bakmaksızın pick; capability hiç bildirmemiş tek-host setup'ları korunur — boş Requires
+  zaten her host'ta pickable). "empty=unconstrained" bilinçli seçim (daha katı "empty=hiçbir şey eşleşmez" geleceğe opt-in).
+  Boş Requires'lı task HER host'ta pickable (boş kümenin altkümesi her zaman sağlanır). **Daemon wiring:** `registry.NewRegistry(
+  store, registry.WithCapabilities(cfg.capabilities))` — `-capabilities` (2B-1) registry'ye geçer; boş caps → unconstrained
+  (e2e'ler caps'siz registry kurar → değişmedi). **Kanıt:** registry routing-matrix testi (ios-build task: capable
+  [ios-build,macos]→pick / incapable [linux]→skip ErrNotFound / unconstrained→pick; boş-Requires→3 host'ta da pick;
+  linux çok-task'lı projede ios task'ı skip ama no-requires task'ı pick (A-2, sıralama korunur); çok-requires partial-cap→skip;
+  blank caps→unconstrained). Mevcut PickReady testleri (caps'siz) DEĞİŞMEDEN yeşil (geriye-uyum). engine.go + statestore imza +
+  tools/builder DOKUNULMADI; Picker imzası değişMEDİ (routing registry config'inde); additive. Offline gate
+  (build+test+vet+golangci v2.12.0) + e2e (E2E ./internal/conductor/) + `-race ./internal/registry/ ./internal/conductor/`
+  YEŞİL; gofmt temiz; yeni dep yok; secret yok.

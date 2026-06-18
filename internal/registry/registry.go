@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/everva/conductor-platform/internal/statestore"
 )
@@ -58,21 +59,80 @@ var legalTransitions = map[string][]string{
 // StateStore. Construct it with NewRegistry and pass the store explicitly.
 type Registry struct {
 	store statestore.StateStore
+	// capabilities is this host's capability set used for capability-routing
+	// (ADR-0024 agent-per-host, ADR-0008, 2B-2). When non-empty, PickReady picks a
+	// task ONLY if every Task.Requires entry is in this set (Requires ⊆ capabilities),
+	// leaving tasks it cannot satisfy for a capable host (pull-based routing). When
+	// empty/nil, routing is UNCONSTRAINED — PickReady picks regardless of Requires,
+	// exactly as before 2B-2 (single-host setups that never declared capabilities are
+	// unaffected). Populate it with WithCapabilities; it is normalized to a set there.
+	capabilities map[string]struct{}
+}
+
+// Option configures a Registry at construction. Options are ADDITIVE: NewRegistry
+// stays backward compatible (no option = today's behavior), so existing callers are
+// unchanged and a host opts INTO capability-routing by passing WithCapabilities.
+type Option func(*Registry)
+
+// WithCapabilities configures the Registry with this host's capability set for
+// capability-routing (ADR-0024, ADR-0008, 2B-2). It is ADDITIVE: a Registry built
+// without it is UNCONSTRAINED (picks any pickable task regardless of Task.Requires,
+// the pre-2B-2 behavior). A Registry built WITH a non-empty set picks a task only
+// when Task.Requires ⊆ caps; a task whose Requires is not satisfied is SKIPPED and
+// left for a capable host (pull-based). A task with empty Requires is pickable by
+// ANY host (constrained or not).
+//
+// An empty/all-blank caps slice is treated as "no capabilities configured" =
+// UNCONSTRAINED (the same as not passing the option at all). This "empty =
+// unconstrained" choice preserves single-host setups that never declared
+// capabilities; a stricter "empty = match only no-requires tasks" is a future
+// opt-in, not this. Entries are trimmed; blank entries are dropped.
+func WithCapabilities(caps []string) Option {
+	return func(r *Registry) {
+		set := make(map[string]struct{}, len(caps))
+		for _, c := range caps {
+			c = strings.TrimSpace(c)
+			if c == "" {
+				continue
+			}
+			set[c] = struct{}{}
+		}
+		if len(set) == 0 {
+			r.capabilities = nil
+			return
+		}
+		r.capabilities = set
+	}
 }
 
 // NewRegistry returns a Registry backed by the given StateStore. The store is the
-// Registry's only state; the Registry adds no caching of its own.
-func NewRegistry(store statestore.StateStore) *Registry {
-	return &Registry{store: store}
+// Registry's only state; the Registry adds no caching of its own. Options are
+// ADDITIVE — calling NewRegistry with no options yields the pre-2B-2 behavior
+// (UNCONSTRAINED capability-routing), so existing callers are unaffected.
+func NewRegistry(store statestore.StateStore, opts ...Option) *Registry {
+	r := &Registry{store: store}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // PickReady returns the single highest-priority pickable task for the project, or
 // a wrapped statestore.ErrNotFound when none is pickable.
 //
 // A task is pickable when its status is todo or ready, every dependency resolves
-// to a task with status done, and the project holds no active lease (ADR-0008).
-// Among pickable tasks the lowest task ID wins, giving a deterministic, stable
-// result regardless of the order ListTasks returns them in.
+// to a task with status done, the project holds no active lease (ADR-0008), AND
+// this host satisfies the task's required capabilities (capability-routing,
+// ADR-0024/ADR-0008, 2B-2). Among pickable tasks the lowest task ID wins, giving a
+// deterministic, stable result regardless of the order ListTasks returns them in.
+//
+// Capability-routing (2B-2): when the Registry was built WithCapabilities (a
+// non-empty set), a task is pickable only if Task.Requires ⊆ capabilities; a task
+// whose Requires is not satisfied is SKIPPED and left for a capable host (pull-based
+// — no error, the next ready task is considered). When the Registry has NO
+// capabilities configured (the default), routing is UNCONSTRAINED: PickReady picks
+// regardless of Task.Requires, exactly as before 2B-2. A task with empty Requires is
+// pickable by ANY host (constrained or not).
 func (r *Registry) PickReady(ctx context.Context, projectID string) (statestore.Task, error) {
 	// Lease-gate: a held lease means the repo is busy, so nothing is pickable.
 	if _, err := r.store.GetLease(ctx, projectID); err == nil {
@@ -89,6 +149,11 @@ func (r *Registry) PickReady(ctx context.Context, projectID string) (statestore.
 	pickable := make([]statestore.Task, 0, len(tasks))
 	for _, t := range tasks {
 		if t.Status != StatusTodo && t.Status != StatusReady {
+			continue
+		}
+		// Capability-routing gate (2B-2): skip a task this host cannot run, leaving
+		// it for a capable host (pull-based). Unconstrained when no caps configured.
+		if !r.capabilitiesSatisfy(t.Requires) {
 			continue
 		}
 		ok, derr := r.depsDone(ctx, t)
@@ -177,6 +242,27 @@ func (r *Registry) depsDone(ctx context.Context, t statestore.Task) (bool, error
 		}
 	}
 	return true, nil
+}
+
+// capabilitiesSatisfy reports whether this host may run a task with the given
+// Requires under capability-routing (2B-2). It encodes the precise semantics:
+//
+//   - No capabilities configured on the Registry (nil/empty) → UNCONSTRAINED: any
+//     task is satisfiable regardless of Requires (the pre-2B-2 behavior; preserves
+//     single-host setups that never declared capabilities). Always returns true.
+//   - Capabilities configured (non-empty) → the task is satisfiable only when
+//     Requires ⊆ capabilities. A task with empty Requires is satisfiable by ANY host
+//     (the subset of the empty set is always satisfied), so it returns true here too.
+func (r *Registry) capabilitiesSatisfy(requires []string) bool {
+	if len(r.capabilities) == 0 {
+		return true // unconstrained host (empty = today's behavior).
+	}
+	for _, req := range requires {
+		if _, ok := r.capabilities[req]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // transitionAllowed reports whether moving from the current status to to is a

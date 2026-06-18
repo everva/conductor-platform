@@ -246,6 +246,117 @@ func TestRegistry_Lifecycle_ToReadyGatedOnDeps(t *testing.T) {
 	}
 }
 
+// TestRegistry_PickReady_CapabilityRouting is the 2B-2 routing matrix: a task with
+// Requires:[ios-build] is picked by a host whose capabilities are a superset, SKIPPED
+// by an incapable host (which falls through to a different ready task / ErrNotFound),
+// and picked by an UNCONSTRAINED host (no capabilities configured). A task with empty
+// Requires is picked by all three (the empty set is a subset of any capability set).
+func TestRegistry_PickReady_CapabilityRouting(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("capable host picks the iOS task", func(t *testing.T) {
+		s := newStore(t)
+		seedTasks(t, s, statestore.Task{ID: "A-1", Status: "todo", Requires: []string{"ios-build"}})
+		r := NewRegistry(s, WithCapabilities([]string{"ios-build", "macos"}))
+
+		got, err := r.PickReady(ctx, testProject)
+		if err != nil {
+			t.Fatalf("capable host should pick the iOS task: %v", err)
+		}
+		if got.ID != "A-1" {
+			t.Fatalf("expected A-1, got %q", got.ID)
+		}
+	})
+
+	t.Run("incapable host skips the iOS task (ErrNotFound when it is the only task)", func(t *testing.T) {
+		s := newStore(t)
+		seedTasks(t, s, statestore.Task{ID: "A-1", Status: "todo", Requires: []string{"ios-build"}})
+		r := NewRegistry(s, WithCapabilities([]string{"linux"}))
+
+		if _, err := r.PickReady(ctx, testProject); !errors.Is(err, statestore.ErrNotFound) {
+			t.Fatalf("incapable host must skip the iOS task (ErrNotFound), got %v", err)
+		}
+	})
+
+	t.Run("unconstrained host (no capabilities) picks the iOS task", func(t *testing.T) {
+		s := newStore(t)
+		seedTasks(t, s, statestore.Task{ID: "A-1", Status: "todo", Requires: []string{"ios-build"}})
+		r := NewRegistry(s) // no WithCapabilities = unconstrained (pre-2B-2 behavior)
+
+		got, err := r.PickReady(ctx, testProject)
+		if err != nil {
+			t.Fatalf("unconstrained host should pick the iOS task regardless of Requires: %v", err)
+		}
+		if got.ID != "A-1" {
+			t.Fatalf("expected A-1, got %q", got.ID)
+		}
+	})
+
+	t.Run("empty Requires is picked by all three hosts", func(t *testing.T) {
+		for name, r := range map[string]func(statestore.StateStore) *Registry{
+			"capable": func(s statestore.StateStore) *Registry {
+				return NewRegistry(s, WithCapabilities([]string{"ios-build", "macos"}))
+			},
+			"incapable":     func(s statestore.StateStore) *Registry { return NewRegistry(s, WithCapabilities([]string{"linux"})) },
+			"unconstrained": func(s statestore.StateStore) *Registry { return NewRegistry(s) },
+		} {
+			s := newStore(t)
+			seedTasks(t, s, statestore.Task{ID: "A-1", Status: "todo"}) // empty Requires
+			got, err := r(s).PickReady(ctx, testProject)
+			if err != nil {
+				t.Fatalf("[%s] empty-Requires task must be pickable by any host: %v", name, err)
+			}
+			if got.ID != "A-1" {
+				t.Fatalf("[%s] expected A-1, got %q", name, got.ID)
+			}
+		}
+	})
+
+	t.Run("linux host skips the iOS task but picks a no-requires task (ordering preserved)", func(t *testing.T) {
+		s := newStore(t)
+		// A-1 needs iOS (skipped on linux); A-2 has no Requires and is pickable. Even
+		// though A-1 sorts first, the linux host skips it and picks the lowest pickable.
+		seedTasks(t, s,
+			statestore.Task{ID: "A-1", Status: "todo", Requires: []string{"ios-build"}},
+			statestore.Task{ID: "A-2", Status: "todo"},
+		)
+		r := NewRegistry(s, WithCapabilities([]string{"linux"}))
+
+		got, err := r.PickReady(ctx, testProject)
+		if err != nil {
+			t.Fatalf("linux host should pick the no-requires task: %v", err)
+		}
+		if got.ID != "A-2" {
+			t.Fatalf("expected A-2 (A-1 skipped for missing capability), got %q", got.ID)
+		}
+	})
+
+	t.Run("multi-requires task needs the full subset", func(t *testing.T) {
+		s := newStore(t)
+		seedTasks(t, s, statestore.Task{ID: "A-1", Status: "todo", Requires: []string{"ios-build", "macos"}})
+		// Has ios-build but NOT macos -> not a superset -> skipped.
+		r := NewRegistry(s, WithCapabilities([]string{"ios-build", "linux"}))
+
+		if _, err := r.PickReady(ctx, testProject); !errors.Is(err, statestore.ErrNotFound) {
+			t.Fatalf("partial-capability host must skip a multi-requires task, got %v", err)
+		}
+	})
+
+	t.Run("blank/empty WithCapabilities is treated as unconstrained", func(t *testing.T) {
+		s := newStore(t)
+		seedTasks(t, s, statestore.Task{ID: "A-1", Status: "todo", Requires: []string{"ios-build"}})
+		r := NewRegistry(s, WithCapabilities([]string{"", "  "})) // all blank = unconstrained
+
+		got, err := r.PickReady(ctx, testProject)
+		if err != nil {
+			t.Fatalf("blank capabilities must be unconstrained and pick the iOS task: %v", err)
+		}
+		if got.ID != "A-1" {
+			t.Fatalf("expected A-1, got %q", got.ID)
+		}
+	})
+}
+
 func TestRegistry_Transition_MissingTaskIsErrNotFound(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)

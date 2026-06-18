@@ -605,8 +605,13 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 	policy := newPolicy(cfg, logger)
 
 	cond, err := conductor.New(conductor.Deps{
-		Store:       store,
-		Picker:      registry.NewRegistry(store),
+		Store: store,
+		// Capability-routing (ADR-0024 agent-per-host, ADR-0008, 2B-2): build the
+		// Picker with THIS host's capabilities so PickReady picks a task only when
+		// Task.Requires ⊆ capabilities, leaving tasks this host cannot run for a capable
+		// host (pull-based). An empty capability set leaves routing UNCONSTRAINED (the
+		// pre-2B-2 behavior), so a host that never declared -capabilities is unaffected.
+		Picker:      registry.NewRegistry(store, registry.WithCapabilities(cfg.capabilities)),
 		Provisioner: prov,
 		Engine:      eng,
 		Verifier:    verf,
