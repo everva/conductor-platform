@@ -70,4 +70,8 @@ Gateway (3A) olduğu gibi reuse; web bileşenleri (3B) fork panellerine (webview
 - Recipe argv tam sandbox (S-3; şu an doküman + shell-argv uyarısı + R-2 secret-containment).
 
 ## İLERLEME KAYDI (her iş bitince güncelle)
-- Faz-3 planı oluşturuldu (2026-06-18). Sıradaki: 3A-0 (ADR-0025 API gateway kararı) → 3A-1.
+- Faz-3 planı oluşturuldu (2026-06-18).
+- ✅ **3A-0 — ADR-0025 API gateway kararı** (2026-06-18): ayrı `cmd/conductor-api` servisi; read+control; daemon
+  DEĞİŞMEZ; veri paylaşılan store/bus; kontrol mevcut conductor seam reuse (store-yansıması, daemon'a doğrudan
+  komut YOK); REST+WS, bearer-auth; frontend-agnostik (fork köprüsü). Frozen kontratlara etki: yok (salt tüketim).
+- Sıradaki: **3A-1** (Read API: `GET /projects`,`/projects/{id}/tasks`,`/hosts`,`/status`,`/events`; bearer-auth; tipli JSON).
