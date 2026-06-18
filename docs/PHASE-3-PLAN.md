@@ -99,5 +99,13 @@ Gateway (3A) olduğu gibi reuse; web bileşenleri (3B) fork panellerine (webview
   go.mod/sum değişti. Bağımsız doğrulama (Rule#9): scope+gate (build/vet/golangci-0/race/regresyon) + **canlı
   cross-process** (AYRI süreç gerçek-PG'ye publish → gateway PG LISTEN/NOTIFY → WS client aldı; /events real-PG
   geçmiş; kind-filtre; token'sız-WS→401; secret-leak=0) kendi koştum → ALL PASS.
-- **DALGA 3A ilerleme:** 3A-0 karar ✅, 3A-1 read-API ✅, 3A-2 live-events ✅ — kalan **3A-3** (control POST) + **3A-4** (paketleme).
-- Sıradaki: **3A-3** (Control API REST POST: onboard/intake/pause/resume/abort/approve — conductor seam reuse, auth-gated).
+- ✅ **3A-3 — Control API (REST POST)** (2026-06-18, commit `fb59d09`): conductor-api `POST /projects` (onboard,
+  201/200 idempotent), `/projects/{id}/intake` (raw-YAML body→`LoadYAML`+`Intake`), `pause`/`resume`,
+  `abort` (409 nothing-running), `approve` (409 none/ambiguous awaiting). Tümü auth-gated; conductor seam reuse
+  (StorePauser/Aborter/Approver, intake pkg) — yeni iş mantığı yok, conductorctl-over-HTTP. Yalnız cmd/conductor-api.
+  Bağımsız doğrulama (Rule#9): scope+gate (build/vet/golangci-0/race/regresyon) + **canlı cross-process real-PG**
+  (gateway POST → conductorctl AYRI süreç + bağımsız `psql` ile store-mutasyonu doğrulandı: onboard→görüldü,
+  intake→GW-1 task, pause→`paused=true`, resume→`false`, 409/401/404 error-kodları, secret-leak=0) → ALL PASS.
+  ADR-0025 "store-yansıma kontrol, daemon'a doğrudan-komut yok" cross-process kanıtlandı.
+- **DALGA 3A ilerleme:** 3A-0 ✅, 3A-1 ✅, 3A-2 ✅, 3A-3 ✅ — kalan yalnız **3A-4** (paketleme: Dockerfile + k8s).
+- Sıradaki: **3A-4** (gateway paketleme: Dockerfile multi-binary + deploy/k8s Deployment/Service/Ingress; non-root; secret=token+DSN; dry-run valid).
