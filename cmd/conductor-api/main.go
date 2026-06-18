@@ -158,6 +158,10 @@ func run(ctx context.Context, argv []string, logger *slog.Logger, stderr io.Writ
 	// Trap SIGINT/SIGTERM: cancelling this context triggers a graceful shutdown.
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// Tie live /ws connections to the server lifetime so a shutdown signal closes
+	// them promptly (review F3). Set before serving; no request is handled until
+	// ListenAndServe (started below) is up.
+	api.baseCtx = ctx
 
 	serveErr := make(chan error, 1)
 	go func() {

@@ -75,6 +75,16 @@ func (s *apiServer) handleOnboard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "repo is required")
 		return
 	}
+	// Reject a repo that could be mis-parsed as a git CLI option (review F4): the
+	// daemon's provisioner later runs `git clone <repo>` with repo as a positional
+	// arg WITHOUT a `--` guard, so a value starting with "-" (e.g. "--upload-pack=…")
+	// would be argument-injected into git. Also reject embedded whitespace/control
+	// chars. This is post-auth defense-in-depth; it still allows owner/name, https
+	// URLs, and absolute local paths.
+	if strings.HasPrefix(req.Repo, "-") || strings.ContainsAny(req.Repo, " \t\r\n") {
+		writeError(w, http.StatusBadRequest, "invalid repo")
+		return
+	}
 	baseBranch := req.BaseBranch
 	if baseBranch == "" {
 		baseBranch = controlDefaultBaseBranch
@@ -280,6 +290,19 @@ func (s *apiServer) handleApprove(w http.ResponseWriter, r *http.Request) {
 	var req approveRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+
+	// Existence-check the project first (review F2): the auto-resolve path lists
+	// tasks, and an unknown project lists EMPTY with no error, which would
+	// misreport as 409 "no task awaiting approval" (implying the project exists).
+	// A missing project must be 404, matching the handler contract.
+	if _, err := s.store.GetProject(r.Context(), id); err != nil {
+		if errors.Is(err, statestore.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 

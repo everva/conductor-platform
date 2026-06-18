@@ -24,6 +24,12 @@ merkezi store/bus üzerinden okur+kontrol eder. Karar (2026-06-18): **(B) ayrı 
   ortadan kaldırır: gateway düşse daemon'lar çalışmaya devam eder; daemon düşse gateway read-only kalır.
 - **Yüzey:** REST (read: `GET /projects`,`/projects/{id}/tasks`,`/hosts`,`/status`,`/events`; control: `POST`
   onboard/intake/pause/resume/abort/approve) + WebSocket (`/ws` — bus aboneliği, tarayıcıya tipli event push).
+- **`POST /projects/{id}/distill` (intake-chat yardımcısı, 3B-4a; review F8):** yazışma metnini sunucu-tarafı
+  `intake.Distiller` (`claude -p`) ile ÖNERİLEN senaryolara damıtır ve intake-hazır YAML döndürür. **Karar mercii
+  DEĞİL, taslak yardımcısı:** HİÇBİR ŞEY persist etmez; insan YAML'i gözden geçirip onaylayarak mevcut `/intake`'e
+  POST'lar (orada deterministik intake validasyonu çalışır). LLM yalnız danışman (çekirdek prensiple tutarlı);
+  hata→ErrNoScenarios/ErrMalformed→422 (asla uydurmaz). Distiller env'i `envsafe.Sanitize`'dan geçer (F7); gateway
+  pod'unda `claude -p` için yazılabilir HOME emptyDir mount'lanır (F6).
   Tipli JSON; event tipleri N-9 codegen'den (events `types.gen.ts`) türeyen TS ile hizalı.
 - **Auth:** bearer-token (Authorization: Bearer …); token secret'ten (`CONDUCTOR_API_TOKEN`/k8s Secret) gelir,
   sabit-zaman karşılaştırma; `/healthz`/`/readyz` hariç tüm endpoint'ler token ister. mTLS/OIDC sonraya

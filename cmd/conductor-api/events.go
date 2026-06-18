@@ -165,6 +165,16 @@ func (s *apiServer) handleWS(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = conn.Close(websocket.StatusInternalError, "closing") }()
 
 	ctx := r.Context()
+	// Tie the stream to the server lifetime (review F3): on SIGINT/SIGTERM the
+	// server's baseCtx is cancelled, which cancels this ctx, ends the loop, and
+	// closes the connection cleanly — instead of the client being dropped abruptly
+	// when the process exits (http.Server.Shutdown does not track hijacked WS conns).
+	if s.baseCtx != nil {
+		var wsCancel context.CancelFunc
+		ctx, wsCancel = context.WithCancel(ctx)
+		defer wsCancel()
+		defer context.AfterFunc(s.baseCtx, wsCancel)()
+	}
 
 	// Subscribe to the SAME bus the daemon publishes on. The channel closes on
 	// cancel/ctx-done/bus-close; cancel is always called on exit.

@@ -43,9 +43,12 @@ type EventReader interface {
 	// (zero since = from the beginning), in ascending TS order, capped at limit
 	// (limit <= 0 applies a sane default; an implementation caps it to a maximum).
 	//
-	// When more than the resolved limit match, the EARLIEST limit events after the
-	// since-cutoff are returned (the oldest end of the matching window, ascending),
-	// so a caller can page forward by advancing since past the last returned TS.
+	// When more than the resolved limit match, the MOST RECENT limit events are
+	// returned (the newest end of the matching window), then ordered ascending for
+	// the caller. This is the natural backfill for a live tail: a UI replays the
+	// recent history that immediately precedes the live stream rather than the
+	// oldest rows ever recorded. (A caller wanting an older slice constrains the
+	// window with a smaller `since`.)
 	ListEvents(ctx context.Context, filter Filter, since time.Time, limit int) ([]Event, error)
 }
 
@@ -57,9 +60,10 @@ var (
 
 // ListEvents reads persisted events from the events table, translating filter
 // into parameterized WHERE clauses (never string-concatenating caller input),
-// applying the TS >= since cutoff, ordering ascending by TS, and capping at the
-// resolved limit. It returns ErrBusClosed if the bus is closed. It is the
-// historical-replay companion to Publish/Subscribe (ADR-0021 additive seam).
+// applying the TS >= since cutoff, selecting the MOST RECENT resolved-limit rows
+// (ORDER BY ts DESC LIMIT n), then reversing to ascending TS order for the
+// caller. It returns ErrBusClosed if the bus is closed. It is the historical-
+// replay companion to Publish/Subscribe (ADR-0021 additive seam).
 func (b *PostgresBus) ListEvents(ctx context.Context, filter Filter, since time.Time, limit int) ([]Event, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -109,7 +113,9 @@ func (b *PostgresBus) ListEvents(ctx context.Context, filter Filter, since time.
 			q += " AND " + c
 		}
 	}
-	q += fmt.Sprintf(" ORDER BY ts ASC LIMIT $%d", len(args))
+	// Select the MOST RECENT rows (DESC LIMIT n); the slice is reversed to
+	// ascending below so the caller still receives ascending-by-TS order.
+	q += fmt.Sprintf(" ORDER BY ts DESC LIMIT $%d", len(args))
 
 	rows, err := b.pool.Query(ctx, q, args...)
 	if err != nil {
@@ -142,15 +148,21 @@ func (b *PostgresBus) ListEvents(ctx context.Context, filter Filter, since time.
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("events: iterate event rows: %w", err)
 	}
+	// Rows came newest-first (DESC); reverse in place to ascending TS order so the
+	// caller gets the most-recent window in chronological order.
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
 	return out, nil
 }
 
 // ListEvents replays the bounded in-memory retained history: it filters with the
-// shared Filter.Matches, applies the TS >= since cutoff, returns ascending by
-// TS, and caps at the resolved limit (the EARLIEST limit after the cutoff). It
-// returns ErrBusClosed if the bus is closed. The returned slice is a fresh copy;
-// mutating it never touches the internal history. This is the historical-replay
-// companion to Publish/Subscribe (ADR-0021 additive seam).
+// shared Filter.Matches, applies the TS >= since cutoff, sorts ascending by TS,
+// and returns the MOST RECENT resolved-limit events (the newest tail of the
+// matching window, still in ascending order) — matching PostgresBus.ListEvents.
+// It returns ErrBusClosed if the bus is closed. The returned slice is a fresh
+// copy; mutating it never touches the internal history. This is the historical-
+// replay companion to Publish/Subscribe (ADR-0021 additive seam).
 func (b *MemoryBus) ListEvents(ctx context.Context, filter Filter, since time.Time, limit int) ([]Event, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -183,7 +195,9 @@ func (b *MemoryBus) ListEvents(ctx context.Context, filter Filter, since time.Ti
 
 	limit = resolveLimit(limit)
 	if len(matched) > limit {
-		matched = matched[:limit]
+		// Keep the most-recent `limit` (the tail of the ascending slice), matching
+		// PostgresBus's DESC-LIMIT-then-reverse semantics.
+		matched = matched[len(matched)-limit:]
 	}
 	return matched, nil
 }

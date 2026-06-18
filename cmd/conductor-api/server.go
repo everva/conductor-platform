@@ -55,6 +55,11 @@ type apiServer struct {
 	// clock is the injectable time source for heartbeat-age and generated_at, so
 	// time-derived JSON is deterministic in tests. Defaults to time.Now in main.
 	clock func() time.Time
+	// baseCtx is the server-lifetime context (cancelled on SIGINT/SIGTERM). The /ws
+	// handler ties each live connection to it so a graceful shutdown closes streaming
+	// clients promptly (review F3) instead of dropping them when the process exits.
+	// It is optional: nil (e.g. in tests) leaves /ws bound to the request context only.
+	baseCtx context.Context
 }
 
 // now returns the current time via the injected clock, defaulting to time.Now so

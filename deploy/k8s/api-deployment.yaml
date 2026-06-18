@@ -54,6 +54,15 @@ spec:
                 name: conductor-config
             - secretRef:
                 name: conductor-secret
+          env:
+            # The distill endpoint (POST /projects/{id}/distill) runs `claude -p`
+            # server-side, which needs a writable HOME (config/state) and TMPDIR.
+            # With readOnlyRootFilesystem:true the root is locked, so point HOME and
+            # TMPDIR at the writable emptyDir volumes mounted below (review F6).
+            - name: HOME
+              value: /home/conductor
+            - name: TMPDIR
+              value: /tmp
           # Liveness: /healthz is 200 while the process serves and does NOT touch
           # the store, so a Postgres blip never flaps it.
           livenessProbe:
@@ -81,9 +90,11 @@ spec:
             runAsGroup: 65532
             capabilities:
               drop: ["ALL"]
-            # The gateway shells out to NOTHING (no git, no workspace writes), so
-            # unlike the daemon it CAN run with a fully read-only root filesystem —
-            # a strict hardening win.
+            # The root filesystem is read-only (a hardening win): the gateway does no
+            # git/workspace writes. The ONE writable need is the distill endpoint's
+            # `claude -p` subprocess (config/state + temp), which is confined to the
+            # dedicated emptyDir volumes below (HOME=/home/conductor, TMPDIR=/tmp) —
+            # the rootfs itself stays locked.
             readOnlyRootFilesystem: true
           resources:
             requests:
@@ -92,3 +103,15 @@ spec:
             limits:
               cpu: "500m"
               memory: "256Mi"
+          volumeMounts:
+            # Writable HOME for the distiller's `claude -p` (config/state) and a
+            # temp dir — the only writable paths the otherwise read-only gateway needs.
+            - name: home
+              mountPath: /home/conductor
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: home
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

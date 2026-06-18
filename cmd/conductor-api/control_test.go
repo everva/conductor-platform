@@ -106,6 +106,28 @@ func TestOnboardInvalidJSON400(t *testing.T) {
 	}
 }
 
+// TestOnboardInvalidRepo400 covers the F4 hardening: a repo that could be
+// mis-parsed as a git CLI option (leading "-") or carries whitespace/control
+// chars is rejected before it reaches the daemon's `git clone`.
+func TestOnboardInvalidRepo400(t *testing.T) {
+	s, store := emptyServer()
+	for _, repo := range []string{"--upload-pack=evil", "-x", "owner/ x", "owner/x\nmalicious"} {
+		bodyBytes, _ := json.Marshal(map[string]string{"repo": repo})
+		rec := doBody(t, s, http.MethodPost, "/projects", bearer(), string(bodyBytes))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("repo %q: status = %d, want 400; body=%s", repo, rec.Code, rec.Body.String())
+		}
+	}
+	// A legitimate local path / owner-name still works (not rejected).
+	rec := doBody(t, s, http.MethodPost, "/projects", bearer(), `{"repo":"owner/ok"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("valid repo: status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := store.GetProject(context.Background(), projectIDForRepoControl("owner/ok")); err != nil {
+		t.Fatalf("valid repo not created: %v", err)
+	}
+}
+
 // --- intake ---
 
 const validIntakeYAML = `id: A-1
@@ -298,6 +320,19 @@ func TestApproveNoAwaiting409(t *testing.T) {
 	rec := doBody(t, s, http.MethodPost, "/projects/proj-x/approve", bearer(), "")
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestApproveUnknownProject404 covers the F2 fix: approve on a project that does
+// not exist must be 404 (not a misleading 409 "no task awaiting approval", which
+// would imply the project exists). The auto-resolve path lists tasks, and an
+// unknown project lists empty with no error, so an explicit existence check is
+// required to distinguish unknown-project from no-held-task.
+func TestApproveUnknownProject404(t *testing.T) {
+	s, _ := emptyServer()
+	rec := doBody(t, s, http.MethodPost, "/projects/does-not-exist/approve", bearer(), "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

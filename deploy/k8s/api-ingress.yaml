@@ -12,6 +12,14 @@
 #   - WebSocket (/ws): the nginx ingress controller upgrades Connection/Upgrade
 #     automatically; no special annotation is needed for a single backend. The long
 #     read timeout below keeps idle event streams from being cut.
+#   - TOKEN-IN-QUERY (review F5): browser WebSocket clients pass the bearer token as
+#     ?token=… (the WS API cannot set an Authorization header). nginx's DEFAULT
+#     access log records the full request line INCLUDING the query string, so the
+#     token would land in proxy logs. Before production, customize the controller's
+#     log-format to drop the query string (or disable access logging on /ws), e.g.
+#     set `$request_uri`→`$uri` in log-format, or annotate this Ingress with
+#     `nginx.ingress.kubernetes.io/configuration-snippet: "access_log off;"` scoped
+#     to the WS path. The gateway itself never logs the token or the URL.
 #
 # ingressClassName assumes an nginx controller; change it for your environment.
 apiVersion: networking.k8s.io/v1

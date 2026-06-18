@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+
+	"github.com/everva/conductor-platform/internal/envsafe"
 )
 
 // distillPrompt is the distillation instruction prepended to the conversation. It
@@ -55,7 +57,13 @@ func claudeDistillRunner(ctx context.Context, conversation string) ([]byte, erro
 		return nil, fmt.Errorf("intake: claude CLI not found: %w", err)
 	}
 	cmd := exec.CommandContext(ctx, "claude", "-p") //nolint:gosec // fixed subscription claude command; no shell, no API key.
-	cmd.Env = os.Environ()
+	// SECURITY (review F7): sanitize the inherited env before handing it to the
+	// distiller subprocess, mirroring engine.execRunner's R-2 hardening. The
+	// distiller runs inside the API gateway process, whose env carries
+	// CONDUCTOR_API_TOKEN + CONDUCTOR_DSN — secrets the distiller never needs.
+	// envsafe.Sanitize strips GH_TOKEN/GITHUB_TOKEN/CONDUCTOR_* while preserving the
+	// subscription `claude` auth (oauth/keychain), so distillation still works.
+	cmd.Env = envsafe.Sanitize(os.Environ())
 	cmd.Stdin = bytes.NewReader([]byte(distillPrompt + conversation))
 
 	var buf bytes.Buffer

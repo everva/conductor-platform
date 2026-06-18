@@ -170,7 +170,7 @@ func TestMemoryListEventsLimit(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	// limit smaller than available keeps the EARLIEST limit, ascending.
+	// limit smaller than available keeps the MOST RECENT limit, ascending.
 	got, err := b.ListEvents(ctx, Filter{}, time.Time{}, 2)
 	if err != nil {
 		t.Fatal(err)
@@ -178,8 +178,8 @@ func TestMemoryListEventsLimit(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2, got %d", len(got))
 	}
-	if got[0].ID != "id-0" || got[1].ID != "id-1" {
-		t.Fatalf("expected earliest two (id-0,id-1), got %s,%s", got[0].ID, got[1].ID)
+	if got[0].ID != "id-3" || got[1].ID != "id-4" {
+		t.Fatalf("expected most-recent two (id-3,id-4) ascending, got %s,%s", got[0].ID, got[1].ID)
 	}
 
 	// limit <= 0 applies the default (all 5 fit under it).
@@ -326,13 +326,13 @@ func TestPostgresListEvents(t *testing.T) {
 		}
 	})
 
-	t.Run("limitEarliest", func(t *testing.T) {
+	t.Run("limitMostRecent", func(t *testing.T) {
 		got, err := bus.ListEvents(ctx, Filter{Project: pA}, time.Time{}, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got) != 1 || got[0].ID != "e0" {
-			t.Fatalf("expected earliest e0 with limit 1, got %+v", got)
+		if len(got) != 1 || got[0].ID != "e2" {
+			t.Fatalf("expected most-recent e2 with limit 1, got %+v", got)
 		}
 	})
 

@@ -177,9 +177,10 @@ func TestEventsLimit(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("limit len = %d, want 2", len(got))
 	}
-	// Earliest window: T-1 plan then T-2 develop.
-	if got[0].Phase != events.PhasePlan || got[1].Phase != events.PhaseDevelop {
-		t.Errorf("limit window = %+v, want earliest two", got)
+	// Most-recent window (review F1): the newest two events, ascending — the seed's
+	// last two are verify/intervention-needed then merge/merge.
+	if got[0].Phase != events.PhaseVerify || got[1].Phase != events.PhaseMerge {
+		t.Errorf("limit window = %+v, want most-recent two (verify, merge)", got)
 	}
 }
 
