@@ -236,6 +236,70 @@ func (p *Provisioner) WorkspaceForBranch(ctx context.Context, project statestore
 	return engine.Workspace{Path: abs, Branch: branch}, nil
 }
 
+// ErrBaseMergeConflict is returned by MergeBaseIntoWorktree when merging the base
+// branch into the re-attached preserved branch CONFLICTS textually. It is a
+// comparable sentinel so the conductor can distinguish a real drift-conflict (treat
+// as approved-rejected/blocked, honestly) from an infrastructural git error. The
+// failed merge is aborted before this is returned, leaving the worktree clean.
+var ErrBaseMergeConflict = errors.New("provisioner: base merge into preserved branch conflicts")
+
+// MergeBaseIntoWorktree merges the project's CURRENT base branch INTO the worktree's
+// re-attached preserved branch (M1, the base-drift guard for the approve flow). It
+// exists so the approve-merge re-verify runs against the ADVANCED base, not just the
+// preserved branch tip: without this the re-verify only re-runs the gate on the OLD
+// commit, so a SEMANTIC base drift (the base changed something that breaks the held
+// branch's gate WITHOUT a textual conflict) would pass re-verify and only surface —
+// if at all — as a textual conflict at SquashMerge. Bringing the base into the
+// worktree first makes the re-verify a real drift guard.
+//
+// It runs `git merge --no-edit --no-ff <base>` in the worktree. On a clean merge it
+// returns nil and the worktree now combines the preserved work with the drifted base
+// (the caller re-verifies THIS). On a CONFLICT it `git merge --abort`s (leaving the
+// worktree clean and the preserved branch tip intact) and returns ErrBaseMergeConflict
+// so the caller treats it as changes-requested/blocked — honest, never fake-green. A
+// non-conflict git failure is returned wrapped (infrastructural, not a drift verdict).
+//
+// It is additive on the provisioner (no frozen signature changed); the conductor
+// reaches it via the optional BaseMerger capability (type assertion), so a provisioner
+// lacking it simply skips the extra guard (the pre-M1 behavior). The base ref is kept
+// current by WorkspaceForBranch's EnsureClone→fetchBase (which fast-forwards the local
+// base to the origin tip) before this is called.
+func (p *Provisioner) MergeBaseIntoWorktree(ctx context.Context, project statestore.Project, ws engine.Workspace) error {
+	if ws.Path == "" {
+		return fmt.Errorf("provisioner: merge-base: %w", errors.New("workspace path is required"))
+	}
+	if project.BaseBranch == "" {
+		return fmt.Errorf("provisioner: merge-base: %w", errors.New("BaseBranch is required"))
+	}
+	// Merge the local base ref (kept current by EnsureClone→fetchBase) into the
+	// worktree's checked-out preserved branch. --no-ff records a merge commit so the
+	// re-verify clearly sees the combined tree; --no-edit avoids an editor prompt.
+	mergeErr := runGit(ctx, ws.Path, p.gitEnv(), "merge", "--no-edit", "--no-ff", project.BaseBranch)
+	if mergeErr == nil {
+		return nil
+	}
+	// A failed merge is most likely a textual conflict. Abort it to restore a clean
+	// worktree (the preserved branch tip is untouched by an aborted merge), then
+	// classify: if a merge was actually in progress, it was a conflict (drift).
+	inProgress := runGit(ctx, ws.Path, p.gitEnv(), "rev-parse", "--verify", "--quiet", "MERGE_HEAD") == nil
+	if inProgress {
+		_ = runGit(ctx, ws.Path, p.gitEnv(), "merge", "--abort")
+		return fmt.Errorf("%w: base %q into branch %q: %v", ErrBaseMergeConflict, project.BaseBranch, ws.Branch, mergeErr)
+	}
+	// No merge in progress -> an infrastructural failure (e.g. base ref missing),
+	// not a drift conflict. Surface it as a wrapped error, not the conflict sentinel.
+	return fmt.Errorf("provisioner: merge-base %q into branch %q: %w", project.BaseBranch, ws.Branch, mergeErr)
+}
+
+// IsBaseMergeConflict reports whether err is the ErrBaseMergeConflict drift signal.
+// It lets the conductor classify a MergeBaseIntoWorktree result as a real base-drift
+// CONFLICT (→ approved-rejected/blocked) versus an infrastructural error WITHOUT
+// importing the provisioner package's sentinel directly (the conductor reaches it via
+// the BaseMerger capability), keeping the conductor↔provisioner coupling at the seam.
+func (p *Provisioner) IsBaseMergeConflict(err error) bool {
+	return errors.Is(err, ErrBaseMergeConflict)
+}
+
 // Cleanup removes the worktree and prunes it (ADR-0017). It is idempotent: a
 // missing worktree is not an error. RetainBlocked is honored by the caller
 // (which decides whether to call Cleanup); Cleanup itself always removes.

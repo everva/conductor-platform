@@ -156,6 +156,8 @@ func TestPGHoldoutID(t *testing.T) {
 		"pg://holdouts/A-1":           "A-1",
 		"pg://holdouts/A-1/spec.yaml": "A-1",
 		"pg://holdouts/B-2/":          "B-2",
+		// L4: a padded id is TrimSpace'd to the clean value.
+		"pg://holdouts/  A-1  ": "A-1",
 	}
 	for ref, want := range cases {
 		got, err := pgHoldoutID(ref)
@@ -169,6 +171,15 @@ func TestPGHoldoutID(t *testing.T) {
 	for _, bad := range []string{"pg://", "pg://holdouts/", "pg://wrong/A-1"} {
 		if _, err := pgHoldoutID(bad); err == nil {
 			t.Fatalf("ref %q must be rejected", bad)
+		}
+	}
+	// L4: a whitespace-only id fails with a CLEAR validation error here, not a
+	// confusing downstream "no rows for id" — and the message names the want-shape.
+	for _, blank := range []string{"pg://holdouts/   ", "pg://holdouts/\t"} {
+		if _, err := pgHoldoutID(blank); err == nil {
+			t.Fatalf("whitespace-only id %q must be rejected at parse time", blank)
+		} else if !strings.Contains(err.Error(), "no holdout id") {
+			t.Fatalf("ref %q: want a clear 'no holdout id' error, got %v", blank, err)
 		}
 	}
 }

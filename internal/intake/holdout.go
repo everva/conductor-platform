@@ -33,8 +33,17 @@ func validateHoldoutRef(ref string) error {
 	for _, scheme := range externalHoldoutSchemes {
 		if strings.HasPrefix(trimmed, scheme) {
 			// Guard against an "empty" locator like "store://" with no body path.
-			if strings.TrimSpace(strings.TrimPrefix(trimmed, scheme)) == "" {
+			body := strings.TrimSpace(strings.TrimPrefix(trimmed, scheme))
+			if body == "" {
 				return fmt.Errorf("hidden_holdout_ref %q has an external scheme but no locator body", ref)
+			}
+			// S-4 (intake side): a private: ref's repo part must be a safe https/ssh
+			// git remote — reject a file://, absolute-path, or "../"-traversal repo at
+			// intake so an unsafe local-clone locator never reaches the store.
+			if scheme == "private:" {
+				if err := validatePrivateLocatorBody(ref, body); err != nil {
+					return err
+				}
 			}
 			return nil
 		}
@@ -50,4 +59,40 @@ func validateHoldoutRef(ref string) error {
 		"hidden_holdout_ref %q is not a repo-external locator; use one of %s (ADR-0018)",
 		ref, strings.Join(externalHoldoutSchemes, ", "),
 	)
+}
+
+// validatePrivateLocatorBody tightens the private: scheme at intake (S-4): the body
+// is "<repo>#<path>" and the <repo> part must NOT be a dangerous local-clone target —
+// a file:// URL, an absolute local path, or a "../"-traversal — which would clone an
+// arbitrary LOCAL directory (limited SSRF / local-fs read). It rejects only those
+// clearly-unsafe shapes here (so the documented bare-slug example form keeps
+// validating at intake); the holdout package's runtime guard additionally enforces
+// the full https/ssh-only allowlist before any clone happens. The path part is not
+// re-validated here (the store's path-traversal guard owns that).
+func validatePrivateLocatorBody(ref, body string) error {
+	repo := body
+	if idx := strings.LastIndex(body, "#"); idx >= 0 {
+		repo = strings.TrimSpace(body[:idx])
+	}
+	low := strings.ToLower(repo)
+	switch {
+	case strings.HasPrefix(low, "file://"):
+		return fmt.Errorf("hidden_holdout_ref %q private repo uses file:// (local clone forbidden; use an https/ssh git remote) (ADR-0017/0018)", ref)
+	case strings.HasPrefix(repo, "/") || isWindowsAbs(repo):
+		return fmt.Errorf("hidden_holdout_ref %q private repo is an absolute local path (local clone forbidden; use an https/ssh git remote) (ADR-0017/0018)", ref)
+	case repo == ".." || strings.HasPrefix(repo, "../") || strings.Contains(repo, "/../") || strings.HasSuffix(repo, "/.."):
+		return fmt.Errorf("hidden_holdout_ref %q private repo contains a '..' path segment (forbidden) (ADR-0017/0018)", ref)
+	}
+	return nil
+}
+
+// isWindowsAbs reports whether repo looks like an absolute Windows path
+// ("C:\\..." or "C:/...") so it is rejected as a local clone target.
+func isWindowsAbs(repo string) bool {
+	if len(repo) < 3 {
+		return false
+	}
+	c := repo[0]
+	isLetter := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+	return isLetter && repo[1] == ':' && (repo[2] == '\\' || repo[2] == '/')
 }

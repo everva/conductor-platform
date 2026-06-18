@@ -355,6 +355,40 @@ func TestRegistry_PickReady_CapabilityRouting(t *testing.T) {
 			t.Fatalf("expected A-1, got %q", got.ID)
 		}
 	})
+
+	// L2: a stray-whitespace Requires entry must still route correctly — the host
+	// set is trimmed at construction, so an un-normalized "docker " (trailing space)
+	// or "" entry must be trimmed/dropped on the task side too, NOT become a silent
+	// never-match.
+	t.Run("stray-whitespace Requires entry still routes to a capable host", func(t *testing.T) {
+		s := newStore(t)
+		// "docker " (trailing space) matches a clean "docker" capability after trim.
+		seedTasks(t, s, statestore.Task{ID: "A-1", Status: "todo", Requires: []string{"docker "}})
+		r := NewRegistry(s, WithCapabilities([]string{"docker"}))
+
+		got, err := r.PickReady(ctx, testProject)
+		if err != nil {
+			t.Fatalf("whitespace Requires must trim and match the capability, got %v", err)
+		}
+		if got.ID != "A-1" {
+			t.Fatalf("expected A-1, got %q", got.ID)
+		}
+	})
+
+	t.Run("blank Requires entry constrains nothing (dropped like host-side)", func(t *testing.T) {
+		s := newStore(t)
+		// A blank entry alongside a real one: the blank is dropped, only "docker" gates.
+		seedTasks(t, s, statestore.Task{ID: "A-1", Status: "todo", Requires: []string{"", "docker", "  "}})
+		r := NewRegistry(s, WithCapabilities([]string{"docker"}))
+
+		got, err := r.PickReady(ctx, testProject)
+		if err != nil {
+			t.Fatalf("blank Requires entries must be dropped, not block routing: %v", err)
+		}
+		if got.ID != "A-1" {
+			t.Fatalf("expected A-1, got %q", got.ID)
+		}
+	})
 }
 
 func TestRegistry_Transition_MissingTaskIsErrNotFound(t *testing.T) {

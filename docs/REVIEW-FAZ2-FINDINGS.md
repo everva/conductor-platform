@@ -31,21 +31,22 @@ engine.go Faz-2 boyunca byte-frozen; statestore additive-only; **merge yetkisi y
 - **FIX (uygulandı):** `sanitizedEnv()` artık aynı paylaşımlı `envsafe.Sanitize(os.Environ())` denylist'ini kullanıyor (GH_TOKEN/GITHUB_TOKEN + CONDUCTOR_*). Gate + holdout subprocess'leri daemon sırlarını görmez; PATH/toolchain korunur (DRY, S-1 ile tek kaynak). Test: mevcut `TestRunGate_StripsConductorEnv` genişletildi — parent'taki GH_TOKEN gate'e görünmez, PATH görünür.
 
 ## 🟡 ORTA
-### S-3 — Saldırgan-kontrollü .conductor/config.yaml → host'ta keyfi argv
+### S-3 — Saldırgan-kontrollü .conductor/config.yaml → host'ta keyfi argv — ✅ FIXED (R-3, 2026-06-18)
 `scaffolder.LoadRecipe`→`resolveRecipe` develop+gate argv'yi repo YAML'ından alıp `exec` ediyor (gate argv'de guard yok; develop'ta yalnız placeholder-check). Operatör `-recipe-dir`'i klonlanan (saldırgan-etkili) ürün repo'suna gösterirse (doğal per-project kullanım) RCE. Shell yok ama argv[0] saldırgan-seçimli.
-- **FIX:** trust-boundary'yi açık dokümante et + (opsiyonel) recipe argv allowlist / sandbox; S-1/S-2 fix'i blast-radius'u (secret) daraltır.
-### M1 — Approve re-verify "base drift" iddiası semantik drift'i yakalamıyor
+- **FIX (uygulandı):** trust-boundary `resolveRecipe` doc + DEPLOY.md §7'de açıkça yazıldı (`-recipe-dir` repo'sunun `.conductor/config.yaml` argv'si TRUSTED/host-executed; sandbox'sız saldırgan-etkili repo'ya YÖNLENDİRME). Konservatif tripwire `warnIfShellArgv`: develop/gate argv[0] shell (`sh`/`bash`/`zsh`/…, base-name ile) ise veya argv `-c` içeriyorsa WARN (hard-fail DEĞİL — legit recipe gerekebilir). S-1/S-2 zaten secret blast-radius'u kapatıyor. Test: `cmd/conductor` recipe testleri (shell argv0 + `-c` WARN, tool argv WARN'suz).
+### M1 — Approve re-verify "base drift" iddiası semantik drift'i yakalamıyor — ✅ FIXED (R-3, 2026-06-18)
 `mergeApproved`/`WorkspaceForBranch` korunmuş branch'i olduğu-tip'te checkout ediyor; ilerlemiş base worktree'ye getirilmiyor → semantik (metinsel-olmayan) drift re-verify'ı geçer (metinsel çakışma merge'de yakalanır).
-- **FIX:** re-attach'tan sonra base'i branch'e merge/rebase edip re-verify; VEYA yorumları "yalnız korunmuş-tip'te gate, çakışma merge'de" diye yumuşat.
+- **FIX (uygulandı):** re-verify'dan ÖNCE base branch'e merge edilir. `provisioner.MergeBaseIntoWorktree` (`git merge --no-edit --no-ff <base>` worktree'de; çakışırsa `merge --abort` + `ErrBaseMergeConflict`; `IsBaseMergeConflict` sınıflandırıcı). Conductor opsiyonel `BaseMerger` seam'iyle (type-assert; provisioner satisfy eder, fake'ler skip → backward-compatible) çağırır: temiz merge → re-verify DRIFTED base'e karşı (gerçek drift guard); çakışma VEYA re-verify-fail → `OutcomeApprovedRejected` (blocked, approval temizlenir, trailer YOK, fake-green değil; abort sonrası worktree temiz). "develop hiç re-run etmez" korunur. engine.go(interface) + statestore imzaları FROZEN (additive ADR-0021). Test (e2e, gerçek git): `TestE2E_ApproveReVerify_SemanticBaseDrift_BlocksMerge` — held branch `Greeting()` ekler, base TUTULURKEN farklı dosyada ikinci `Greeting()` ekler (metinsel çakışma YOK, ama birleşik ağaç `go build`'i kırar) → approve → base merge edilir → re-verify FAIL → approved-rejected, trailer yok, blocked; + `..._TextualBaseConflict_...` (aynı satır → conflict → abort → rejected).
 
-## 🟢 DÜŞÜK
-- **S-4** `private:` `file://`/mutlak/relative kabul ediyor (sınırlı SSRF; ref operatör-authored) → https-allowlist.
-- **S-5** eskimiş "secret yok / GH_TOKEN okunmaz" yorumları (main.go:14-17, secret.yaml:32) artık yanlış → güncelle.
-- **L1** prod progress-probe `Alive:true` hardcoded → sentinel Layer-1 "clearly dead→Kill" prod'da inert (backstop yine bağlar). Signal=="idle" eşle veya iddiayı kaldır.
-- **L2** capability routing `Task.Requires`'ı normalize etmiyor (whitespace/boş → sessiz skip) → host-tarafı gibi trim/dedup.
-- **L3/L4** privatestore cacheKey çakışması; pgstore id TrimSpace yok (loud-fail, hardening).
+## 🟢 DÜŞÜK — tümü ✅ FIXED (R-3, 2026-06-18)
+- **S-4** ✅ `private:` repo artık https/ssh-only allowlist (`validatePrivateRemote`, Fetch'te); `file://`/mutlak/`..` reddedilir (test-only `allowLocalRemote` in-package read-path için). `intake.validateHoldoutRef` de private repo `file://`/mutlak/`..` reddeder. Test: reddedilen+kabul (holdout + intake).
+- **S-5** ✅ `cmd/conductor/main.go` header + `deploy/k8s/secret.yaml` doğru: daemon GH_TOKEN/CONDUCTOR_DSN'i env'den OKUR (provisioner credential-helper + merge-push + DSN) ve performer/gate subprocess env'inden STRIP edilir (R-2).
+- **L1** ✅ `engineProgressProbe` `Health.Signal`'ı `aliveFromSignal` ile Alive'a WIRE eder (hardcoded değil). Mapping konservatif (output-türevli liveness süreç-ölümü kanıtlayamaz → "idle" bile alive → gray-zone+backstop'a yönlendirilir, Layer-1 false-kill yok); bu yüzden Layer-1 "clearly dead→Kill" iddiası sentinel doc'unda yumuşatıldı (richer probe gerektirir; backstop default'ta yetkili). Test: `TestEngineProgressProbe_WiresSignalToAlive`.
+- **L2** ✅ `capabilitiesSatisfy` `Task.Requires`'ı TrimSpace+boş-drop eder (host-tarafı `WithCapabilities` ile aynı) → `"docker "`/`""` sessiz never-match olmaz. Test: stray-whitespace + blank doğru route.
+- **L3** ✅ `cacheKey` full remote'u sha256 hex'le hash'ler (slug prefix + digest); farklı remote → farklı dir. Test: lossy-slug çiftleri ayrışır.
+- **L4** ✅ `pgHoldoutID` id'yi TrimSpace+boş-validate eder → boşluk-only id net hata ("no holdout id"), kafa-karıştırıcı "no rows" değil. Test: padded trim, whitespace-only reddedilir.
 
 ## Önerilen düzeltme grupları
 - **R-1 (multi-host lease güvenliği):** C-1 (background heartbeat) + C-2 (owner-scoped release). KRİTİK+YÜKSEK. — ✅ DONE (2026-06-18).
 - **R-2 (secret containment):** S-1 + S-2 (performer + gate env sanitize). YÜKSEK. — ✅ DONE (2026-06-18): paylaşımlı `internal/envsafe` denylist (GH_TOKEN/GITHUB_TOKEN + CONDUCTOR_*) execRunner + verify.sanitizedEnv'de; gate+e2e+race yeşil.
-- **R-3 (sertleştirme):** S-3 (trust-doc + argv guard) + M1 (base-drift) + S-4/S-5/L1/L2/L3/L4.
+- **R-3 (sertleştirme):** S-3 (trust-doc + argv guard) + M1 (base-drift) + S-4/S-5/L1/L2/L3/L4. — ✅ DONE (2026-06-18): M1 base-merge-before-reverify (`BaseMerger` seam + e2e semantik-drift+conflict testleri); S-3 trust-doc (DEPLOY.md §7) + shell-argv tripwire; S-4 https/ssh allowlist; S-5 doğru secret-hijyen yorumları; L1 Signal→Alive wiring (+doc softening); L2 Requires normalize; L3 sha256 cacheKey; L4 pgstore id trim/validate. Gate+e2e+race yeşil; engine.go+statestore frozen.

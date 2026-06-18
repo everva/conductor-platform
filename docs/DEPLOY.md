@@ -221,6 +221,36 @@ conductorctl resume  --project <id>                         # resume ticking
 
 ---
 
+## 7. Security: the `-recipe-dir` trust boundary (S-3)
+
+The daemon can load a per-project recipe (the **develop** command and the **verify
+gates**) from a repo's `.conductor/config.yaml` when you point it at one with
+`-recipe-dir` (`CONDUCTOR_RECIPE_DIR`). Both the develop and gate **argv are executed
+on the host**. That config is therefore **TRUSTED, host-executed input**:
+
+- **Only point `-recipe-dir` at an operator-vetted repo.** Do **not** point it at an
+  untrusted or attacker-influenced repo (for example a cloned product repo whose
+  `.conductor/config.yaml` a contributor can edit) without **sandboxing** the daemon
+  — run it in a container/VM with no host-credential access. A malicious
+  `.conductor/config.yaml` could otherwise run arbitrary `argv` on the host.
+- **Blast radius is limited but not eliminated.** The daemon strips its own secrets
+  (`GH_TOKEN`/`GITHUB_TOKEN` and every `CONDUCTOR_*`, including the DSN password)
+  from **every** develop and gate/holdout subprocess environment (R-2,
+  `internal/envsafe`), so a hostile recipe cannot read or exfiltrate those secrets.
+  That does **not** make arbitrary code execution on the host safe — sandbox
+  untrusted recipes.
+- **Tripwire.** On startup the daemon logs a `WARN` when a recipe's develop/gate
+  `argv[0]` is a shell (`sh`/`bash`/`zsh`/…) or the argv contains `-c` — a common
+  injection shape. Legitimate recipes invoke tools **directly** (`go`/`npm`/`pytest`/
+  `imagediff`), not a shell. It is a **warning, not a failure** (a recipe may
+  legitimately need a shell); treat it as a cue to confirm the recipe is vetted.
+
+The same rule applies to the global `-develop-cmd` flag/env: it is operator-supplied
+and run as an argv subprocess (no shell). The recipe path simply lets a vetted repo
+declare its own; keep that repo trusted.
+
+---
+
 ## See also
 
 - [`README.md`](../README.md) — architecture, the one core principle, repo layout.

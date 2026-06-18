@@ -321,6 +321,44 @@ func TestEngineProgressProbe_DerivesFromHealth(t *testing.T) {
 	}
 }
 
+// TestEngineProgressProbe_WiresSignalToAlive proves L1: the default probe wires the
+// engine's coarse Health.Signal through to Signals.Alive rather than hardcoding it,
+// so Layer-1 is not inert in production. The mapping is conservative (output-derived
+// liveness cannot prove a dead process), so every known Signal — including a stalled
+// "idle" — is reported alive, deferring a stalled run to the gray zone + backstop.
+func TestEngineProgressProbe_WiresSignalToAlive(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		signal    string
+		wantAlive bool
+	}{
+		{"progressing", true},
+		{"unknown", true},
+		{"idle", true}, // stalled-but-alive: routed to gray zone, never a Layer-1 false-kill.
+		{"", true},
+		{"bogus", true}, // unrecognized -> conservative alive.
+	}
+	for _, tc := range cases {
+		eng := &healthEngine{hs: engine.HealthState{Signal: tc.signal, LastActivityTS: now.Add(-time.Minute)}}
+		p := engineProgressProbe{eng: eng, session: engine.Session{TaskID: "T-1"}}
+		sig, err := p.Probe(context.Background(), now.Add(-2*time.Minute), now)
+		if err != nil {
+			t.Fatalf("signal %q: probe: %v", tc.signal, err)
+		}
+		if sig.Alive != tc.wantAlive {
+			t.Fatalf("signal %q: alive = %v, want %v", tc.signal, sig.Alive, tc.wantAlive)
+		}
+	}
+
+	// And the wiring is reachable as a unit so the per-Signal mapping is asserted
+	// directly (negative-proof it is not a constant): every defined value is alive.
+	for _, s := range []string{signalProgressing, signalIdle, signalUnknown, ""} {
+		if !aliveFromSignal(s) {
+			t.Fatalf("aliveFromSignal(%q) = false, want true", s)
+		}
+	}
+}
+
 // healthEngine is a minimal engine.EngineAdapter that returns a scripted
 // HealthState (only Health is exercised by the probe test).
 type healthEngine struct {

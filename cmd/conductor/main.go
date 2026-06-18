@@ -11,10 +11,15 @@
 // interval until it is asked to stop. SIGINT/SIGTERM cancel the loop's context so
 // an in-flight tick finishes and the process exits cleanly.
 //
-// It carries NO secret: the develop command is an operator-supplied command
-// string (default a subscription `claude -p` style invocation), and no API key or
-// token is ever read or embedded here. The recipe gates default to the same
-// go build / go test the e2e test uses.
+// Secrets it DOES read from the environment (S-5, accurate): GH_TOKEN (the gh-token
+// the provisioner installs into git's credential helper for writable clones/merge-
+// pushes, ADR-0017) and CONDUCTOR_DSN (the Postgres connection string carrying the
+// DB password). Both are read here and used DAEMON-SIDE only. Crucially they are
+// STRIPPED from every performer and gate/holdout subprocess environment (R-2 /
+// internal/envsafe denylist) so the attacker-influenced performer never sees them,
+// and they are NEVER logged (/status exposes only the backend NAME, never the DSN).
+// The performer command itself is an operator-supplied subscription `claude -p`
+// style invocation and carries no API key here.
 //
 // It uses only the standard library: flag for config (each flag falls back to an
 // env var), log/slog for structured per-tick logging, and os/signal for graceful
@@ -33,6 +38,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -1061,6 +1067,22 @@ func defaultGates() []verify.Gate {
 // for the binary here: a missing golangci-lint is caught at gate-run time, where
 // the gate FAILS deterministically with the exec error (never silently skipped —
 // that would be a fake-green). Operators who configure golangci must install it.
+//
+// TRUST BOUNDARY (S-3) — READ THIS BEFORE POINTING -recipe-dir AT A REPO:
+// the develop and gate argv loaded from the -recipe-dir repo's .conductor/config.yaml
+// are EXECUTED on the host. That config is therefore TRUSTED INPUT — it must be
+// operator-vetted. Do NOT point -recipe-dir at an untrusted / attacker-influenced
+// repo (e.g. a cloned product repo whose .conductor a contributor can edit) without
+// SANDBOXING the daemon (a container/VM with no host-credential access), because a
+// malicious .conductor/config.yaml could run arbitrary argv on the host. R-2/envsafe
+// already strips the daemon's own secrets (GH_TOKEN/CONDUCTOR_*) from every develop/
+// gate subprocess, which limits the blast radius (no secret exfiltration), but it
+// does NOT make arbitrary code execution safe. As a conservative tripwire, this
+// function logs a WARNING when a develop/gate argv[0] is a shell (sh/bash/zsh/…) or
+// the argv contains a "-c" flag (a common injection shape) — legitimate recipes
+// invoke tools directly (go/npm/pytest/imagediff), not a shell. It WARNS rather than
+// hard-fails, since a recipe may legitimately need a shell; the warning is the
+// operator's cue to confirm the recipe is vetted.
 func resolveRecipe(cfg config, logger *slog.Logger) (develop []string, gates []verify.Gate, err error) {
 	if cfg.recipeDir == "" {
 		logger.Info("recipe selected",
@@ -1101,6 +1123,19 @@ func resolveRecipe(cfg config, logger *slog.Logger) (develop []string, gates []v
 		developSource = "from .conductor/config.yaml (per-project)"
 	}
 
+	// Conservative trust-boundary tripwire (S-3): the recipe argv is executed on the
+	// host, so a recipe loaded from an attacker-influenced .conductor/config.yaml is
+	// an RCE risk (see this function's doc). Legitimate recipes invoke tools directly
+	// (go/npm/pytest/imagediff), NOT a shell, so a shell argv[0] or a "-c" flag is a
+	// common injection shape worth surfacing. WARN (don't hard-fail) so a recipe that
+	// legitimately needs a shell still runs, but the operator is cued to confirm it.
+	if developSource == "from .conductor/config.yaml (per-project)" {
+		warnIfShellArgv(logger, "develop", develop)
+	}
+	for _, s := range rec.Gates {
+		warnIfShellArgv(logger, "gate "+s.Name, s.Argv)
+	}
+
 	logger.Info("recipe selected",
 		slog.String("source", ".conductor/config.yaml"),
 		slog.String("recipe_dir", cfg.recipeDir),
@@ -1117,6 +1152,45 @@ func resolveRecipe(cfg config, logger *slog.Logger) (develop []string, gates []v
 // scaffolder.developPlaceholder (which is unexported) by value, not by importing it.
 func isDevelopPlaceholder(argv []string) bool {
 	return len(argv) == 2 && argv[0] == "echo" && argv[1] == "configure-develop-command"
+}
+
+// shellArgv0 is the set of shell binaries a recipe argv[0] should NOT normally be
+// (S-3): legitimate recipes invoke tools directly (go/npm/pytest/imagediff). A
+// recipe whose argv[0] is one of these — or whose argv contains a "-c" flag — is a
+// common command-injection shape and warrants an operator warning. The check
+// compares the base name so an absolute path (/bin/sh) is caught too.
+var shellArgv0 = map[string]struct{}{
+	"sh": {}, "bash": {}, "zsh": {}, "dash": {}, "ksh": {}, "fish": {}, "csh": {}, "tcsh": {}, "ash": {},
+}
+
+// warnIfShellArgv logs a conservative WARNING (S-3 tripwire) when a recipe's argv
+// looks like a shell invocation — argv[0] is a shell binary (by base name, so
+// /bin/sh is caught) or any element is the "-c" flag. It NEVER hard-fails: a recipe
+// may legitimately need a shell, and the warning is the operator's cue to confirm
+// the -recipe-dir repo's .conductor/config.yaml is vetted (it is TRUSTED, host-
+// executed input). An empty argv is a no-op.
+func warnIfShellArgv(logger *slog.Logger, label string, argv []string) {
+	if len(argv) == 0 {
+		return
+	}
+	base := filepath.Base(argv[0])
+	_, isShell := shellArgv0[base]
+	hasDashC := false
+	for _, a := range argv {
+		if a == "-c" {
+			hasDashC = true
+			break
+		}
+	}
+	if !isShell && !hasDashC {
+		return
+	}
+	logger.Warn("recipe argv looks like a shell invocation (S-3 trust-boundary tripwire)",
+		slog.String("recipe_entry", label),
+		slog.String("argv0", argv[0]),
+		slog.Bool("shell_argv0", isShell),
+		slog.Bool("has_-c", hasDashC),
+		slog.String("detail", "the recipe argv is executed on the host; the -recipe-dir repo's .conductor/config.yaml is TRUSTED input. Confirm it is operator-vetted, or sandbox the daemon (container). Legitimate recipes invoke tools directly (go/npm/pytest), not a shell. This is a warning, not a failure."))
 }
 
 // newVerifier constructs the independent verify gate (B-2) with the holdout store

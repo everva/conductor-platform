@@ -333,3 +333,37 @@ Deterministik kanıt = kalite kapısı (LLM asla karar mercii); sahte-yeşil ASL
   genişletilmiş `verify.TestRunGate_StripsConductorEnv` (GH_TOKEN gate'e görünmez, PATH görünür). engine.go interface +
   statestore + tools/builder DOKUNULMADI. Offline gate (build+test+vet+golangci v2.12.0) + e2e (E2E ./internal/
   conductor/) + `-race ./internal/engine/ ./internal/verify/` YEŞİL; gofmt temiz; yeni dep yok. **→ S-1, S-2 FIXED.**
+- **R-3 (sertleştirme: M1 + S-3 + S-4/S-5/L1/L2/L3/L4)** ✅ done (2026-06-18). Kalan review bulgularının tamamı.
+  **M1 (ORTA) approve re-verify base-drift:** approve-merge artık re-verify'dan ÖNCE ilerlemiş base'i korunan branch'e
+  merge ediyor (`provisioner.MergeBaseIntoWorktree`: `git merge --no-edit --no-ff <base>` worktree'de; çakışırsa
+  `merge --abort` + `ErrBaseMergeConflict`; `IsBaseMergeConflict` sınıflandırıcı). Conductor opsiyonel `BaseMerger`
+  seam'iyle (type-assert; provisioner satisfy eder, fake'ler skip → backward-compatible) çağırır: temiz merge → re-verify
+  DRIFTED base'e karşı koşar (gerçek semantik-drift guard); çakışma VEYA re-verify-fail → `OutcomeApprovedRejected`
+  (blocked, approval temizlenir, trailer YOK, hiç fake-green değil). engine.go + statestore imzaları FROZEN (additive
+  ADR-0021). **Test (e2e, gerçek git):** `TestE2E_ApproveReVerify_SemanticBaseDrift_BlocksMerge` — held branch
+  `Greeting()` ekler; base TUTULURKEN farklı dosyada (`dup_greeting.go`) ikinci `Greeting()` ekler → METİNSEL ÇAKIŞMA
+  YOK ama birleşik ağaç `go build`'i kırar → approve → base merge edilir → re-verify FAIL → approved-rejected, trailer
+  yok, blocked. Ayrıca `TestE2E_ApproveReVerify_TextualBaseConflict_BlocksMerge` (aynı satır → conflict → abort →
+  rejected). **S-3 (ORTA) recipe argv trust:** `resolveRecipe` doc + DEPLOY.md §7'de trust-boundary açıkça yazıldı
+  (`-recipe-dir` repo'sunun `.conductor/config.yaml` argv'si TRUSTED/host-executed; sandbox'sız saldırgan-etkili repo'ya
+  YÖNLENDİRME). Konservatif tripwire: develop/gate argv[0] shell (`sh`/`bash`/…) ise veya `-c` içeriyorsa WARN (hard-fail
+  değil — legit recipe gerekebilir). S-1/S-2 zaten secret blast-radius'u kapatıyor. **S-4 (DÜŞÜK) private: şema:**
+  `validatePrivateRemote` https/ssh-only allowlist; `file://`/mutlak/`..` reddedilir (Fetch'te; test-only
+  `allowLocalRemote` ile in-package read-path testleri local repo klonlar). `intake.validateHoldoutRef` de private repo
+  için `file://`/mutlak/`..` reddeder. Test: reddedilen+kabul edilen ref'ler (holdout + intake). **S-5 (DÜŞÜK)
+  eskimiş yorumlar:** `cmd/conductor/main.go` header + `deploy/k8s/secret.yaml` artık doğru — daemon GH_TOKEN/CONDUCTOR_DSN'i
+  env'den OKUR (provisioner credential-helper + merge-push + DSN) ve bunlar performer/gate subprocess env'inden STRIP edilir
+  (R-2). **L1 (DÜŞÜK) sentinel prod probe:** `engineProgressProbe` artık `Health.Signal`'ı `aliveFromSignal` ile Alive'a
+  WIRE eder (hardcoded `true` değil). Mapping KONSERVATİF: engine output-türevli liveness verir, süreç-ölümü kanıtlayamaz →
+  "idle" (stall) bile alive raporlanır (gray-zone advisor + Layer-3 backstop'a yönlendirilir, Layer-1 false-kill yok). Bu
+  yüzden Layer-1 "clearly dead→Kill" iddiası sentinel doc'unda YUMUŞATILDI (richer probe gerektirir; backstop default'ta
+  yetkili). Test: `TestEngineProgressProbe_WiresSignalToAlive` (her Signal değeri). **L2 (DÜŞÜK) Requires normalize:**
+  `capabilitiesSatisfy` her `Task.Requires` girdisini TrimSpace + boş-drop eder (host-tarafı `WithCapabilities` ile aynı)
+  → `"docker "`/`""` sessiz never-match olmaz. Test: stray-whitespace + blank girdi doğru route eder. **L3 (DÜŞÜK)
+  cacheKey çakışması:** `cacheKey` artık full remote'u sha256 hex'le hash'ler (insan-okur slug prefix + digest suffix);
+  farklı remote'lar farklı dir. Test: lossy-slug'ın çakıştıracağı çiftler ayrışır. **L4 (DÜŞÜK) pgstore id:** `pgHoldoutID`
+  parse edilen id'yi TrimSpace + boş-validate eder → boşluk-only id net hata, kafa-karıştırıcı "no rows" değil. Test:
+  padded id trim'lenir, whitespace-only id parse-time'da reddedilir. Offline gate (build+test+vet+golangci v2.12.0) +
+  e2e (E2E ./internal/conductor/, M1 dahil) + `-race ./internal/{conductor,holdout,registry}/` YEŞİL; gofmt temiz; yeni
+  dep yok (crypto/sha256 stdlib). engine.go interface + statestore + tools/builder DOKUNULMADI. **→ M1, S-3, S-4, S-5,
+  L1, L2, L3, L4 FIXED.**

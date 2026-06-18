@@ -9,6 +9,8 @@ package holdout
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -39,6 +41,11 @@ const privateRefSep = "#"
 type PrivateRepoStore struct {
 	cacheDir string
 	ghToken  string
+	// allowLocalRemote, when true, SKIPS the S-4 remote allowlist so a local-path
+	// repo may be cloned. It is set ONLY by in-package tests that exercise the read
+	// path against a throwaway local git repo; NewPrivate never sets it, so
+	// production always enforces the https/ssh-only allowlist.
+	allowLocalRemote bool
 }
 
 // Compile-time assertion that *PrivateRepoStore satisfies verify.HoldoutStore.
@@ -91,6 +98,18 @@ func (s *PrivateRepoStore) Fetch(ctx context.Context, ref string) (verify.Holdou
 	repo, holdoutPath, err := parsePrivateRef(trimmed)
 	if err != nil {
 		return verify.Holdout{}, err
+	}
+
+	// Scheme/remote allowlist (S-4): the repo MUST be a safe https/ssh git remote.
+	// file://, absolute local paths, and "../"-traversal are rejected so a holdout
+	// ref can never clone an arbitrary LOCAL directory (limited SSRF / local-fs read).
+	// The only exception is the unexported test allowance (allowLocalRemote), set
+	// solely by in-package tests that exercise the read path against a throwaway
+	// local git repo; production construction (NewPrivate) never sets it.
+	if !s.allowLocalRemote {
+		if verr := validatePrivateRemote(repo); verr != nil {
+			return verify.Holdout{}, fmt.Errorf("holdout: private locator %q: %w", ref, verr)
+		}
 	}
 
 	clone, err := s.ensureClone(ctx, repo)
@@ -221,13 +240,93 @@ func parsePrivateRef(locator string) (repo, path string, err error) {
 	return repo, path, nil
 }
 
-// cacheKey maps a repo remote to a stable, filesystem-safe per-repo cache
-// directory name. It is a slugged form of the remote, NOT a hash, so the cache
-// layout is human-inspectable for diagnosis; it never embeds a token (the token
-// is delivered via the credential helper, not the URL).
+// validatePrivateRemote restricts the repo part of a private: locator to a SAFE
+// remote (S-4): an https/ssh git remote only. It REJECTS file:// URLs, absolute
+// local paths, and any "../"-style relative path, which would let a holdout ref
+// clone an arbitrary LOCAL directory (limited SSRF / local-fs read) rather than the
+// intended out-of-repo private git repo (ADR-0017/0018: holdouts are repo-EXTERNAL
+// and fetched over the gh-token HTTPS path, never a deploy-key or a local file).
+//
+// Accepted shapes:
+//   - "https://host/owner/repo.git"  (the gh-token credential-helper path)
+//   - "git@host:owner/repo.git" / "ssh://git@host/owner/repo.git" (ssh remotes)
+//
+// Rejected: "file://...", a leading "/" (absolute path), a Windows drive path, and
+// any path containing a ".." segment. Tests that need a local-path repo use the
+// store:// filesystem backing, not private:.
+func validatePrivateRemote(repo string) error {
+	r := strings.TrimSpace(repo)
+	low := strings.ToLower(r)
+
+	// Explicitly reject the local-file scheme.
+	if strings.HasPrefix(low, "file://") {
+		return errors.New("repo uses file:// (local clone forbidden; use an https/ssh git remote)")
+	}
+	// Reject any ".." traversal segment regardless of shape.
+	if r == ".." || strings.HasPrefix(r, "../") || strings.Contains(r, "/../") || strings.HasSuffix(r, "/..") {
+		return errors.New("repo contains a '..' path segment (forbidden)")
+	}
+	// Reject absolute local paths (POSIX leading slash or a Windows drive letter).
+	if strings.HasPrefix(r, "/") || isWindowsAbs(r) {
+		return errors.New("repo is an absolute local path (local clone forbidden; use an https/ssh git remote)")
+	}
+
+	// Accept the explicit safe remote shapes.
+	switch {
+	case strings.HasPrefix(low, "https://"):
+		return nil
+	case strings.HasPrefix(low, "ssh://"):
+		return nil
+	case isScpLikeSSH(r): // git@host:owner/repo.git
+		return nil
+	default:
+		return errors.New("repo must be an https:// or ssh (git@host:...) git remote")
+	}
+}
+
+// isScpLikeSSH reports whether repo is an scp-like ssh remote ("user@host:path"),
+// the common "git@github.com:owner/repo.git" form. It requires a "@" before the
+// first ":" and a non-empty host and path, so a bare local path with a colon is not
+// mistaken for an ssh remote.
+func isScpLikeSSH(repo string) bool {
+	at := strings.Index(repo, "@")
+	colon := strings.Index(repo, ":")
+	if at <= 0 || colon <= at+1 {
+		return false
+	}
+	host := repo[at+1 : colon]
+	path := repo[colon+1:]
+	return host != "" && path != "" && !strings.Contains(host, "/")
+}
+
+// isWindowsAbs reports whether repo looks like an absolute Windows path
+// ("C:\\..." or "C:/...") so it is rejected as a local clone target.
+func isWindowsAbs(repo string) bool {
+	if len(repo) < 3 {
+		return false
+	}
+	c := repo[0]
+	isLetter := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+	return isLetter && repo[1] == ':' && (repo[2] == '\\' || repo[2] == '/')
+}
+
+// cacheKey maps a repo remote to a stable, filesystem-safe, COLLISION-FREE per-repo
+// cache directory name (L3). It hashes the FULL remote string with sha256 so two
+// distinct remotes can never collide onto the same cache dir — a lossy slug (e.g.
+// replacing every unsafe char with '_') mapped "git@h:a/r.git" and "git@h/a/r.git"
+// (or "https://h/r" and "https__h_r") onto identical dirs, so one repo's clone could
+// serve another's holdout. A short human-readable slug PREFIX is kept for diagnosis,
+// with the hex digest as the disambiguating, never-colliding suffix. It never embeds
+// a token (the token is delivered via the credential helper, not the URL).
 func cacheKey(repo string) string {
+	sum := sha256.Sum256([]byte(repo))
+	digest := hex.EncodeToString(sum[:])
+
 	var b strings.Builder
 	for _, r := range repo {
+		if b.Len() >= 32 { // cap the human-readable prefix; the digest guarantees uniqueness.
+			break
+		}
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '.':
 			b.WriteRune(r)
@@ -235,11 +334,11 @@ func cacheKey(repo string) string {
 			b.WriteByte('_')
 		}
 	}
-	key := b.String()
-	if key == "" {
-		key = "repo"
+	slug := b.String()
+	if slug == "" {
+		slug = "repo"
 	}
-	return key
+	return slug + "-" + digest
 }
 
 // isGitRepoDir reports whether dir is an existing git repository (a .git dir or,

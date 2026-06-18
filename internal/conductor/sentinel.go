@@ -52,20 +52,60 @@ func (f ProgressProbeFunc) Probe(ctx context.Context, startedAt, now time.Time) 
 	return f(ctx, startedAt, now)
 }
 
+// engine Health Signal values (ADR-0006 Layer-1; mirrors CommandEngine.Health):
+// the coarse liveness verdict the probe maps onto Signals. They are mirrored by
+// value (not imported) since the engine exposes them only as the string field.
+const (
+	// signalProgressing means output flowed recently (within the engine's idle
+	// threshold): the performer is actively working.
+	signalProgressing = "progressing"
+	// signalIdle means the performer process is up but output has gone quiet past
+	// the engine's idle threshold: a stalled run (no activity), which the sentinel
+	// must reason about via the gray-zone/backstop path rather than ignore.
+	signalIdle = "idle"
+	// signalUnknown means the engine has observed NO activity yet (a freshly started
+	// performer that has not emitted): alive, not dead.
+	signalUnknown = "unknown"
+)
+
 // engineProgressProbe is the default ProgressProbe: it builds Signals from the
 // engine's deterministic Health (Layer-1) and the elapsed wall time. Elapsed is
 // now-startedAt; SinceActivity is now-LastActivityTS (or the full elapsed if the
-// engine has reported no activity yet); Alive is true unless Health reports the
-// session clearly gone. It carries no LLM logic — the gray-zone advisor is the
-// sentinel's job, fed LastOutput which the engine Health does not expose here, so
-// LastOutput is left empty (a CommandAdvisor still gets the prompt scaffold; a
-// richer probe can fill it in Faz-2b without changing this seam).
+// engine has reported no activity yet). It carries no LLM logic — the gray-zone
+// advisor is the sentinel's job, fed LastOutput which the engine Health does not
+// expose here, so LastOutput is left empty (a CommandAdvisor still gets the prompt
+// scaffold; a richer probe can fill it in Faz-2b without changing this seam).
+//
+// Alive (L1 wiring): the engine's Health Signal IS wired through rather than
+// hardcoded true, so Layer-1 is not inert in production and the watchdog reasons
+// over the engine's real coarse verdict. The mapping is deliberately CONSERVATIVE
+// because the engine's Health has NO terminal "process gone" value (it only reports
+// progressing/idle/unknown from observed OUTPUT, not process liveness):
+//
+//   - "progressing" / "unknown" (and any unrecognized value): Alive=true. A
+//     freshly-started performer that has not emitted yet ("unknown") is not dead.
+//   - "idle" (process up, but output stalled past the engine's idle threshold):
+//     Alive=true STILL, because output stalling is NOT proof the process died — a
+//     long compile/test legitimately produces no output for a while. Forcing
+//     Alive=false here would make Layer-1 KILL such a run WITHOUT the advisor (a
+//     false-positive kill), which the sentinel's design forbids. So "idle" is
+//     reported as alive-but-stalled, which — together with the SinceActivity
+//     staleness the SAME Health gives us — routes a hung-no-output performer into
+//     the sentinel's GRAY ZONE (advisor) and ultimately the deterministic Layer-3
+//     backstop, the authoritative bound on a truly hung run.
+//
+// Because of this (the engine cannot prove a process dead from output alone), the
+// Layer-1 "clearly dead -> Kill" path is NOT driven from this default probe; that
+// claim is softened in the sentinel docs accordingly. Alive=false is reserved for
+// a future richer probe that can observe actual process liveness without changing
+// this seam (it would then flow straight into Layer-1's clearly-dead branch).
 type engineProgressProbe struct {
 	eng     engine.EngineAdapter
 	session engine.Session
 }
 
-// Probe reads the engine Health and maps it onto Signals.
+// Probe reads the engine Health and maps it onto Signals, wiring the coarse
+// Health.Signal through to Alive (L1) so the watchdog is not inert in production.
 func (p engineProgressProbe) Probe(ctx context.Context, startedAt, now time.Time) (sentinel.Signals, error) {
 	hs, err := p.eng.Health(ctx, p.session)
 	if err != nil {
@@ -76,15 +116,29 @@ func (p engineProgressProbe) Probe(ctx context.Context, startedAt, now time.Time
 	if !hs.LastActivityTS.IsZero() {
 		sinceActivity = now.Sub(hs.LastActivityTS)
 	}
-	// "unknown" Health (no activity observed yet) is NOT treated as dead: a freshly
-	// started performer that has not emitted yet is alive. Only an explicit dead
-	// signal would set Alive=false; the engine's Health has no such terminal value,
-	// so Alive is true here and the deterministic backstop bounds a truly hung run.
 	return sentinel.Signals{
 		Elapsed:       elapsed,
 		SinceActivity: sinceActivity,
-		Alive:         true,
+		Alive:         aliveFromSignal(hs.Signal),
 	}, nil
+}
+
+// aliveFromSignal maps the engine's coarse Health.Signal (L1) onto the sentinel's
+// Alive axis. It is conservative by design (see engineProgressProbe): the engine
+// reports output-derived liveness only, never proven process death, so every known
+// Signal — including a stalled "idle" — is reported alive, deferring a stalled run
+// to the gray-zone advisor + Layer-3 backstop rather than a Layer-1 false-kill. It
+// is a named function (not an inline literal) so the wiring is unit-testable per
+// Signal value.
+func aliveFromSignal(signal string) bool {
+	switch signal {
+	case signalProgressing, signalUnknown, signalIdle, "":
+		return true
+	default:
+		// An unrecognized Signal is treated conservatively as alive: never kill on a
+		// value the contract does not define; the backstop still bounds the run.
+		return true
+	}
 }
 
 // developWithSentinel runs the engine's Develop under BOTH the F-2 abort watcher

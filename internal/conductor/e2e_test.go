@@ -338,6 +338,181 @@ func TestE2E_HumanHold_ApproveMerges_NoReDevelop(t *testing.T) {
 		held.Branch, res2.MergeSHA[:min(12, len(res2.MergeSHA))])
 }
 
+// TestE2E_ApproveReVerify_SemanticBaseDrift_BlocksMerge proves M1: the approve
+// re-verify now brings the ADVANCED base INTO the re-attached preserved branch
+// before re-verifying, so a SEMANTIC base drift — a base change that breaks the held
+// branch's gate WITHOUT a textual conflict — is honestly caught and the merge is
+// REFUSED (approved-rejected, blocked, no [task:<id>] trailer), never fake-green.
+//
+// Construction of the drift: the held branch adds greeting.go with `func Greeting()`.
+// While it is held, the base (develop) advances by adding a DIFFERENT new file,
+// dup_greeting.go, that ALSO declares `func Greeting()`. These touch different files
+// (no textual merge conflict), but combined they are a duplicate declaration that
+// FAILS `go build` — exactly the semantic drift the pre-M1 re-verify (which ran the
+// gate on the preserved tip alone, without the base) would have MISSED and only hit
+// as... nothing (no textual conflict at SquashMerge either, so it would have merged a
+// broken tree). With M1 the base is merged in first, so the gate runs on the combined
+// (broken) tree and the merge is refused.
+func TestE2E_ApproveReVerify_SemanticBaseDrift_BlocksMerge(t *testing.T) {
+	requireGit(t)
+	requireGo(t)
+	ctx := context.Background()
+
+	upstream := newProductRepo(t)
+
+	store := statestore.NewMemoryStore()
+	mustCreateProject(t, store, statestore.Project{ID: e2eProjectID, Repo: upstream, BaseBranch: "develop"})
+	mustCreateScenario(t, store, statestore.Scenario{ID: "scn-t3", ProjectID: e2eProjectID, Title: "a high-risk T3 change", HoldoutRef: "e2e-noop"})
+	mustCreateTask(t, store, statestore.Task{
+		ID: "T-hold", ProjectID: e2eProjectID, Lane: "build", Tier: "T3", // T3 -> human-required
+		Status: registry.StatusReady, ScenarioID: "scn-t3",
+	})
+
+	performer := writePerformer(t, goodPerformerScript) // adds greeting.go with Greeting()
+	root := t.TempDir()
+	cond := buildGovernedConductor(t, store, root, performer)
+	clone := filepath.Join(root, "clones", e2eProjectID)
+
+	// --- Tick 1: develop -> verify PASS -> HELD (no merge) --------------------
+	res1, err := cond.Tick(ctx, e2eProjectID)
+	if err != nil {
+		t.Fatalf("tick 1 error: %v", err)
+	}
+	if res1.Outcome != OutcomeHeld {
+		t.Fatalf("tick 1 outcome = %q, want held; res=%+v", res1.Outcome, res1)
+	}
+	held := mustGetTask(t, store, "T-hold")
+	if held.Status != StatusAwaitingApproval || held.Branch == "" {
+		t.Fatalf("tick 1: held=%+v, want awaiting-approval with a recorded branch", held)
+	}
+
+	// --- base drifts SEMANTICALLY while the task is held ----------------------
+	// Add a NEW file on the UPSTREAM develop that ALSO declares func Greeting().
+	// Different file from the held branch's greeting.go => no textual conflict; but
+	// the COMBINED tree has a duplicate declaration => `go build` fails (semantic).
+	writeFile(t, filepath.Join(upstream, "dup_greeting.go"),
+		"package under\n\n// Greeting is ALSO declared on the advanced base, colliding\n"+
+			"// with the held branch's greeting.go (semantic drift, no textual conflict).\n"+
+			"func Greeting() string { return \"from-base\" }\n")
+	gitT(t, upstream, "add", "dup_greeting.go")
+	gitT(t, upstream, "commit", "-q", "-m", "base: add a colliding Greeting (semantic drift)")
+
+	// --- approve (mirrors `conductorctl approve`) -----------------------------
+	if _, err := NewStoreApprover(store).RequestApprove(ctx, e2eProjectID, ""); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+
+	// --- Tick 2: approve -> merge advanced base in -> re-verify FAILS -> REFUSE
+	res2, err := cond.Tick(ctx, e2eProjectID)
+	if err != nil {
+		t.Fatalf("tick 2 error: %v", err)
+	}
+	if res2.Outcome != OutcomeApprovedRejected {
+		t.Fatalf("tick 2 outcome = %q, want approved-rejected (semantic base drift must block); res=%+v", res2.Outcome, res2)
+	}
+
+	// git truth: NO [task:<id>] trailer landed on the base — the merge was refused.
+	if msgs := gitT(t, clone, "log", "--format=%B", "develop"); strings.Contains(msgs, "[task:T-hold]") {
+		t.Fatalf("approved-rejected must NOT land a trailer on base; got:\n%s", msgs)
+	}
+	// The task is blocked and its approval cleared (a re-approval is a fresh decision).
+	got := mustGetTask(t, store, "T-hold")
+	if got.Status != registry.StatusBlocked {
+		t.Fatalf("tick 2: status = %q, want blocked", got.Status)
+	}
+	if got.Approved {
+		t.Fatalf("tick 2: rejected task must clear its approval flag")
+	}
+	t.Logf("M1: held branch + base advanced with a SEMANTIC (no-textual-conflict) collision -> approve -> base merged into branch -> re-verify FAILED -> approved-rejected, no trailer, blocked")
+}
+
+// TestE2E_ApproveReVerify_TextualBaseConflict_BlocksMerge proves the M1 base-merge
+// CONFLICT path: when bringing the advanced base into the preserved branch conflicts
+// TEXTUALLY (both changed the same lines), MergeBaseIntoWorktree aborts the merge and
+// the conductor refuses to merge (approved-rejected), honestly — never fake-green and
+// never leaving a half-merged worktree.
+func TestE2E_ApproveReVerify_TextualBaseConflict_BlocksMerge(t *testing.T) {
+	requireGit(t)
+	requireGo(t)
+	ctx := context.Background()
+
+	upstream := newProductRepo(t)
+
+	store := statestore.NewMemoryStore()
+	mustCreateProject(t, store, statestore.Project{ID: e2eProjectID, Repo: upstream, BaseBranch: "develop"})
+	mustCreateScenario(t, store, statestore.Scenario{ID: "scn-t3", ProjectID: e2eProjectID, Title: "T3", HoldoutRef: "e2e-noop"})
+	mustCreateTask(t, store, statestore.Task{
+		ID: "T-hold", ProjectID: e2eProjectID, Lane: "build", Tier: "T3",
+		Status: registry.StatusReady, ScenarioID: "scn-t3",
+	})
+
+	// A performer that EDITS the existing lib.go (changes Version's return) so the base
+	// can later change the SAME line -> textual conflict on merge-base.
+	performer := writePerformer(t, editVersionPerformerScript("v-branch"))
+	root := t.TempDir()
+	cond := buildGovernedConductor(t, store, root, performer)
+	clone := filepath.Join(root, "clones", e2eProjectID)
+
+	res1, err := cond.Tick(ctx, e2eProjectID)
+	if err != nil {
+		t.Fatalf("tick 1: %v", err)
+	}
+	if res1.Outcome != OutcomeHeld {
+		t.Fatalf("tick 1 outcome = %q, want held", res1.Outcome)
+	}
+
+	// Base changes the SAME line in lib.go -> a textual conflict on merge-base.
+	writeFile(t, filepath.Join(upstream, "lib.go"),
+		"package under\n\n// Version is the seed package symbol.\nfunc Version() string { return \"v-base\" }\n")
+	gitT(t, upstream, "add", "lib.go")
+	gitT(t, upstream, "commit", "-q", "-m", "base: change Version (textual conflict with held branch)")
+
+	if _, err := NewStoreApprover(store).RequestApprove(ctx, e2eProjectID, ""); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+
+	res2, err := cond.Tick(ctx, e2eProjectID)
+	if err != nil {
+		t.Fatalf("tick 2: %v", err)
+	}
+	if res2.Outcome != OutcomeApprovedRejected {
+		t.Fatalf("tick 2 outcome = %q, want approved-rejected (textual base conflict must block); res=%+v", res2.Outcome, res2)
+	}
+	if msgs := gitT(t, clone, "log", "--format=%B", "develop"); strings.Contains(msgs, "[task:T-hold]") {
+		t.Fatalf("conflict must NOT land a trailer on base; got:\n%s", msgs)
+	}
+	got := mustGetTask(t, store, "T-hold")
+	if got.Status != registry.StatusBlocked || got.Approved {
+		t.Fatalf("conflict: task=%+v, want blocked with approval cleared", got)
+	}
+	t.Logf("M1: textual base conflict on merge-base -> aborted -> approved-rejected, no trailer, blocked")
+}
+
+// editVersionPerformerScript returns a performer that REWRITES lib.go's Version()
+// return value (touching the same line the base may later change, to force a textual
+// conflict), commits it, and emits a schema-valid pass Verdict. The package still
+// compiles + tests pass on the branch alone, so it is HELD (T3) cleanly.
+func editVersionPerformerScript(val string) string {
+	return `#!/bin/sh
+set -e
+cat > lib.go <<'EOF'
+package under
+
+// Version is the seed package symbol.
+func Version() string { return "` + val + `" }
+EOF
+export GIT_AUTHOR_NAME=performer GIT_AUTHOR_EMAIL=performer@local
+export GIT_COMMITTER_NAME=performer GIT_COMMITTER_EMAIL=performer@local
+git add lib.go
+git commit -q -m "feat: change Version on branch"
+BR=$(git rev-parse --abbrev-ref HEAD)
+SHA=$(git rev-parse HEAD)
+cat <<EOF
+{"result":"pass","branch":"$BR","commit_sha":"$SHA","checks":[{"name":"local","result":"pass","evidence":"committed"}],"files":["lib.go"],"summary":"changed Version"}
+EOF
+`
+}
+
 // buildGovernedConductor wires the REAL components like buildConductor but ALSO
 // injects the human-required governance policy (so T3/T4 holds) and the store-backed
 // approver + re-attach-capable provisioner — the Faz-1.5-b approve flow.

@@ -110,6 +110,10 @@ func pgHoldoutID(locator string) (string, error) {
 	if idx := strings.Index(rest, "/"); idx >= 0 {
 		id = rest[:idx]
 	}
+	// L4: TrimSpace the parsed id and validate it is non-empty so a whitespace-only
+	// id (e.g. "pg://holdouts/%20" / a padded value) fails with a CLEAR validation
+	// error here rather than slipping through to a confusing "no rows for id" later.
+	id = strings.TrimSpace(id)
 	if id == "" {
 		return "", fmt.Errorf("holdout: pg locator %q has no holdout id (want %s%s<id>)", locator, pgScheme, pgLocatorPrefix)
 	}

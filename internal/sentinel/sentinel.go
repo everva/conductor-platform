@@ -12,8 +12,15 @@
 //	  NEVER push the run past the absolute ceiling. The backstop structurally wins
 //	  because it is evaluated before the advisor is ever consulted.
 //	Layer-1 (deterministic base): fresh activity -> Continue WITHOUT calling the
-//	  advisor (the cheap, common case — no LLM load); clearly dead (no liveness at
-//	  all) -> Kill. Only an alive-but-stalled run reaches Layer-2.
+//	  advisor (the cheap, common case — no LLM load); NOT-alive AND stalled ->
+//	  Kill. NOTE on the "clearly dead -> Kill" path: it fires only when a probe can
+//	  report Alive=false. The DEFAULT production probe (engineProgressProbe) derives
+//	  liveness from observed OUTPUT only and so cannot prove a process dead — it
+//	  reports a stalled "idle" run as alive-but-stalled, deferring it to the gray
+//	  zone + the Layer-3 backstop rather than killing it at Layer-1. The Layer-1
+//	  kill therefore activates with a richer probe that observes real process
+//	  liveness; the backstop remains the authoritative bound in the default setup.
+//	  Only an alive-but-stalled run reaches Layer-2.
 //	Layer-2 (gray zone, LLM advisor, RARE): alive (process up) but output stalled
 //	  for >= GraceUnsure -> consult the Advisor. progressing -> Continue, stuck ->
 //	  Kill, needs_human -> Escalate. No advisor, or an advisor error, falls back to

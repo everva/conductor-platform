@@ -54,6 +54,19 @@ func TestScenario_Validate_Table(t *testing.T) {
 		{name: "holdout_empty_scheme_body", mutate: func(s *Scenario) {
 			s.HoldoutRef = "store://"
 		}, wantReason: "no locator body"},
+		// S-4: private: repo must not be a file://, absolute, or "../"-traversal local clone.
+		{name: "private_file_scheme_rejected", mutate: func(s *Scenario) {
+			s.HoldoutRef = "private:file:///etc#x"
+		}, wantReason: "file://"},
+		{name: "private_absolute_repo_rejected", mutate: func(s *Scenario) {
+			s.HoldoutRef = "private:/abs#x"
+		}, wantReason: "absolute local path"},
+		{name: "private_traversal_repo_rejected", mutate: func(s *Scenario) {
+			s.HoldoutRef = "private:../x#y"
+		}, wantReason: "'..' path segment"},
+		{name: "private_https_repo_accepted", mutate: func(s *Scenario) {
+			s.HoldoutRef = "private:https://h/r.git#p"
+		}, wantOK: true},
 	}
 
 	for _, tt := range tests {

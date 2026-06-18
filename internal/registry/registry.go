@@ -268,7 +268,17 @@ func (r *Registry) capabilitiesSatisfy(requires []string) bool {
 	if len(r.capabilities) == 0 {
 		return true // unconstrained host (empty = today's behavior).
 	}
+	// Normalize Task.Requires the SAME way WithCapabilities normalizes the host's
+	// capability set (L2): trim each entry and DROP blanks. The host set is already
+	// trimmed/blank-dropped at construction, so an un-normalized requirement like
+	// "docker " (trailing space) or "" would otherwise never match a clean capability
+	// and silently route the task nowhere. Trimming both sides makes a stray-whitespace
+	// or blank Requires entry route correctly instead of becoming a silent never-match.
 	for _, req := range requires {
+		req = strings.TrimSpace(req)
+		if req == "" {
+			continue // a blank requirement constrains nothing (matches the host-side drop).
+		}
 		if _, ok := r.capabilities[req]; !ok {
 			return false
 		}

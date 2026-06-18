@@ -253,6 +253,26 @@ type ReAttacher interface {
 	WorkspaceForBranch(ctx context.Context, project statestore.Project, task statestore.Task, branch string) (engine.Workspace, error)
 }
 
+// BaseMerger is the OPTIONAL provisioner capability the approve-merge re-verify uses
+// to make base-drift detection HONEST (M1). After re-attaching the held task's
+// preserved verified branch, the conductor merges the project's CURRENT (advanced)
+// base INTO that worktree BEFORE re-verifying, so the gate runs against the drifted
+// base — catching SEMANTIC drift (a base change that breaks the branch's gate without
+// a textual conflict), not just the textual conflicts SquashMerge would later catch.
+//
+// MergeBaseIntoWorktree returns nil on a clean merge (re-verify then runs against the
+// combined tree) and a conflict-classified error on a textual conflict (the failed
+// merge is aborted, leaving the worktree clean). IsBaseMergeConflict classifies that
+// error so the conductor treats a real drift-conflict as approved-rejected/blocked
+// (honest, no fake-green) versus an infrastructural error. It is kept SEPARATE from
+// Workspacer/ReAttacher so the frozen seams are unchanged (additive); a provisioner
+// lacking it makes the conductor SKIP the extra guard (the pre-M1 behavior, where
+// re-verify ran on the preserved tip alone). *provisioner.Provisioner satisfies it.
+type BaseMerger interface {
+	MergeBaseIntoWorktree(ctx context.Context, project statestore.Project, ws engine.Workspace) error
+	IsBaseMergeConflict(err error) bool
+}
+
 // Recipe carries the per-project gate/holdout binding the tick hands to the
 // verifier (ADR-0009). It is injected, not a global.
 type Recipe struct {
@@ -868,9 +888,13 @@ func (c *Conductor) holdForApproval(ctx context.Context, task statestore.Task, b
 // Chosen semantics: RE-VERIFY-THEN-MERGE (recommended over merge-directly). The
 // verified branch may have been held for an arbitrarily long time, during which the
 // base could have drifted (other tasks merged), so the conductor re-attaches the
-// preserved branch and re-runs the CHEAP deterministic verify gate over it before
-// merging. This guards Rule#9 (never fake-green): if the base drifted enough to break
-// the gate, the merge is honestly refused and the task blocked, rather than merging
+// preserved branch, MERGES THE CURRENT BASE INTO IT (M1), and re-runs the CHEAP
+// deterministic verify gate over the combined tree before merging. Merging the base
+// in first is what makes drift detection real: it catches SEMANTIC drift (a base
+// change that breaks the held branch's gate WITHOUT a textual conflict), not only the
+// textual conflicts SquashMerge would later catch. This guards Rule#9 (never
+// fake-green): if the base drifted enough to conflict OR to break the gate, the merge
+// is honestly refused and the task blocked (approved-rejected), rather than merging
 // stale work that no longer passes. Re-verify is cheap relative to re-develop and,
 // critically, it does NOT re-roll the LLM — the human approves the work they saw, not
 // a fresh roll. Develop NEVER runs here.
@@ -900,9 +924,40 @@ func (c *Conductor) mergeApproved(ctx context.Context, project statestore.Projec
 	c.emit(ctx, task, events.PhaseReview, events.KindDecision,
 		map[string]any{"result": "approved", "verified_branch": task.Branch})
 
+	// Base-drift guard (M1): before re-verifying, bring the CURRENT (advanced) base
+	// INTO the re-attached preserved branch so the gate runs against the drifted base,
+	// not just the preserved tip. Without this, a SEMANTIC drift (the base changed
+	// something that breaks the held branch's gate WITHOUT a textual conflict) would
+	// PASS re-verify and only ever surface as a textual conflict at SquashMerge. This
+	// makes the re-verify a real drift guard. It is OPTIONAL: a provisioner without the
+	// BaseMerger capability skips it (pre-M1 behavior). A textual conflict here is a
+	// real drift outcome → approved-rejected/blocked (honest, no fake-green); the
+	// failed merge was aborted by the provisioner, so the worktree/branch are clean and
+	// the work stays recoverable for a re-approval after a fix.
+	if bm, ok := c.prov.(BaseMerger); ok {
+		if mErr := bm.MergeBaseIntoWorktree(ctx, project, ws); mErr != nil {
+			if bm.IsBaseMergeConflict(mErr) {
+				c.emit(ctx, task, events.PhaseReview, events.KindInterventionNeeded,
+					map[string]any{"reason": "approved work conflicts with drifted base; not merged", "error": mErr.Error()})
+				if blockErr := c.blockApprovedReject(ctx, task); blockErr != nil {
+					return TickResult{}, fmt.Errorf("conductor: tick: approve-merge base-conflict and block failed: %w", errors.Join(mErr, blockErr))
+				}
+				return TickResult{Outcome: OutcomeApprovedRejected, TaskID: task.ID}, nil
+			}
+			// Infrastructural merge failure (not a drift conflict): block rather than
+			// merge stale work or fake-green.
+			if blockErr := c.blockApprovedReject(ctx, task); blockErr != nil {
+				return TickResult{}, fmt.Errorf("conductor: tick: approve-merge base-merge failed and block failed: %w", errors.Join(mErr, blockErr))
+			}
+			return TickResult{Outcome: OutcomeBlocked, TaskID: task.ID},
+				fmt.Errorf("conductor: tick: approve-merge base-merge %q: %w", task.ID, mErr)
+		}
+	}
+
 	// Cheap re-verify for base drift (re-verify-then-merge): NO develop. The merge
 	// rides on THIS independent result, never a self-report (Rule#9). The held
 	// task's verdict was already green; we pass a minimal verdict carrying the branch.
+	// With the base now merged in (M1), this runs against the DRIFTED base.
 	holdoutRef := c.resolveHoldoutRef(ctx, task)
 	c.emit(ctx, task, events.PhaseVerify, events.KindStarted, map[string]any{"reason": "re-verify approved work for base drift"})
 	review, _, verErr := c.verifier.Verify(ctx, engine.Verdict{Branch: ws.Branch}, ws, c.recipe.Gates, holdoutRef)
