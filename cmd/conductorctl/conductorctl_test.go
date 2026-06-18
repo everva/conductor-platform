@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/everva/conductor-platform/internal/conductor"
 	"github.com/everva/conductor-platform/internal/registry"
 	"github.com/everva/conductor-platform/internal/statestore"
 )
@@ -309,6 +311,51 @@ func TestConductorctl_PauseResume_TogglesRunState(t *testing.T) {
 	}
 	if paused, _ := ctrl.Paused(ctx, "repo"); paused {
 		t.Fatalf("double resume must stay running")
+	}
+}
+
+// TestConductorctl_Abort_ResolvesRunningTask proves `conductorctl abort` resolves
+// the project's currently-running task via its active lease and sets the durable
+// per-task abort signal on the SHARED store (what the daemon's watcher reads).
+func TestConductorctl_Abort_ResolvesRunningTask(t *testing.T) {
+	ctx := context.Background()
+	a, store, _, _ := newApp(t)
+	if err := store.CreateProject(ctx, statestore.Project{ID: "proj", Repo: "owner/repo", BaseBranch: "develop"}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	if err := store.CreateTask(ctx, statestore.Task{ID: "RUN-1", ProjectID: "proj", Status: registry.StatusRunning}); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	if err := store.AcquireLease(ctx, statestore.Lease{ProjectID: "proj", HostID: "host-1", TaskID: "RUN-1"}); err != nil {
+		t.Fatalf("acquire lease: %v", err)
+	}
+
+	taskID, err := a.abort(ctx, "proj")
+	if err != nil {
+		t.Fatalf("abort: %v", err)
+	}
+	if taskID != "RUN-1" {
+		t.Fatalf("abort resolved task = %q, want RUN-1", taskID)
+	}
+	task, err := store.GetTask(ctx, "RUN-1")
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if !task.AbortRequested {
+		t.Fatalf("abort must set AbortRequested on the running task, got %+v", task)
+	}
+}
+
+// TestConductorctl_Abort_NothingRunning proves aborting a project with no active
+// lease surfaces ErrNothingRunning (the "nothing to abort" path).
+func TestConductorctl_Abort_NothingRunning(t *testing.T) {
+	ctx := context.Background()
+	a, store, _, _ := newApp(t)
+	if err := store.CreateProject(ctx, statestore.Project{ID: "proj", Repo: "owner/repo", BaseBranch: "develop"}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	if _, err := a.abort(ctx, "proj"); !errors.Is(err, conductor.ErrNothingRunning) {
+		t.Fatalf("abort with nothing running: err = %v, want ErrNothingRunning", err)
 	}
 }
 

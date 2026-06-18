@@ -71,6 +71,15 @@ type Task struct {
 	ScenarioID string
 	// RetryCount tracks how many times the task has been retried (ADR-0004).
 	RetryCount int
+	// AbortRequested is the durable control reverse-channel ABORT signal (ADR-0020
+	// follow-up / F-2): true means an operator asked the conductor to CANCEL the
+	// in-flight develop for this task and revert it to a safe state — NO verify, NO
+	// merge. The conductor's running-develop watcher polls it on the leased task and
+	// cancels the develop child context when it flips, killing the performer process
+	// group; the conductor clears it as part of handling the abort so the re-run is
+	// not immediately re-aborted. It defaults to false and is an ADDITIVE field on
+	// the otherwise-frozen contract (ADR-0021: additive growth, no signature break).
+	AbortRequested bool
 }
 
 // Lease is the repo-scoped, host-spanning exclusivity record enforcing

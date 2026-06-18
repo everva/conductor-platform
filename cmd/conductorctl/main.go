@@ -12,12 +12,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/everva/conductor-platform/internal/conductor"
 	"github.com/everva/conductor-platform/internal/statestore"
 )
 
@@ -135,6 +137,8 @@ func run(ctx context.Context, a *app, argv []string, stderr io.Writer) int {
 		return runPauseResume(ctx, a, rest, stderr, false)
 	case "resume":
 		return runPauseResume(ctx, a, rest, stderr, true)
+	case "abort":
+		return runAbort(ctx, a, rest, stderr)
 	case "-h", "--help", "help":
 		_, _ = fmt.Fprint(a.out, usage())
 		return 0
@@ -260,6 +264,40 @@ func runPauseResume(ctx context.Context, a *app, args []string, stderr io.Writer
 	return 0
 }
 
+// runAbort parses the abort flags and signals the conductor to cancel the
+// project's currently-running task (ADR-0020 follow-up / F-2). It mirrors
+// pause/resume UX: --project is required, and it points at the SAME store the
+// daemon reads (-dsn shared Postgres) so the abort is cross-process. "Nothing
+// running" is reported as a clear, non-error-coded message (exit 0) — there was
+// simply nothing to abort — distinct from a real failure (exit 1).
+func runAbort(ctx context.Context, a *app, args []string, stderr io.Writer) int {
+	fs := flag.NewFlagSet("abort", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	project := fs.String("project", "", "project id whose running task to abort")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: conductorctl abort --project <id>")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *project == "" {
+		fs.Usage()
+		return 2
+	}
+	taskID, err := a.abort(ctx, *project)
+	if err != nil {
+		if errors.Is(err, conductor.ErrNothingRunning) {
+			_, _ = fmt.Fprintf(a.out, "nothing to abort: no task running for %s\n", *project)
+			return 0
+		}
+		_, _ = fmt.Fprintf(stderr, "conductorctl: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintf(a.out, "abort requested for %s (task %s); the daemon will cancel its develop\n", *project, taskID)
+	return 0
+}
+
 // usage is the top-level help text listing the subcommands.
 func usage() string {
 	var b strings.Builder
@@ -274,6 +312,7 @@ func usage() string {
 	b.WriteString("  status            print the ledger summary (--project [--json])\n")
 	b.WriteString("  pause             pause a project's loop (--project)\n")
 	b.WriteString("  resume            resume a project's loop (--project)\n")
+	b.WriteString("  abort             abort the project's running task (--project)\n")
 	return b.String()
 }
 

@@ -164,8 +164,13 @@ func confTaskCRUD(t *testing.T, s StateStore) {
 	if got.Status != "ready" {
 		t.Fatalf("status = %q, want ready", got.Status)
 	}
+	// A freshly created task defaults to not-aborting (F-2 additive field).
+	if got.AbortRequested {
+		t.Fatalf("fresh task must default AbortRequested=false, got %+v", got)
+	}
 	got.Status = "done"
 	got.RetryCount = 2
+	got.AbortRequested = true // F-2: round-trip the additive abort signal.
 	if err := s.UpdateTask(ctx, got); err != nil {
 		t.Fatalf("UpdateTask: %v", err)
 	}
@@ -173,8 +178,8 @@ func confTaskCRUD(t *testing.T, s StateStore) {
 	if err != nil {
 		t.Fatalf("GetTask after update: %v", err)
 	}
-	if reread.Status != "done" || reread.RetryCount != 2 {
-		t.Fatalf("after update = %+v, want status=done retry=2", reread)
+	if reread.Status != "done" || reread.RetryCount != 2 || !reread.AbortRequested {
+		t.Fatalf("after update = %+v, want status=done retry=2 abort=true", reread)
 	}
 	list, err := s.ListTasks(ctx, "p1")
 	if err != nil || len(list) != 1 || list[0].Status != "done" {

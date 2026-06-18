@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/everva/conductor-platform/internal/conductor"
 	"github.com/everva/conductor-platform/internal/intake"
 	"github.com/everva/conductor-platform/internal/statestore"
 )
@@ -172,6 +173,25 @@ func (a *app) resume(ctx context.Context, projectID string) error {
 		return fmt.Errorf("resume: %w", err)
 	}
 	return nil
+}
+
+// abort signals the conductor to CANCEL the project's currently-running task
+// (ADR-0020 follow-up / F-2). It resolves the running task through the project's
+// active lease and sets the durable per-task abort flag on the SHARED store, which
+// the daemon's running-develop watcher polls to cancel the in-flight develop (NO
+// merge). It returns the aborted task id so the caller can report exactly what it
+// signalled; conductor.ErrNothingRunning when no task is running. It goes straight
+// through the store (the source of truth the daemon also reads) so a -dsn shared
+// Postgres makes the abort cross-process, mirroring pause/resume.
+func (a *app) abort(ctx context.Context, projectID string) (string, error) {
+	if projectID == "" {
+		return "", errors.New("abort: project is required")
+	}
+	taskID, err := conductor.NewStoreAborter(a.store).RequestAbort(ctx, projectID)
+	if err != nil {
+		return "", fmt.Errorf("abort: %w", err)
+	}
+	return taskID, nil
 }
 
 // joinDeps renders a dep list compactly for the table.

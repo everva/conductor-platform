@@ -205,11 +205,11 @@ func (s *PostgresStore) CreateTask(ctx context.Context, t Task) error {
 		return fmt.Errorf("create task %q: %w", t.ID, err)
 	}
 	const q = `
-INSERT INTO tasks (id, project_id, lane, tier, status, requires, deps, branch, scenario_id, retry_count)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+INSERT INTO tasks (id, project_id, lane, tier, status, requires, deps, branch, scenario_id, retry_count, abort_requested)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 ON CONFLICT (id) DO NOTHING`
 	tag, err := s.pool.Exec(ctx, q,
-		t.ID, t.ProjectID, t.Lane, t.Tier, t.Status, requires, deps, t.Branch, t.ScenarioID, t.RetryCount)
+		t.ID, t.ProjectID, t.Lane, t.Tier, t.Status, requires, deps, t.Branch, t.ScenarioID, t.RetryCount, t.AbortRequested)
 	if err != nil {
 		return fmt.Errorf("create task %q: %w", t.ID, err)
 	}
@@ -222,7 +222,7 @@ ON CONFLICT (id) DO NOTHING`
 // GetTask returns the task by ID, or a wrapped ErrNotFound.
 func (s *PostgresStore) GetTask(ctx context.Context, id string) (Task, error) {
 	const q = `
-SELECT id, project_id, lane, tier, status, requires, deps, branch, scenario_id, retry_count
+SELECT id, project_id, lane, tier, status, requires, deps, branch, scenario_id, retry_count, abort_requested
 FROM tasks WHERE id = $1`
 	t, err := scanTask(s.pool.QueryRow(ctx, q, id))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -237,7 +237,7 @@ FROM tasks WHERE id = $1`
 // ListTasks returns all tasks for the given project, ordered by task ID.
 func (s *PostgresStore) ListTasks(ctx context.Context, projectID string) ([]Task, error) {
 	const q = `
-SELECT id, project_id, lane, tier, status, requires, deps, branch, scenario_id, retry_count
+SELECT id, project_id, lane, tier, status, requires, deps, branch, scenario_id, retry_count, abort_requested
 FROM tasks WHERE project_id = $1 ORDER BY id`
 	rows, err := s.pool.Query(ctx, q, projectID)
 	if err != nil {
@@ -272,10 +272,10 @@ func (s *PostgresStore) UpdateTask(ctx context.Context, t Task) error {
 	const q = `
 UPDATE tasks
 SET project_id = $2, lane = $3, tier = $4, status = $5, requires = $6, deps = $7,
-    branch = $8, scenario_id = $9, retry_count = $10
+    branch = $8, scenario_id = $9, retry_count = $10, abort_requested = $11
 WHERE id = $1`
 	tag, err := s.pool.Exec(ctx, q,
-		t.ID, t.ProjectID, t.Lane, t.Tier, t.Status, requires, deps, t.Branch, t.ScenarioID, t.RetryCount)
+		t.ID, t.ProjectID, t.Lane, t.Tier, t.Status, requires, deps, t.Branch, t.ScenarioID, t.RetryCount, t.AbortRequested)
 	if err != nil {
 		return fmt.Errorf("update task %q: %w", t.ID, err)
 	}
@@ -443,7 +443,7 @@ func scanTask(r rowScanner) (Task, error) {
 	var requires, deps []byte
 	if err := r.Scan(
 		&t.ID, &t.ProjectID, &t.Lane, &t.Tier, &t.Status, &requires, &deps,
-		&t.Branch, &t.ScenarioID, &t.RetryCount); err != nil {
+		&t.Branch, &t.ScenarioID, &t.RetryCount, &t.AbortRequested); err != nil {
 		return Task{}, err
 	}
 	var err error

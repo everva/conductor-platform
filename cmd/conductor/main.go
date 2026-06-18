@@ -456,6 +456,11 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		// pause off the SAME store conductorctl writes it to, so `conductorctl pause`
 		// in a separate process makes this daemon's next tick a clean no-op.
 		Pauser: conductor.NewStorePauser(store),
+		// Control reverse-channel ABORT watcher (ADR-0020 follow-up / F-2): read the
+		// durable per-task abort signal off the SAME store conductorctl writes it to,
+		// so `conductorctl abort` in a separate process cancels this daemon's in-flight
+		// develop (killing the performer process group) and reverts the task to ready.
+		Aborter: conductor.NewStoreAborter(store),
 	})
 	if err != nil {
 		closer()

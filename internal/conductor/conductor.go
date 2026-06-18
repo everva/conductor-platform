@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/everva/conductor-platform/internal/engine"
 	"github.com/everva/conductor-platform/internal/events"
@@ -65,6 +66,13 @@ const (
 	// conductorctl through the SHARED StateStore, so a separate daemon process
 	// reading the same store honors it. Resume clears it and ticks proceed again.
 	OutcomePaused Outcome = "paused"
+	// OutcomeAborted means an operator aborted the in-flight develop via the control
+	// reverse-channel (ADR-0020 follow-up / F-2): the daemon's watcher cancelled the
+	// develop child context (killing the performer process group), so develop
+	// returned cancelled and the tick did NO verify and NO merge. The task is
+	// reverted to a SAFE, RE-RUNNABLE state (back to ready) and its abort flag is
+	// cleared, so a later tick re-attempts it from a fresh context (ADR-0001).
+	OutcomeAborted Outcome = "aborted"
 	// OutcomeHeld means develop+verify passed but the governance policy requires a
 	// HUMAN approval for the task's risk tier (ADR-0003): the green gate is
 	// necessary but not sufficient, so the conductor did NOT merge. The task is
@@ -167,6 +175,25 @@ type Pauser interface {
 	Paused(ctx context.Context, projectID string) (bool, error)
 }
 
+// Aborter is the OPTIONAL control reverse-channel ABORT seam (ADR-0011 §4,
+// ADR-0020 follow-up, F-2). While a task's develop is in flight, the tick runs a
+// WATCHER that polls AbortRequested on the LEASED task; when an operator has set it
+// (conductorctl abort, persisted on the SHARED store so this separate daemon
+// process sees it), the watcher cancels the develop child context — and because the
+// performer runs via exec.CommandContext with its own process group (Setpgid),
+// cancelling that context kills the WHOLE performer process group. The develop then
+// returns a context-cancelled error which the tick maps to a SAFE revert (back to
+// ready, NO verify, NO merge). ClearAbort is called as part of handling so the
+// re-run is not immediately re-aborted by the stale flag. The field is OPTIONAL on
+// Deps — a nil Aborter means no abort watcher runs (the pre-F-2 behavior), so
+// existing wiring and tests are unaffected.
+type Aborter interface {
+	// AbortRequested reports whether the task has a pending abort signal.
+	AbortRequested(ctx context.Context, taskID string) (bool, error)
+	// ClearAbort clears the abort signal so a re-run is not re-aborted. Idempotent.
+	ClearAbort(ctx context.Context, taskID string) error
+}
+
 // Recipe carries the per-project gate/holdout binding the tick hands to the
 // verifier (ADR-0009). It is injected, not a global.
 type Recipe struct {
@@ -190,6 +217,11 @@ type Conductor struct {
 	emitter  Emitter
 	policy   Policy
 	pauser   Pauser
+	aborter  Aborter
+	// abortPoll is how often the running-develop watcher polls the abort signal.
+	// Zero means the default (defaultAbortPoll); it is overridable so tests can
+	// drive the watcher deterministically without a wall-clock dependency.
+	abortPoll time.Duration
 }
 
 // Deps bundles the injected collaborators so New has a single, named-field
@@ -234,6 +266,18 @@ type Deps struct {
 	// opts in by injecting a store-backed controller that reads the SHARED store so
 	// a pause set by a separate conductorctl process is honored.
 	Pauser Pauser
+	// Aborter is the OPTIONAL control reverse-channel ABORT seam (ADR-0011 §4, F-2).
+	// When set, the tick runs a watcher during develop that polls the leased task's
+	// abort signal off the SHARED store and cancels the in-flight develop (killing
+	// the performer process group) when an operator sets it via conductorctl abort.
+	// A nil Aborter means no watcher runs (the pre-F-2 behavior), keeping
+	// construction backward compatible — the daemon opts in by injecting a
+	// store-backed aborter.
+	Aborter Aborter
+	// AbortPoll overrides the running-develop watcher's poll interval. Zero selects
+	// the default (defaultAbortPoll). It exists so a test can drive the watcher
+	// deterministically (a tiny interval) without depending on wall-clock timing.
+	AbortPoll time.Duration
 }
 
 // New returns a Conductor wired from the injected collaborators. It errors if any
@@ -259,20 +303,27 @@ func New(d Deps) (*Conductor, error) {
 		hostID = "local"
 	}
 	return &Conductor{
-		store:    d.Store,
-		picker:   d.Picker,
-		prov:     d.Provisioner,
-		engine:   d.Engine,
-		verifier: d.Verifier,
-		merger:   d.Merger,
-		recipe:   d.Recipe,
-		hostID:   hostID,
-		governor: d.Governor,
-		emitter:  d.Emitter,
-		policy:   d.Policy,
-		pauser:   d.Pauser,
+		store:     d.Store,
+		picker:    d.Picker,
+		prov:      d.Provisioner,
+		engine:    d.Engine,
+		verifier:  d.Verifier,
+		merger:    d.Merger,
+		recipe:    d.Recipe,
+		hostID:    hostID,
+		governor:  d.Governor,
+		emitter:   d.Emitter,
+		policy:    d.Policy,
+		pauser:    d.Pauser,
+		aborter:   d.Aborter,
+		abortPoll: d.AbortPoll,
 	}, nil
 }
+
+// defaultAbortPoll is how often the running-develop watcher polls the abort signal
+// when no AbortPoll is configured. 1s is responsive enough that an operator's
+// abort cancels the performer within a couple seconds, while cheap on the store.
+const defaultAbortPoll = 1 * time.Second
 
 // emit publishes an event on the optional observability bus (ADR-0011). It is a
 // no-op when no emitter is injected, so emission is non-breaking for callers
@@ -381,9 +432,20 @@ func (c *Conductor) runTask(ctx context.Context, project statestore.Project, tas
 		_ = c.prov.Cleanup(context.WithoutCancel(ctx), ws)
 	}()
 
-	// Develop in the fresh worktree (A-3). Sentinel classification first (ADR-0014).
+	// Develop in the fresh worktree (A-3), under the control reverse-channel ABORT
+	// watcher (ADR-0020 follow-up / F-2). developWithAbort wraps the develop call in
+	// a cancellable child context and, when an Aborter is injected, runs a watcher
+	// goroutine that polls the leased task's abort signal off the SHARED store; when
+	// an operator sets it (conductorctl abort), the child ctx is cancelled, which
+	// (via exec.CommandContext + Setpgid) kills the performer process group. The
+	// returned aborted flag distinguishes an operator-cancelled develop from any
+	// other develop error so the tick reverts to a SAFE, re-runnable state instead
+	// of blocking. With a nil Aborter this is a plain develop (pre-F-2 behavior).
 	c.emit(ctx, task, events.PhaseDevelop, events.KindStarted, nil)
-	verdict, devErr := c.engine.Develop(ctx, task, ws)
+	verdict, aborted, devErr := c.developWithAbort(ctx, task, ws)
+	if aborted {
+		return c.handleAbort(ctx, task)
+	}
 	if devErr != nil {
 		return c.handleDevelopError(ctx, task, devErr)
 	}
@@ -439,6 +501,105 @@ func (c *Conductor) runTask(ctx context.Context, project statestore.Project, tas
 		Review:   review,
 		MergeSHA: sha,
 	}, nil
+}
+
+// developWithAbort runs the engine's Develop under the control reverse-channel
+// ABORT watcher (ADR-0020 follow-up / F-2). It returns the develop verdict + error
+// and a third boolean reporting whether the develop was cancelled by an operator
+// abort (as opposed to any other develop failure), so the caller can route an
+// abort to a SAFE revert rather than a block.
+//
+// Mechanism: develop runs under a CHILD context derived from ctx. When an Aborter
+// is injected, a watcher goroutine polls the leased task's abort signal every
+// abortPoll; the FIRST time it reads true it cancels the child context. The
+// performer subprocess runs via exec.CommandContext with its own process group
+// (Setpgid, process_unix.go), so cancelling the child context kills the WHOLE
+// performer process group, not just the leader. The watcher is always joined
+// before this returns (no leaked goroutine, no post-return store access), so the
+// `aborted` flag is read race-free.
+//
+// With a nil Aborter, no watcher runs and this is a plain develop under ctx
+// (the pre-F-2 behavior), so existing wiring and tests are unaffected.
+func (c *Conductor) developWithAbort(ctx context.Context, task statestore.Task, ws engine.Workspace) (engine.Verdict, bool, error) {
+	if c.aborter == nil {
+		v, err := c.engine.Develop(ctx, task, ws)
+		return v, false, err
+	}
+
+	devCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	poll := c.abortPoll
+	if poll <= 0 {
+		poll = defaultAbortPoll
+	}
+
+	// aborted is written ONLY by the watcher goroutine and read ONLY after the
+	// watcher has exited (the <-watcherDone join below), so no mutex is needed: the
+	// channel close establishes the happens-before edge.
+	var aborted bool
+	watcherDone := make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+		ticker := time.NewTicker(poll)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-devCtx.Done():
+				// Develop finished (or was cancelled by us already): stop watching.
+				return
+			case <-ticker.C:
+				req, err := c.aborter.AbortRequested(devCtx, task.ID)
+				if err != nil {
+					// A transient read error must NOT cancel a healthy develop; keep
+					// polling. A persistent error simply means abort never fires.
+					continue
+				}
+				if req {
+					aborted = true
+					cancel() // kills the performer process group via ctx.
+					return
+				}
+			}
+		}
+	}()
+
+	v, err := c.engine.Develop(devCtx, task, ws)
+	cancel()      // ensure the watcher's devCtx.Done() fires so it exits promptly.
+	<-watcherDone // join: establishes happens-before for the `aborted` read.
+	return v, aborted, err
+}
+
+// handleAbort reverts a task whose in-flight develop was cancelled by an operator
+// abort (ADR-0020 follow-up / F-2) to a SAFE, RE-RUNNABLE state: it runs NO verify
+// and NO merge (so the base branch gets NO [task:<id>] trailer for this run),
+// resets the task to ready, and CLEARS the abort flag so the next tick does not
+// immediately re-abort the re-run.
+//
+// Abort is chosen to leave the task RE-RUNNABLE (ready) rather than terminal
+// (blocked): an operator abort means "stop THIS run" (a hung/wrong-path performer),
+// not "this task is broken" — the develop never produced a verdict, so there is no
+// failure to block on. A human who wants the task to stop permanently can block it
+// out-of-band; the common case (cancel a stuck run, let the next fresh-context tick
+// retry, ADR-0001) is served by ready. The lease is released by the Tick defer.
+func (c *Conductor) handleAbort(ctx context.Context, task statestore.Task) (TickResult, error) {
+	// Clear the durable abort signal first so a re-run is not re-aborted. Use a
+	// cancel-free context: the tick's ctx may itself be cancelled (e.g. shutdown),
+	// but the revert bookkeeping must still land.
+	cleanCtx := context.WithoutCancel(ctx)
+	if c.aborter != nil {
+		if err := c.aborter.ClearAbort(cleanCtx, task.ID); err != nil {
+			return TickResult{}, fmt.Errorf("conductor: tick: clear abort %q: %w", task.ID, err)
+		}
+	}
+	c.emit(cleanCtx, task, events.PhaseDevelop, events.KindInterventionNeeded,
+		map[string]any{"reason": "aborted by operator"})
+	// Revert to ready (re-runnable). setStatus re-reads, so it persists over the
+	// now-cleared abort flag.
+	if err := c.setStatus(cleanCtx, task.ID, statusReady); err != nil {
+		return TickResult{}, fmt.Errorf("conductor: tick: revert aborted task %q: %w", task.ID, err)
+	}
+	return TickResult{Outcome: OutcomeAborted, TaskID: task.ID}, nil
 }
 
 // reviewPass is the frozen ReviewResult.Result value the merge gate keys on
