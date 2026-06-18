@@ -2,9 +2,13 @@
 #
 # Multi-stage image for the conductor-platform daemon (P4-1).
 #
-# Stage 1 (builder) compiles two STATIC binaries from this module:
-#   - conductor     the tick daemon (cmd/conductor)     — the ENTRYPOINT
-#   - conductorctl  the operator CLI (cmd/conductorctl)  — also on PATH
+# Stage 1 (builder) compiles three STATIC binaries from this module:
+#   - conductor     the tick daemon (cmd/conductor)        — the ENTRYPOINT
+#   - conductorctl  the operator CLI (cmd/conductorctl)     — also on PATH
+#   - conductor-api the API gateway (cmd/conductor-api)     — also on PATH; the
+#     gateway Deployment overrides `command` to run it (Faz-3, ADR-0025). It is a
+#     SEPARATE service (read+control over the shared store/bus); the daemon image
+#     is unchanged — same image, different entrypoint per Deployment.
 # Stage 2 (runtime) is a small alpine that carries ONLY what the daemon needs at
 # runtime: `git` (the provisioner shells out to clone + worktree) and
 # `ca-certificates` (HTTPS to the git remote / API). It runs as a NON-ROOT user.
@@ -47,8 +51,9 @@ COPY . .
 ENV CGO_ENABLED=0 GOOS=linux
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build -trimpath -ldflags='-s -w' -o /out/conductor    ./cmd/conductor && \
-    go build -trimpath -ldflags='-s -w' -o /out/conductorctl ./cmd/conductorctl
+    go build -trimpath -ldflags='-s -w' -o /out/conductor     ./cmd/conductor && \
+    go build -trimpath -ldflags='-s -w' -o /out/conductorctl  ./cmd/conductorctl && \
+    go build -trimpath -ldflags='-s -w' -o /out/conductor-api ./cmd/conductor-api
 
 # ---- runtime ----------------------------------------------------------------
 FROM alpine:3.21
@@ -62,8 +67,9 @@ RUN apk add --no-cache git ca-certificates tini && \
     adduser  -u 65532 -S conductor -G conductor -h /home/conductor && \
     mkdir -p /workspace && chown -R conductor:conductor /workspace
 
-COPY --from=builder /out/conductor    /usr/local/bin/conductor
-COPY --from=builder /out/conductorctl /usr/local/bin/conductorctl
+COPY --from=builder /out/conductor     /usr/local/bin/conductor
+COPY --from=builder /out/conductorctl  /usr/local/bin/conductorctl
+COPY --from=builder /out/conductor-api /usr/local/bin/conductor-api
 
 USER conductor
 WORKDIR /workspace

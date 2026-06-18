@@ -1,0 +1,47 @@
+# Ingress exposing the conductor-api gateway OUTSIDE the cluster (Faz-3, 3A-4).
+#
+# This is the single public entrypoint the web cockpit (Dalga 3B) and, later, the
+# editor fork (Faz-4) talk to. The host below is an OBVIOUS PLACEHOLDER — replace
+# it with your real domain before applying.
+#
+# SECURITY / TRANSPORT:
+#   - TLS is REQUIRED in production: the gateway's bearer token (and, for browser
+#     WebSocket clients, the ?token= query fallback) travel in the request, so the
+#     edge MUST be HTTPS. Wire cert-manager (the commented annotation + tls block)
+#     or terminate TLS at your load balancer.
+#   - WebSocket (/ws): the nginx ingress controller upgrades Connection/Upgrade
+#     automatically; no special annotation is needed for a single backend. The long
+#     read timeout below keeps idle event streams from being cut.
+#
+# ingressClassName assumes an nginx controller; change it for your environment.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: conductor-api
+  namespace: conductor-platform
+  labels:
+    app.kubernetes.io/name: conductor-api
+    app.kubernetes.io/component: gateway
+  annotations:
+    # Keep WebSocket/event-stream connections open (default 60s would drop /ws).
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Uncomment with cert-manager installed to auto-issue the TLS cert below.
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - conductor-api.example.com
+      secretName: conductor-api-tls
+  rules:
+    - host: conductor-api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: conductor-api
+                port:
+                  name: http

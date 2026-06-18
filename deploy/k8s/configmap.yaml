@@ -20,6 +20,11 @@ data:
   # Enable the OPTIONAL health/observability HTTP server (P4-2) on :8080 so the
   # k8s probes (and the stall-check CronJob) can reach /healthz /readyz /status.
   CONDUCTOR_HTTP_ADDR: ":8080"
+  # conductor-api gateway (Faz-3, ADR-0025) listen address. Read ONLY by the
+  # gateway Deployment (api-deployment.yaml); the daemon ignores it. The gateway
+  # serves its REST + WebSocket surface and /healthz /readyz here. The token
+  # (CONDUCTOR_API_TOKEN) and DSN (CONDUCTOR_DSN) come from the Secret.
+  CONDUCTOR_API_ADDR: ":8080"
   # Gap between ticks in loop mode.
   CONDUCTOR_INTERVAL: "30s"
   # Integration base branch merges land on.

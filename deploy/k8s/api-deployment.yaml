@@ -1,0 +1,94 @@
+# The conductor-api gateway Deployment (Faz-3, 3A-4; ADR-0025).
+#
+# SEPARATE service from the daemon: same image, but `command` overrides the
+# image ENTRYPOINT (which runs the daemon) to run the gateway binary instead.
+# The gateway is READ + CONTROL over the SHARED store/bus — it holds NO state and
+# issues NO direct command to the daemon (it reflects intent onto the store, which
+# the daemon honors on its next tick). Because it is stateless it is safe to scale
+# horizontally and to RollingUpdate (unlike the daemon, which must stay at 1 +
+# Recreate because the lease is the single-active gate). Keep replicas modest; the
+# Postgres pool is the real ceiling.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conductor-api
+  namespace: conductor-platform
+  labels:
+    app.kubernetes.io/name: conductor-api
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: conductor-api
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: conductor-api
+        app.kubernetes.io/component: gateway
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: conductor-api
+          image: conductor-platform:latest
+          imagePullPolicy: IfNotPresent
+          # Override the image ENTRYPOINT (conductor daemon) to run the gateway.
+          # tini stays PID 1 for signal-correct graceful shutdown (the gateway
+          # traps SIGTERM and calls http.Server.Shutdown). Config comes from env
+          # (envFrom): the gateway reads CONDUCTOR_API_ADDR, CONDUCTOR_DSN, and
+          # CONDUCTOR_API_TOKEN; it REFUSES TO START if the token is empty.
+          command: ["/sbin/tini", "--", "conductor-api"]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: conductor-config
+            - secretRef:
+                name: conductor-secret
+          # Liveness: /healthz is 200 while the process serves and does NOT touch
+          # the store, so a Postgres blip never flaps it.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Readiness: /readyz probes the store (cheap ListProjects); allowed to
+          # flap with DB health — that is the traffic gate.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities:
+              drop: ["ALL"]
+            # The gateway shells out to NOTHING (no git, no workspace writes), so
+            # unlike the daemon it CAN run with a fully read-only root filesystem —
+            # a strict hardening win.
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
