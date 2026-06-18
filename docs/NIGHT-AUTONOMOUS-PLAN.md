@@ -114,7 +114,9 @@ Postgres-backed daemon (cmd/conductor) + operatör CLI (cmd/conductorctl, payla�
 ### Bug-fix (kullanıcı onayı: #1+#2) — ✅ done
 - **#2 env-izolasyon** ✅ (4fcae8d): verify gate+holdout subprocess'leri `sanitizedEnv()` ile CONDUCTOR_* ayıklanmış env'de koşar (PATH/HOME/GO* korunur) + platformun env-duyarlı default-testleri t.Setenv ile izole. **Bağımsız doğrulandı:** `CONDUCTOR_DSN=x go test -run TestParseConfig` artık PASS (önce FAIL), TestRunGate_StripsConductorEnv PASS.
 - **#1 tam gate + yapılandırılabilir** ✅ (a8ff629): daemon default gate = build+test+**vet**; golangci opt-in `.conductor/config.yaml`'dan (scaffolder.LoadRecipeGates — N-8→daemon boşluğu kapandı); eksik binary deterministik FAIL (sessiz-skip yok). **Bağımsız doğrulandı:** ResolveGates(default=build+test+vet / config→golangci) + missing-binary + round-trip testleri PASS, full gate+race+e2e yeşil, engine+builder 0 değişiklik.
-- **KALAN (minör, açık):** dogfood bug #3 (develop-cmd whitespace), #4 (GitMerger dirty-base).
+- **#3 quote-aware cmd-parsing** ✅ (1dc5d66): splitArgs (tırnak-duyarlı, shell yok) develop-cmd+holdout-cmd için; çok-kelimeli prompt wrapper'sız. **Bağımsız doğrulandı:** 17 splitArgs testi (no-quote-değişmedi/tırnak/escape/unterminated-error) PASS.
+- **#4 GitMerger temiz-base** ✅ (ce90c94): başarısız merge'de restoreBase (merge --abort + reset --hard baseRef + clean -fd); base ref ilerlemez. **Bağımsız doğrulandı:** ConflictRestoresCleanBase testi (base temiz + ref un-advanced) PASS + happy-path korundu.
+- **🏁 TÜM DOGFOOD BUG'LARI KAPANDI (#1-#4).** engine/statestore/builder dokunulmadı (additive), gate+race+e2e yeşil.
 - **İş B — Builder tick-bug kök-çözümü** (A'dan sonra). İzole/temiz ortam + enstrümantasyon + hipotez-daraltma (launchd throttle / reconcile-kill / SIGKILL / reparent) + 20dk+ stabil tick kanıtı. Risk yüksek.
 
 ## FOLLOW-UP (kullanıcı kararı / risk → sabah)
