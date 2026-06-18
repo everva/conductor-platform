@@ -1,0 +1,111 @@
+# The conductor daemon Deployment (P4-1 + P4-2).
+#
+# SCALING CAVEAT: keep replicas at 1. The daemon enforces single-active work per
+# repo via the Postgres lease table + governor (ADR-0008/ADR-0010), so even if you
+# ran 2 replicas only one would hold the lease — the others would idle and waste
+# resources. There is no leader-election sidecar here; the lease IS the gate. Use
+# Recreate (not RollingUpdate) so a new pod does not briefly double-run alongside
+# the old one during a deploy.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conductor
+  namespace: conductor-platform
+  labels:
+    app.kubernetes.io/name: conductor
+    app.kubernetes.io/component: daemon
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: conductor
+      app.kubernetes.io/component: daemon
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: conductor
+        app.kubernetes.io/component: daemon
+    spec:
+      # Pod-level hardening. fsGroup makes mounted volumes group-owned by 65532 so
+      # the non-root user can write the workspace.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: conductor
+          # Must be pushed to a registry the cluster can pull. See README.md.
+          image: conductor-platform:latest
+          imagePullPolicy: IfNotPresent
+          # Override the image's default CMD (-h, which only prints usage) so the
+          # daemon runs its tick LOOP. All other config comes from env (envFrom).
+          args: ["-interval", "$(CONDUCTOR_INTERVAL)"]
+          ports:
+            - name: http
+              containerPort: 8080
+          # ConfigMap (non-secret env) + Secret (DSN / token) — mirrors the
+          # docker-compose env split.
+          envFrom:
+            - configMapRef:
+                name: conductor-config
+            - secretRef:
+                name: conductor-secret
+          # Liveness: /healthz is 200 while the loop runs and does NOT touch the DB,
+          # so a transient Postgres blip never flaps liveness (which would make k8s
+          # kill an otherwise-healthy daemon).
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Readiness: /readyz probes the store (cheap ListProjects). It is allowed
+          # to flap on a DB blip — that is the traffic/scheduling gate, not liveness.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Container-level hardening.
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities:
+              drop: ["ALL"]
+            # readOnlyRootFilesystem is intentionally FALSE: the provisioner shells
+            # out to `git clone`/`git worktree`, and git writes config + temp files
+            # under $HOME and the workspace. Locking the rootfs read-only is fiddly
+            # with git's scattered writes, so we keep it writable and instead confine
+            # all heavy writes to the dedicated /workspace volume below. Revisit with
+            # an XDG/HOME-pinned overlay if a fully read-only rootfs is required.
+            readOnlyRootFilesystem: false
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+          volumeMounts:
+            # CONDUCTOR_ROOT (/workspace): clones/worktrees AND the heartbeat file
+            # (CONDUCTOR_HEARTBEAT=/workspace/heartbeat.json). emptyDir: a fresh
+            # clone is cheap and the lease/store is the source of truth, so the
+            # workspace does not need to survive a pod restart. Swap for a PVC if you
+            # want clone reuse across restarts.
+            - name: workspace
+              mountPath: /workspace
+      volumes:
+        - name: workspace
+          emptyDir: {}

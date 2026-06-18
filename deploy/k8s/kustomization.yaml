@@ -1,0 +1,23 @@
+# Kustomize base for the conductor-platform daemon (P4-4).
+#
+# Build:   kustomize build deploy/k8s/
+# Apply:   kustomize build deploy/k8s/ | kubectl apply -f -
+# Dry-run: kustomize build deploy/k8s/ | kubectl apply --dry-run=client -f -
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: conductor-platform
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: conductor-platform
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.yaml
+  - postgres.yaml
+  - deployment.yaml
+  - service.yaml
+  - cronjob-stallcheck.yaml

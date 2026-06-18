@@ -1,0 +1,6 @@
+# Namespace for all conductor-platform resources. Optional but keeps the daemon,
+# its Postgres, Service, Secret/ConfigMap and the stall-check CronJob isolated.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: conductor-platform

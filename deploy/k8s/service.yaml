@@ -1,0 +1,21 @@
+# ClusterIP Service for the daemon's health/observability HTTP server (P4-2).
+# Exposes :8080 as `http` so the readiness/liveness probes, the stall-check
+# CronJob, and any other in-cluster component can reach /healthz /readyz /status.
+apiVersion: v1
+kind: Service
+metadata:
+  name: conductor
+  namespace: conductor-platform
+  labels:
+    app.kubernetes.io/name: conductor
+    app.kubernetes.io/component: daemon
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: conductor
+    app.kubernetes.io/component: daemon
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

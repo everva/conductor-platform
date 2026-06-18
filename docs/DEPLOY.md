@@ -126,6 +126,30 @@ curl localhost:8080/status
 
 ---
 
+## 3b. Run on Kubernetes
+
+Production-shaped manifests live under
+[`deploy/k8s/`](../deploy/k8s/) as a Kustomize base — see
+[`deploy/k8s/README.md`](../deploy/k8s/README.md) for the full walkthrough
+(setting the real Secret via a secret manager, pushing the image, applying, and
+what each probe does).
+
+```sh
+kustomize build deploy/k8s/ | kubectl apply --dry-run=client -f -   # validate (no cluster)
+kustomize build deploy/k8s/ | kubectl apply -f -                    # apply
+```
+
+It deploys: the daemon `Deployment` (1 replica — the lease enforces single-active,
+ADR-0008; hardened non-root `securityContext`; `livenessProbe` → `/healthz`,
+`readinessProbe` → `/readyz`), a ClusterIP `Service` on `:8080`, a `ConfigMap`
+(non-secret env) + a **template** `Secret` (placeholder DSN/token — **no real
+secret committed**; use Sealed Secrets / SOPS / External Secrets in production), a
+**dev/bootstrap** Postgres `StatefulSet` (use managed Postgres for prod), and the
+independent stall-detector `CronJob` (ADR-0016) that curls `/readyz` over the
+Service every minute as the out-of-process liveness backstop.
+
+---
+
 ## 4. Postgres setup & migrations
 
 **The daemon migrates Postgres on start.** When a non-empty DSN is configured,

@@ -1,0 +1,86 @@
+# INDEPENDENT stall detector (ADR-0016) as a Kubernetes CronJob.
+#
+# DESIGN CHOICE — external HTTP check against the Service's /readyz, NOT a shared
+# heartbeat FILE.
+#
+# ADR-0016 requires the backstop to be INDEPENDENT of the daemon loop ("conductor
+# loop'una GÖMÜLÜ DEĞİL → ayrı job"): the daemon cannot recover its own death, so a
+# separate process must observe it. The native `conductor -check -heartbeat <path>`
+# mode reads a heartbeat FILE — but in k8s that file lives on the daemon pod's
+# emptyDir, which is NOT shared across pods. Mounting one volume into two pods would
+# need RWX storage (NFS/EFS) plus careful single-writer discipline, which is fragile
+# and not portable.
+#
+# The clean, k8s-native equivalent is an EXTERNAL liveness probe over the Service:
+# this CronJob curls the daemon's /readyz through the `conductor` ClusterIP Service
+# every minute. /readyz returns 200 only when the loop is up AND the store is
+# reachable (cmd/conductor/httpserver.go), so a non-200 / connection failure is the
+# same "daemon is not making progress" signal the file-based -check gives — but it
+# is genuinely out-of-process (a different pod, scheduled by k8s itself, surviving
+# the daemon's death). On failure this job exits non-zero, which surfaces as a
+# failed Job that alerting (Prometheus kube_job_status_failed / Alertmanager) fires
+# on. k8s' own Deployment/livenessProbe restart is the recovery; this CronJob is the
+# independent OBSERVER/alerter that proves the restart machinery is working.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: conductor-stallcheck
+  namespace: conductor-platform
+  labels:
+    app.kubernetes.io/name: conductor-stallcheck
+    app.kubernetes.io/component: stall-detector
+spec:
+  schedule: "* * * * *" # every minute
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 30
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 30
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: conductor-stallcheck
+            app.kubernetes.io/component: stall-detector
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: stallcheck
+              # curl image; pinned, runs as nonroot. Any small image with a HTTP
+              # client works — this stays decoupled from the conductor image.
+              image: curlimages/curl:8.11.1
+              command:
+                - sh
+                - -c
+                # --fail makes curl exit non-zero on a non-2xx response; a
+                # connection failure (daemon dead/unreachable) is also non-zero. The
+                # Job then fails -> alerting fires. -sS keeps it quiet but prints
+                # errors. The Service DNS resolves in-namespace.
+                - >-
+                  curl -fsS --max-time 10
+                  http://conductor.conductor-platform.svc.cluster.local:8080/readyz
+                  && echo "conductor FRESH (/readyz 200)"
+                  || (echo "conductor STALE/UNREACHABLE (/readyz not 200)" >&2; exit 1)
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 65532
+                runAsGroup: 65532
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: "10m"
+                  memory: "16Mi"
+                limits:
+                  cpu: "100m"
+                  memory: "64Mi"

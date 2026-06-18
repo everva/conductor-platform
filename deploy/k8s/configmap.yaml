@@ -1,0 +1,40 @@
+# Non-secret daemon configuration (env). Mirrors the env split in
+# docker-compose.yml: everything here is safe to commit. The ONLY secret value
+# (CONDUCTOR_DSN, which carries the Postgres password, plus any gh-token) lives
+# in secret.yaml, NOT here.
+#
+# Each key maps to a flag in cmd/conductor/main.go (every flag has an env
+# fallback). See docs/DEPLOY.md for the full flag/env table.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: conductor-config
+  namespace: conductor-platform
+data:
+  # Project id the daemon ticks. CreateProject is an idempotent upsert, so a bare
+  # project row is ensured even before any conductorctl onboard. REQUIRED to run.
+  CONDUCTOR_PROJECT: "demo"
+  # Workspace root for clones/worktrees. Backed by an emptyDir in deployment.yaml.
+  # Matches the image default and the writable volume mount.
+  CONDUCTOR_ROOT: "/workspace"
+  # Enable the OPTIONAL health/observability HTTP server (P4-2) on :8080 so the
+  # k8s probes (and the stall-check CronJob) can reach /healthz /readyz /status.
+  CONDUCTOR_HTTP_ADDR: ":8080"
+  # Gap between ticks in loop mode.
+  CONDUCTOR_INTERVAL: "30s"
+  # Integration base branch merges land on.
+  CONDUCTOR_BASE_BRANCH: "develop"
+  # Risk-layered merge policy (ADR-0003): T3/T4 + untiered tasks are HELD for a
+  # human after a green gate. Default true so production human-gates high-risk.
+  CONDUCTOR_GOVERNANCE: "true"
+  # Governor (ADR-0008): max concurrent tasks across all projects (lease-derived).
+  CONDUCTOR_GLOBAL_CAP: "4"
+  # Governor (ADR-0008): normalized 1-min load ceiling (loadavg/NumCPU) above
+  # which new work is denied admission.
+  CONDUCTOR_LOAD_CEILING: "2.0"
+  # Liveness heartbeat path written each tick (ADR-0016). Written to the writable
+  # workspace volume. The INDEPENDENT stall detector is a separate CronJob that
+  # checks /readyz over the Service (see cronjob-stallcheck.yaml) — it does NOT
+  # read this file (no shared cross-pod volume), so the file is mainly for
+  # in-pod/ops introspection here.
+  CONDUCTOR_HEARTBEAT: "/workspace/heartbeat.json"
