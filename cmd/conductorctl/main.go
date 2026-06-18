@@ -133,6 +133,8 @@ func run(ctx context.Context, a *app, argv []string, stderr io.Writer) int {
 		return runIntake(ctx, a, rest, stderr)
 	case "status":
 		return runStatus(ctx, a, rest, stderr)
+	case "hosts":
+		return runHosts(ctx, a, rest, stderr)
 	case "pause":
 		return runPauseResume(ctx, a, rest, stderr, false)
 	case "resume":
@@ -226,6 +228,27 @@ func runStatus(ctx context.Context, a *app, args []string, stderr io.Writer) int
 		return 2
 	}
 	if err := a.status(ctx, *project, *asJSON); err != nil {
+		_, _ = fmt.Fprintf(stderr, "conductorctl: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// runHosts parses the hosts flags and renders the host registry. It mirrors
+// runStatus: a -json bool selects machine-readable output, and there are no
+// required flags — `conductorctl hosts` with no args is valid.
+func runHosts(ctx context.Context, a *app, args []string, stderr io.Writer) int {
+	fs := flag.NewFlagSet("hosts", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	asJSON := fs.Bool("json", false, "emit machine-readable JSON")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: conductorctl hosts [--json]")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if err := a.hosts(ctx, *asJSON); err != nil {
 		_, _ = fmt.Fprintf(stderr, "conductorctl: %v\n", err)
 		return 1
 	}
@@ -349,6 +372,7 @@ func usage() string {
 	b.WriteString("  onboard  <repo>   register a project (--base)\n")
 	b.WriteString("  intake            ingest a scenario into the ledger (--project --file)\n")
 	b.WriteString("  status            print the ledger summary (--project [--json])\n")
+	b.WriteString("  hosts             list registered hosts and heartbeats ([--json])\n")
 	b.WriteString("  pause             pause a project's loop (--project)\n")
 	b.WriteString("  resume            resume a project's loop (--project)\n")
 	b.WriteString("  abort             abort the project's running task (--project)\n")
