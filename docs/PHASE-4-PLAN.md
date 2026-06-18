@@ -80,4 +80,15 @@ dalga başlarında.
 
 ## İLERLEME KAYDI (her iş bitince güncelle)
 - Faz-4 planı + ADR-0027 oluşturuldu (2026-06-18). Kullanıcı: Code-OSS fork + webview extension; editor/ + ayrı fork
-  repo; önce sweep. Sıradaki: **FAZ-3.5 sweep — S-1 (distill snake_case) → S-2 (CI Playwright hard-gate) → …**
+  repo; önce sweep.
+- ✅ **S-1 distill snake_case** (`ab95f4e` + `be91bfe`): gateway `scenarioDTO` (snake_case json) + web `Scenario` tipi +
+  vitest mock'ları + Playwright e2e distill mock'u hizalandı; snake_case wire-contract testi. (e2e mock'u ilk commit'te
+  atlanmıştı; S-2 strict gate yakaladı.)
+- ✅ **S-2 CI Playwright hard-gate** (`6e1547f` + stabilize `be91bfe`): `continue-on-error` kaldırıldı → e2e bloklayıcı;
+  flaky'di → `routeWebSocket` temiz WS mock (offline-churn öldürüldü) + Distill click'inde `toPass` retry → yerelde 5/5,
+  CI'da yeşil, güvenilir hard-gate.
+- ✅ **CI self-hosted sertleştirme** (yolda yakalanan 3 latent bug): e2e committer-identity (`a5ef5ba` provisioner.gitEnv
+  pin), golangci-lint-action v6→v7 (`18175ee`, v2 uyumu), setup-go `cache:false` (`25ce0c8`, persistent GOMODCACHE tar
+  çakışması). CI org-self-hosted runner'da tam yeşil (gate 1m13s).
+- Sıradaki sweep: **S-4** (private-repo auth-fail testi) · **S-6** (sentinel L1 zengin probe) · **S-7** (recipe argv sandbox)
+  · **S-3** (gerçek-claude advisor smoke, canlı) · **S-5** (iOS/maestro canlı — org-macos-1 runner). Sonra Faz-4 4A.
