@@ -34,5 +34,50 @@ Mevcut `CommandEngine` + `verify.Gate{Name, Argv}` modeli bunu olduğu gibi taş
 - Web reçete profili (scaffolder) + referans-görsel holdout entegrasyonu.
 - Playwright render entegrasyonu (browser kuruluysa canlı; değilse image-diff gate ile offline kanıt).
 
+## Uygulama (2A-2)
+
+### Deterministik çekirdek: `cmd/imagediff`
+Bağımsız, bağımlılıksız (stdlib `image/png`) PNG piksel-diff aracı — reçetenin gate
+olarak çağırdığı runnable. **Browser GEREKTİRMEZ.** Kontrat:
+
+    imagediff <actual.png> <expected.png> -threshold <frac 0..1>
+      exit 0  -> farklılaşan piksel oranı <= threshold  (PASS)
+      exit 1  -> oran > threshold                         (FAIL, non-revealing özet)
+      exit 2  -> usage/IO/decode/boyut-uyuşmazlığı/eksik dosya (net hata = det. FAIL)
+
+- **Karar = saf fonksiyon:** iki dosya + threshold → oran; rastgelelik yok. Piksel
+  testi RGBA-bileşen tam eşitlik; anti-aliasing toleransı THRESHOLD ile ifade edilir.
+- **Non-revealing:** FAIL özeti yalnız oran/threshold; hangi piksel/renk farklı — ASLA.
+  Performer referansı geri-mühendislik edemez.
+- **Eksik render aracı = eksik actual.png → exit 2 (net hata), sessiz-skip YOK.**
+- 64 MP üstü görsel reddedilir (det. bellek tavanı).
+
+### Web reçete profili (scaffolder)
+`StackWeb` = Node + `playwright.config.*` (Node'dan ÖNCE algılanır). Profili: standart
+Node gate'leri (build/test/vet/lint) + **visual gate** (5. ve SON gate):
+
+    visual: [imagediff, .conductor/visual/actual.png, .conductor/visual/reference.png, -threshold, 0.02]
+
+`.conductor/config.yaml` `recipe.verify.visual` alanına serialize olur; `LoadRecipe`
+beş gate'i sıralı okur (build,test,vet,lint,visual). Yollar sabit konvansiyon
+(`VisualActualPath`/`VisualReferencePath`): render adımı actual'ı oraya yazar, holdout
+referansı oraya enjekte eder.
+
+### Referans = repo-DIŞI holdout (ADR-0018 yeniden-kullanım)
+Beklenen ekran görüntüsü gizli-holdout gibi akar: `store://references/<id>/spec.yaml`
+→ `<root>/references/<id>/inject/.conductor/visual/reference.png` verify-worktree'ye
+enjekte edilir. Visual-diff gate = holdout komutu: `imagediff <actual> <reference>` ayrı
+verify-worktree'de koşar (actual performer HEAD'inden checkout, reference enjekte). Performer
+referansı GÖRMEZ → ezberleyemez.
+
+### Playwright render (best-effort, dökümante)
+Render adımı opsiyonel/araç-bağımlı: `npx playwright` headless screenshot → actual.png,
+sonra imagediff gate karşılaştırır. Bu host'ta canlı doğrulandı: `npx playwright install
+chromium` başardı; `file://` HTML sayfası screenshot'landı; aynı-sayfa re-render vs referans
+→ PASS (exit 0), farklı sayfa → FAIL (exit 1). Browser kurulamasa bile DETERMİNİSTİK gate
+PNG'leri doğrudan vererek (browser'sız) kanıtlanır — e2e böyle koşar.
+
 ## Durum
-🔄 Uygulanıyor (2A-2). iOS/maestro görsel reçetesi 2A-3 (aynı gate deseni, render=maestro).
+✅ Tamam (2A-2). Deterministik image-diff gate (`cmd/imagediff`) + web reçete profili +
+referans-holdout entegrasyonu; e2e: visual PASS→merge / FAIL→blocked (browser'sız). Playwright
+render canlı doğrulandı. iOS/maestro görsel reçetesi 2A-3 (aynı gate deseni, render=maestro).

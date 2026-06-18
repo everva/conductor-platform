@@ -122,3 +122,22 @@ Deterministik kanıt = kalite kapısı (LLM asla karar mercii); sahte-yeşil ASL
   NEGATİF (hâlâ-bozuk fix, verdict yalan-`pass`): bağımsız gate `review=changes-requested`→retry→**blocked**, merge YOK,
   develop'ta 1 commit + trailer yok (Node `node-neg`, Python `py-neg`). Gate+e2e+golangci v2.12.0+race YEŞİL; gofmt temiz;
   yeni Go dep yok; secret yok.
+- **Dalga A — 2A-2 (web görsel-diff reçetesi, ADR-0023)** ✅ done. Görsel-verify = deterministik reçete GATE'i (yeni
+  verify-tipi DEĞİL): render→diff→exit-code. **Deterministik çekirdek `cmd/imagediff`** (stdlib `image/png`, browser'sız,
+  yeni Go dep yok): `imagediff <actual.png> <expected.png> -threshold <frac>` → exit 0 (oran<=threshold PASS) / 1 (FAIL,
+  non-revealing özet: yalnız oran/threshold, hangi piksel ASLA) / 2 (eksik/oversize/boyut-uyuşmazlığı/decode = net hata
+  = det. FAIL, sessiz-skip YOK). Karar saf fonksiyon (RGBA tam eşitlik; AA-toleransı=threshold); 64MP tavan. Unit:
+  identical→pass, beyond→fail, within→pass, sınır==threshold→pass (inclusive), boyut-uyuşmazlığı→err, eksik→err, non-PNG→err,
+  run() exit-kod kontratı + committed tiny testdata (reference/match/mismatch PNG). **Scaffolder `StackWeb`** (Node +
+  `playwright.config.*`, Node'dan ÖNCE algılanır): standart Node gate'leri + 5./son **visual gate** (additive `Profile.Visual` +
+  `recipeGates.visual`); `recipe.verify.visual` serialize; `LoadRecipe` beş gate'i sıralı okur. Yol konvansiyonu
+  `.conductor/visual/{actual,reference}.png`, threshold 0.02. **Referans = repo-DIŞI holdout (ADR-0018 yeniden-kullanım):**
+  `store://references/<id>/spec.yaml` → inject/`.conductor/visual/reference.png` verify-worktree'ye enjekte; visual gate =
+  holdout-cmd `imagediff <actual> <reference>` ayrı verify-worktree'de (actual performer HEAD'inden, reference enjekte) →
+  performer referansı görmez/ezberleyemez. **Deterministik e2e (browser'sız, `visual_e2e_test.go`):** web görevi gerçek
+  pipeline'da (provisioner+CommandEngine+gerçek FSStore holdout+GitMerger), gerçek derlenmiş `imagediff` PATH'te — actual
+  referansa eşit→visual gate exit 0→`merged` (mergeSHA, develop'ta `[task:T-visual]` trailer); actual farklı→exit non-0→
+  `changes-requested`→retry-tüketildi→`blocked`, merge YOK, trailer YOK (sahte-yeşil yok). **Playwright render canlı
+  doğrulandı:** `npx playwright install chromium` başardı, `file://` HTML `#box` screenshot'landı, aynı-sayfa re-render vs
+  referans→PASS exit 0 / farklı sayfa→FAIL exit 1 (gerçek render→diff→exit). engine.go + statestore frozen DOKUNULMADI
+  (additive); tools/builder dokunulmadı. Gate (build+test+vet+golangci v2.12.0) + e2e + race YEŞİL; gofmt temiz; yeni Go dep yok; secret yok. ADR-0023 ✅.

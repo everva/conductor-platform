@@ -1,0 +1,9 @@
+{
+  "name": "web-repo",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "next build",
+    "test": "playwright test",
+    "typecheck": "tsc --noEmit"
+  }
+}

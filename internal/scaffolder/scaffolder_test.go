@@ -28,6 +28,9 @@ func TestDetectStack(t *testing.T) {
 		{"node", "node-repo", StackNode, []Stack{StackNode}},
 		{"python", "python-repo", StackPython, []Stack{StackPython}},
 		{"rust", "rust-repo", StackRust, []Stack{StackRust}},
+		// A Node repo carrying a playwright.config.* is the "web" stack; Node is
+		// still reported in All (it has a package.json) but Web wins precedence.
+		{"web", "web-repo", StackWeb, []Stack{StackWeb, StackNode}},
 		{"unknown", "empty-unknown", StackUnknown, nil},
 		// Multi-stack: Go marker wins precedence over Node; both are reported.
 		{"multistack-go-primary", "multistack", StackGo, []Stack{StackGo, StackNode}},
@@ -272,7 +275,7 @@ func TestWriteDraftEmptyConfig(t *testing.T) {
 
 func TestSupportedStacks(t *testing.T) {
 	got := SupportedStacks()
-	want := []Stack{StackGo, StackNode, StackPython, StackRust}
+	want := []Stack{StackGo, StackNode, StackPython, StackRust, StackWeb}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("SupportedStacks() = %v, want %v", got, want)
 	}
@@ -406,6 +409,68 @@ func TestLoadRecipe_RoundTrip(t *testing.T) {
 				t.Fatalf("gates = %+v, want %+v", rec.Gates, tc.wantGates)
 			}
 		})
+	}
+}
+
+// TestWebProfile proves the web stack profile (ADR-0023): it carries the standard
+// Node gates PLUS the deterministic visual-diff gate calling the imagediff tool
+// against the rendered screenshot and the holdout-injected reference, last in the
+// ordered gate list.
+func TestWebProfile(t *testing.T) {
+	p, ok := ProfileFor(StackWeb)
+	if !ok {
+		t.Fatal("ProfileFor(web) not found")
+	}
+	wantVisual := []string{"imagediff", VisualActualPath, VisualReferencePath, "-threshold", DefaultVisualThreshold}
+	if !reflect.DeepEqual(p.Visual, wantVisual) {
+		t.Fatalf("web Visual gate = %v, want %v", p.Visual, wantVisual)
+	}
+	gates := p.Gates()
+	if len(gates) != 5 {
+		t.Fatalf("web profile gates = %d, want 5 (build,test,vet,lint,visual)", len(gates))
+	}
+	if !reflect.DeepEqual(gates[len(gates)-1], wantVisual) {
+		t.Fatalf("visual gate must be LAST, got %v", gates[len(gates)-1])
+	}
+}
+
+// TestLoadRecipe_WebRoundTrip proves the web recipe round-trips: GenerateDraft on a
+// web repo emits the visual gate into .conductor/config.yaml, and LoadRecipe reads
+// the five ordered gates back — build, test, vet, lint, visual — so the daemon runs
+// the SAME visual-diff gate the scaffolder drafted (ADR-0023).
+func TestLoadRecipe_WebRoundTrip(t *testing.T) {
+	draft, err := GenerateDraft(fixture(t, "web-repo"), "develop")
+	if err != nil {
+		t.Fatalf("GenerateDraft: %v", err)
+	}
+	if draft.Detection.Primary != StackWeb {
+		t.Fatalf("primary stack = %q, want web", draft.Detection.Primary)
+	}
+	if !draft.Readiness.Ready {
+		t.Fatalf("web repo with a test script should be READY: %s", draft.Readiness.Reason)
+	}
+	dir := t.TempDir()
+	confDir := filepath.Join(dir, ".conductor")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(confDir, "config.yaml"), draft.Config, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	rec, err := LoadRecipe(dir)
+	if err != nil {
+		t.Fatalf("LoadRecipe: %v", err)
+	}
+	want := []GateSpec{
+		{Name: "build", Argv: []string{"npm", "run", "build"}},
+		{Name: "test", Argv: []string{"npm", "test"}},
+		{Name: "vet", Argv: []string{"npm", "run", "typecheck"}},
+		{Name: "lint", Argv: []string{"npx", "eslint", "."}},
+		{Name: "visual", Argv: []string{"imagediff", VisualActualPath, VisualReferencePath, "-threshold", DefaultVisualThreshold}},
+	}
+	if !reflect.DeepEqual(rec.Gates, want) {
+		t.Fatalf("web gates = %+v, want %+v", rec.Gates, want)
 	}
 }
 

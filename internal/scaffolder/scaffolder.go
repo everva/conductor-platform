@@ -39,6 +39,11 @@ const (
 	StackNode    Stack = "node"
 	StackPython  Stack = "python"
 	StackRust    Stack = "rust"
+	// StackWeb is a Node project that ALSO carries a Playwright config: a web
+	// front-end whose recipe adds the deterministic visual-diff gate (ADR-0023).
+	// It is detected ahead of plain Node so a Playwright web app gets the visual
+	// recipe rather than the generic Node one.
+	StackWeb Stack = "web"
 )
 
 // String returns the stack identifier (its underlying string), so a Stack prints
@@ -55,6 +60,10 @@ var detectionRules = []struct {
 	{StackGo, []string{"go.mod"}},
 	{StackRust, []string{"Cargo.toml"}},
 	{StackPython, []string{"pyproject.toml", "requirements.txt", "setup.py", "setup.cfg"}},
+	// Web (Node + Playwright) is probed BEFORE plain Node so a Playwright web app
+	// gets the visual-diff recipe (ADR-0023). Its markers are the Playwright config
+	// files; a package.json without one stays plain Node.
+	{StackWeb, []string{"playwright.config.ts", "playwright.config.js", "playwright.config.mjs"}},
 	{StackNode, []string{"package.json"}},
 }
 
@@ -124,13 +133,20 @@ type Profile struct {
 	Vet []string
 	// Lint is the argv for the stack's linter (gate).
 	Lint []string
+	// Visual is the OPTIONAL deterministic visual-diff gate argv (ADR-0023): it
+	// renders/produces a screenshot and runs the imagediff tool against a
+	// repo-external reference (holdout-injected) at a threshold. Empty for stacks
+	// without a visual recipe (Go/Node/Python/Rust); set for StackWeb. It runs
+	// AFTER the standard gates so a build/test/lint failure surfaces first.
+	Visual []string
 }
 
 // Gates returns the profile's gate commands in deterministic order
-// (build, test, vet, lint), each as an argv slice, skipping any that are empty.
-// This is the shape verify consumes (one Gate per command).
+// (build, test, vet, lint, visual), each as an argv slice, skipping any that are
+// empty. This is the shape verify consumes (one Gate per command). The visual gate
+// (ADR-0023) is last so a build/test/lint failure surfaces before it.
 func (p Profile) Gates() [][]string {
-	candidates := [][]string{p.Build, p.Test, p.Vet, p.Lint}
+	candidates := [][]string{p.Build, p.Test, p.Vet, p.Lint, p.Visual}
 	gates := make([][]string, 0, len(candidates))
 	for _, c := range candidates {
 		if len(c) > 0 {
@@ -139,6 +155,22 @@ func (p Profile) Gates() [][]string {
 	}
 	return gates
 }
+
+// The web visual-diff recipe paths/threshold (ADR-0023). These are the
+// CONVENTION the web profile, the render step, and the holdout reference all
+// agree on, so the deterministic gate finds both images in the verify-worktree:
+//
+//   - VisualActualPath:    where the render step (Playwright) writes the produced
+//     screenshot — relative to the repo root.
+//   - VisualReferencePath: where the repo-EXTERNAL reference image is injected by
+//     the holdout (holdout inject/-relative path maps here). The performer never
+//     authors this file, so it cannot overfit the reference (ADR-0018).
+//   - DefaultVisualThreshold: the max differing-pixel fraction the gate tolerates.
+const (
+	VisualActualPath       = ".conductor/visual/actual.png"
+	VisualReferencePath    = ".conductor/visual/reference.png"
+	DefaultVisualThreshold = "0.02"
+)
 
 // profiles is the data-driven per-stack registry (ADR-0009 per-stack profile
 // library). Adding a stack is a data edit here plus a detection rule above and a
@@ -157,6 +189,21 @@ var profiles = map[Stack]Profile{
 		Test:  []string{"npm", "test"},
 		Vet:   []string{"npm", "run", "typecheck"},
 		Lint:  []string{"npx", "eslint", "."},
+	},
+	// StackWeb is Node + the deterministic visual-diff gate (ADR-0023). The render
+	// front-end (Playwright) produces a screenshot at VisualActualPath; the
+	// repo-external reference is holdout-injected at VisualReferencePath; the
+	// `imagediff` tool decides PASS/FAIL deterministically at the recipe threshold.
+	// The render is OPTIONAL/tooling-dependent (a documented npm script), but the
+	// DIFF gate is the deterministic decision and runs regardless: a missing
+	// rendered file is a clear imagediff error (deterministic FAIL), never a skip.
+	StackWeb: {
+		Stack:  StackWeb,
+		Build:  []string{"npm", "run", "build"},
+		Test:   []string{"npm", "test"},
+		Vet:    []string{"npm", "run", "typecheck"},
+		Lint:   []string{"npx", "eslint", "."},
+		Visual: []string{"imagediff", VisualActualPath, VisualReferencePath, "-threshold", DefaultVisualThreshold},
 	},
 	StackPython: {
 		Stack: StackPython,
@@ -200,6 +247,9 @@ var readinessProbes = map[Stack]func(dir string) bool{
 	StackNode:   hasNodeTests,
 	StackPython: hasPythonTests,
 	StackRust:   hasRustTests,
+	// A web project is a Node project at heart: the same test-infrastructure
+	// probe applies (the visual gate is additive, not a substitute for tests).
+	StackWeb: hasNodeTests,
 }
 
 // readinessHints names, per stack, the test signal we look for, so the
@@ -209,6 +259,7 @@ var readinessHints = map[Stack]string{
 	StackNode:   `a "test" script in package.json or a test/__tests__ directory`,
 	StackPython: "a tests/ directory or test_*.py / *_test.py file",
 	StackRust:   "#[test] functions or a tests/ directory",
+	StackWeb:    `a "test" script in package.json or a test/__tests__ directory`,
 }
 
 // AssessReadiness applies the readiness-gate for the given stack against dir
@@ -456,6 +507,10 @@ type recipeGates struct {
 	Test  []string `yaml:"test,omitempty"`
 	Vet   []string `yaml:"vet,omitempty"`
 	Lint  []string `yaml:"lint,omitempty"`
+	// Visual is the optional deterministic visual-diff gate (ADR-0023): the argv
+	// that runs the imagediff tool against the rendered screenshot and the
+	// holdout-injected reference. Omitted for non-web stacks.
+	Visual []string `yaml:"visual,omitempty"`
 }
 
 // GenerateDraft runs the full deterministic onboarding pipeline against dir:
@@ -483,10 +538,11 @@ func GenerateDraft(dir, baseBranch string) (Draft, error) {
 			// platform default placeholder for a human to confirm (ADR-0009).
 			Develop: developPlaceholder(),
 			Verify: recipeGates{
-				Build: profile.Build,
-				Test:  profile.Test,
-				Vet:   profile.Vet,
-				Lint:  profile.Lint,
+				Build:  profile.Build,
+				Test:   profile.Test,
+				Vet:    profile.Vet,
+				Lint:   profile.Lint,
+				Visual: profile.Visual,
 			},
 		}
 	}
@@ -650,6 +706,7 @@ func LoadRecipe(repoDir string) (Recipe, error) {
 		{"test", g.Test},
 		{"vet", g.Vet},
 		{"lint", g.Lint},
+		{"visual", g.Visual},
 	}
 	gates := make([]GateSpec, 0, len(slots))
 	for _, s := range slots {
