@@ -116,5 +116,12 @@ Gateway (3A) olduğu gibi reuse; web bileşenleri (3B) fork panellerine (webview
   **`docker build`** başarılı, image'da conductor-api çalışıyor + empty-token reddi + 3 binary PATH'te. → ALL PASS.
 - ✅✅ **DALGA 3A — API GATEWAY TAMAM** (3A-0 karar · 3A-1 read · 3A-2 live-events · 3A-3 control · 3A-4 paketleme).
   Frontend-agnostik HTTP/WS gateway hazır + canlı real-PG cross-process kanıtlı + paketli. Fork köprüsü ayakta.
-- Sıradaki: **DALGA 3B** — web cockpit. İlk iş **3B-0** (KARAR ADR-0026: React+Vite+TS stack + N-9 TS event tipleri
-  + token auth/session + frontend gate tsc/eslint/vitest/playwright + `.conductor` web reçetesi) → sonra 3B-1 dashboard.
+- ✅ **3B-0 — ADR-0026 + iskele** (2026-06-18): karar `adb2266` (React+Vite+TS, `web/` izole, N-9 codegen tipler,
+  bearer-token sessionStorage, frontend gate tsc/eslint/vitest/playwright). İskele `e5bda56`: `web/` Vite+React+TS
+  (strict) + tipli gateway client (REST `Authorization: Bearer` + WS `?token=` hook) + token-auth (TokenGate→
+  sessionStorage) + app-shell (status() bağlantı kanıtı) + frontend gate. **web/go.mod ile izole** (stray vendored
+  Go'nun `go build ./...`'i kırmasını önler — root modül dokunulmadı). Bağımsız doğrulama (Rule#9): non-web değişiklik
+  yalnız `.gitignore`, Go gate yeşil (0 web pkg), `events.gen.ts` Go-generator'a **byte-identical**, tsc-0/eslint-0/
+  vitest-7-pass kendi koştum, Playwright smoke geçti → ALL PASS.
+- Sıradaki: **3B-1** — filo dashboard (projeler/host/task canlı: REST + WS; status/lease/outcome/heartbeat-tazeliği).
+  Not (3B-1 için): tarayıcı↔gateway cross-origin → Vite dev-proxy veya gateway CORS gerekecek (scaffold same-origin).
