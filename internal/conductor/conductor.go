@@ -134,6 +134,12 @@ type Picker interface {
 	PickReady(ctx context.Context, projectID string) (statestore.Task, error)
 	AcquireLease(ctx context.Context, l statestore.Lease) error
 	ReleaseLease(ctx context.Context, projectID string) error
+	// ReleaseLeaseOwned releases the lease ONLY when it is still held by the given
+	// owner (project, host, task). The conductor uses it for its own post-tick
+	// release so that, after a false-reap and re-acquire by another host, this
+	// holder cannot delete the NEW holder's lease (C-2). It is idempotent when the
+	// caller no longer owns the lease.
+	ReleaseLeaseOwned(ctx context.Context, projectID, hostID, taskID string) error
 }
 
 // Workspacer cuts and tears down the per-task worktree. It is the provisioner
@@ -498,7 +504,13 @@ func (c *Conductor) Tick(ctx context.Context, projectID string) (TickResult, err
 			if err := c.picker.AcquireLease(ctx, lease); err != nil {
 				return TickResult{}, fmt.Errorf("conductor: tick: acquire lease for approve-merge %q: %w", projectID, err)
 			}
-			defer func() { _ = c.picker.ReleaseLease(context.WithoutCancel(ctx), projectID) }()
+			// Owner-scoped release (C-2): release ONLY the lease THIS tick acquired
+			// (project+host+task). If the reconcile reaper false-reaped it mid-tick and
+			// another host re-acquired, this release is a no-op and does not delete the
+			// new holder's lease.
+			defer func() {
+				_ = c.picker.ReleaseLeaseOwned(context.WithoutCancel(ctx), projectID, c.hostID, held.ID)
+			}()
 			return c.mergeApproved(ctx, project, held)
 		}
 	}
@@ -534,8 +546,12 @@ func (c *Conductor) Tick(ctx context.Context, projectID string) (TickResult, err
 		return TickResult{}, fmt.Errorf("conductor: tick: acquire lease for %q: %w", projectID, err)
 	}
 	defer func() {
-		// Best-effort release; ReleaseLease is idempotent.
-		_ = c.picker.ReleaseLease(context.WithoutCancel(ctx), projectID)
+		// Owner-scoped, best-effort release (C-2): release ONLY the lease THIS tick
+		// acquired (project+host+task). ReleaseLeaseOwned is idempotent, and if the
+		// reconcile reaper false-reaped this lease mid-tick and another host
+		// re-acquired the repo, this release deletes nothing — it never clobbers the
+		// new holder's lease (which an owner-blind ReleaseLease would).
+		_ = c.picker.ReleaseLeaseOwned(context.WithoutCancel(ctx), projectID, c.hostID, task.ID)
 	}()
 
 	return c.runTask(ctx, project, task)

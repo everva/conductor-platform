@@ -49,6 +49,7 @@ func runConformanceSuite(t *testing.T, newStore storeFactory) {
 		{"LeaseLifecycle", confLeaseLifecycle},
 		{"AcquireLeaseSecondFails", confAcquireSecondFails},
 		{"ReleaseLeaseIdempotent", confReleaseIdempotent},
+		{"ReleaseLeaseOwnedFencesByOwner", confReleaseLeaseOwned},
 		{"AcquireLeaseConcurrentOneWinner", confAcquireConcurrent},
 	}
 	for _, tc := range cases {
@@ -541,6 +542,63 @@ func confReleaseIdempotent(t *testing.T, s StateStore) {
 	}
 	if err := s.AcquireLease(ctx, Lease{ProjectID: "p1", HostID: "h2", TaskID: "A-2"}); err != nil {
 		t.Fatalf("re-acquire after release: %v", err)
+	}
+}
+
+// confReleaseLeaseOwned is the C-2 proof: ReleaseLeaseOwned deletes ONLY the
+// matching owner's lease. The scenario mirrors a false-reap → re-acquire: host A
+// held the lease, the reaper released it, host B re-acquired the SAME project — and
+// then A's owner-scoped release must NOT delete B's lease. It also proves the
+// no-op-when-absent and no-op-when-different-task idempotency.
+func confReleaseLeaseOwned(t *testing.T, s StateStore) {
+	ctx := context.Background()
+
+	// Idempotent when no lease is held at all.
+	if err := s.ReleaseLeaseOwned(ctx, "p1", "host-A", "A-1"); err != nil {
+		t.Fatalf("ReleaseLeaseOwned with no lease held: %v", err)
+	}
+
+	// Host A holds the lease; releasing as A (the owner) deletes it.
+	if err := s.AcquireLease(ctx, Lease{ProjectID: "p1", HostID: "host-A", TaskID: "A-1"}); err != nil {
+		t.Fatalf("AcquireLease host-A: %v", err)
+	}
+	if err := s.ReleaseLeaseOwned(ctx, "p1", "host-A", "A-1"); err != nil {
+		t.Fatalf("ReleaseLeaseOwned by owner: %v", err)
+	}
+	if _, err := s.GetLease(ctx, "p1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("owner release should have deleted lease; GetLease err = %v, want ErrNotFound", err)
+	}
+
+	// The C-2 scenario: host B now holds the lease (after a reap+re-acquire); host
+	// A's stale owner-scoped release must NOT delete B's lease.
+	if err := s.AcquireLease(ctx, Lease{ProjectID: "p1", HostID: "host-B", TaskID: "B-1"}); err != nil {
+		t.Fatalf("AcquireLease host-B: %v", err)
+	}
+	if err := s.ReleaseLeaseOwned(ctx, "p1", "host-A", "A-1"); err != nil {
+		t.Fatalf("ReleaseLeaseOwned by non-owner A: %v", err)
+	}
+	got, err := s.GetLease(ctx, "p1")
+	if err != nil {
+		t.Fatalf("B's lease must survive A's release; GetLease: %v", err)
+	}
+	if got.HostID != "host-B" || got.TaskID != "B-1" {
+		t.Fatalf("B's lease was clobbered by A's owner-scoped release: %+v (C-2 regression)", got)
+	}
+
+	// Same host, WRONG task is also a no-op (owner fencing is on host AND task).
+	if err := s.ReleaseLeaseOwned(ctx, "p1", "host-B", "WRONG-TASK"); err != nil {
+		t.Fatalf("ReleaseLeaseOwned wrong task: %v", err)
+	}
+	if _, err := s.GetLease(ctx, "p1"); err != nil {
+		t.Fatalf("wrong-task release must not delete; GetLease: %v", err)
+	}
+
+	// Finally, the true owner B releases its own lease cleanly.
+	if err := s.ReleaseLeaseOwned(ctx, "p1", "host-B", "B-1"); err != nil {
+		t.Fatalf("ReleaseLeaseOwned by owner B: %v", err)
+	}
+	if _, err := s.GetLease(ctx, "p1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("B's own release should delete; GetLease err = %v, want ErrNotFound", err)
 	}
 }
 

@@ -182,8 +182,21 @@ type StateStore interface {
 	// AcquireLease takes the repo-scoped lease, enforcing one active lease per
 	// project; it fails if the project is already leased.
 	AcquireLease(ctx context.Context, l Lease) error
-	// ReleaseLease releases the lease held on the given project.
+	// ReleaseLease releases the lease held on the given project, unconditionally.
+	// It is owner-blind by design: the reconcile reaper (B-3) legitimately
+	// force-releases ANY host's stale lease with it. A holder releasing its OWN
+	// lease after a reap→re-acquire must instead use the owner-scoped
+	// ReleaseLeaseOwned so it cannot delete the new holder's lease (C-2).
 	ReleaseLease(ctx context.Context, projectID string) error
+	// ReleaseLeaseOwned releases the project's lease ONLY when it is still held by
+	// the given (hostID, taskID) owner — DELETE ... WHERE project_id=$1 AND
+	// host_id=$2 AND task_id=$3. It is the ADDITIVE owner-scoped release (ADR-0021;
+	// no existing signature changed) the conductor uses for its own post-tick
+	// release: after a false-reap and re-acquire by another host, the original
+	// holder's release must NOT delete the NEW holder's lease (C-2). Deleting
+	// nothing — because the caller is not (or is no longer) the owner — is a clean
+	// no-op, NOT an error (idempotent), matching ReleaseLease's idempotency.
+	ReleaseLeaseOwned(ctx context.Context, projectID, hostID, taskID string) error
 	// GetLease returns the lease on the project, or ErrNotFound.
 	GetLease(ctx context.Context, projectID string) (Lease, error)
 	// ListLeases returns all currently held leases.

@@ -208,6 +208,28 @@ func (s *MemoryStore) ReleaseLease(ctx context.Context, projectID string) error 
 	return nil
 }
 
+// ReleaseLeaseOwned releases the project's lease ONLY when it is still held by the
+// given (hostID, taskID) owner (ADR-0021 additive, C-2). It is idempotent: when no
+// lease is held, or the held lease belongs to a DIFFERENT owner (e.g. after a
+// false-reap and re-acquire by another host), it deletes nothing and returns nil —
+// so a stale holder's release cannot delete the new holder's lease.
+func (s *MemoryStore) ReleaseLeaseOwned(ctx context.Context, projectID, hostID, taskID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, ok := s.leases[projectID]
+	if !ok {
+		return nil // no lease held → clean no-op.
+	}
+	if l.HostID != hostID || l.TaskID != taskID {
+		return nil // held by a different owner → do NOT delete (C-2).
+	}
+	delete(s.leases, projectID)
+	return nil
+}
+
 // GetLease returns the lease on the project, or a wrapped ErrNotFound.
 func (s *MemoryStore) GetLease(ctx context.Context, projectID string) (Lease, error) {
 	if err := ctx.Err(); err != nil {

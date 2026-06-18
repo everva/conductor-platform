@@ -191,6 +191,17 @@ func (r *Registry) ReleaseLease(ctx context.Context, projectID string) error {
 	return nil
 }
 
+// ReleaseLeaseOwned releases the lease via the store ONLY when it is still held by
+// the given (hostID, taskID) owner (ADR-0021 additive, C-2). It delegates to the
+// store's owner-scoped release; releasing a lease the caller no longer owns (after
+// a reap→re-acquire by another host) is a clean idempotent no-op, never an error.
+func (r *Registry) ReleaseLeaseOwned(ctx context.Context, projectID, hostID, taskID string) error {
+	if err := r.store.ReleaseLeaseOwned(ctx, projectID, hostID, taskID); err != nil {
+		return fmt.Errorf("release lease (owned) for project %q: %w", projectID, err)
+	}
+	return nil
+}
+
 // Transition moves the task to the target status, persisting it through
 // UpdateTask only when the change is legal (ADR-0004). The current status is read
 // back from the store each call, never cached. An illegal transition returns

@@ -837,8 +837,11 @@ func TestParseConfig_Capabilities(t *testing.T) {
 
 // TestNewDaemon_RegistersHostWithCapabilities proves startup self-registration
 // (ADR-0024 agent-per-host, 2B-1): newDaemon registers THIS host with its
-// capabilities in the store, and a tick advances the host-heartbeat. It asserts
-// directly against the daemon's in-memory store.
+// capabilities in the store and stamps a live LastHeartbeat. It asserts directly
+// against the daemon's in-memory store. (Per C-1 the per-TICK host-heartbeat was
+// removed — the heartbeat is now driven by a dedicated background goroutine, proven
+// in TestHostHeartbeat_BackgroundGoroutine_* below — so this test no longer asserts
+// a tick advances it.)
 func TestNewDaemon_RegistersHostWithCapabilities(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.once = true
@@ -863,17 +866,17 @@ func TestNewDaemon_RegistersHostWithCapabilities(t *testing.T) {
 	}
 	before := h.LastHeartbeat
 
-	// A tick advances the host-heartbeat (separate from the file heartbeat).
+	// -once mode still refreshes the host-heartbeat once via Run (no loop goroutine).
 	time.Sleep(2 * time.Millisecond)
-	if _, err := d.tick(context.Background()); err != nil {
-		t.Fatalf("tick: %v", err)
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run(once): %v", err)
 	}
 	h2, err := d.store.GetHost(context.Background(), "agent-mac-1")
 	if err != nil {
-		t.Fatalf("GetHost after tick: %v", err)
+		t.Fatalf("GetHost after Run(once): %v", err)
 	}
 	if !h2.LastHeartbeat.After(before) {
-		t.Fatalf("tick did not advance host heartbeat: before=%v after=%v", before, h2.LastHeartbeat)
+		t.Fatalf("Run(once) did not advance host heartbeat: before=%v after=%v", before, h2.LastHeartbeat)
 	}
 }
 

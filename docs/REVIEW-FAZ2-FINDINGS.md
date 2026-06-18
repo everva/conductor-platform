@@ -8,7 +8,8 @@ koordinasyonu + güvenlik env-sızıntısı + trust-gap'te.
 engine.go Faz-2 boyunca byte-frozen; statestore additive-only; **merge yetkisi yalnız deterministik gate** (LLM/sentinel/advisor asla merge edemez); sahte-yeşil/sessiz-skip yok; **holdout izolasyonu (ADR-0018) sağlam** (performer holdout/referansı göremez); path-traversal (3 backing + verify) kapalı; sentinel 3-katman precedence + boundary doğru; **abort⊗sentinel birleşik watcher race-free** (-race temiz, goroutine join'li); AcquireLease atomik (PK+ON CONFLICT, 32-goroutine testi); push-fail sınıflandırması doğru; governor sayımı; pgx pool yaşam döngüsü; reconcile internals; imagediff/scaffolder/recipe. Yeşil testler içi-boş DEĞİL (negatif-assert'li, gerçek-binary/git kanıtlı).
 
 ## 🔴 KRİTİK
-### C-1 — Uzun develop host-heartbeat'i aç bırakır → canlı host lease'i FALSE-reap → iki host tek repo
+### C-1 — Uzun develop host-heartbeat'i aç bırakır → canlı host lease'i FALSE-reap → iki host tek repo — ✅ FIXED (R-1, 2026-06-18)
+**Düzeltme:** host-heartbeat tick'ten ayrıldı; daemon `Run` (loop) ADANMIŞ arka-plan goroutine'i (`runHostHeartbeat`, cmd/conductor/main.go) sabit cadence (default 30s, `defaultHeartbeatInterval`) ile develop süresinden BAĞIMSIZ `store.HostHeartbeat` vurur, ctx-cancel'da join'li durur. Tick-içi heartbeat kaldırıldı; `-once` tek heartbeat. 30dk develop'ta canlı host ~30s'de bir taze → host-stale 2dk reaper false-reap etmez. Test: cmd/conductor/heartbeat_c1_test.go (enjekte clock + bloklayan develop; 20dk simüle boyunca CANLI; goroutine'siz ölü host hâlâ reap edilir). engine.go untouched; gate+e2e+race yeşil.
 İki bağımsız agent + iki repro ile doğrulandı; orchestrator kaynakta teyit etti.
 - `cmd/conductor/main.go:1371` — `HostHeartbeat` yalnız `Tick` döndükten SONRA (tick-içi); background goroutine YOK.
 - develop `-timeout` 30dk'ya kadar; reconcile CronJob her 1dk; `CONDUCTOR_HOST_STALE`=2dk.
@@ -17,9 +18,9 @@ engine.go Faz-2 boyunca byte-frozen; statestore additive-only; **merge yetkisi y
 - **FIX:** host-heartbeat'i tick'ten ayır — bağımsız ticker goroutine (her `interval`) VEYA mevcut watcher'dan vur; ek olarak default `hostStale >> timeout`.
 
 ## 🟠 YÜKSEK
-### C-2 — ReleaseLease owner-kör → eski sahip yeni sahibin lease'ini siler
-`postgres.go:320` / `memory.go:207` `DELETE ... WHERE project_id` (host/task fencing yok). C-1 reap→re-acquire sonrası A bitince B'nin satırını siler.
-- **FIX:** owner-scoped release — additive `ReleaseLeaseOwned(ctx, projectID, hostID, taskID)` (frozen `ReleaseLease(ctx,projectID)` imzası korunur; conductor owner-scoped olanı çağırır).
+### C-2 — ReleaseLease owner-kör → eski sahip yeni sahibin lease'ini siler — ✅ FIXED (R-1, 2026-06-18)
+`postgres.go` / `memory.go` `DELETE ... WHERE project_id` (host/task fencing yok). C-1 reap→re-acquire sonrası A bitince B'nin satırını siler.
+- **FIX (uygulandı):** ADDITIVE `ReleaseLeaseOwned(ctx, projectID, hostID, taskID)` StateStore'a eklendi (memory + PG: `WHERE project_id AND host_id AND task_id`; owner değilse no-op idempotent). Frozen `ReleaseLease(ctx,projectID)` DEĞİŞMEDİ (reconcile reaper kullanır). Conductor post-tick release defer'i (normal + approve-merge) edindiği lease ile `ReleaseLeaseOwned` çağırır → eski sahip yeni sahibin lease'ini silemez. Picker arayüzü + registry additive güncellendi. Test: conformance `ReleaseLeaseOwnedFencesByOwner` (memory + skip-gated PG) + conductor `release_owned_c2_test.go` (owner-scoped çağrı + mid-tick reap+B re-acquire sonrası B lease'i hayatta). engine.go + EXISTING imzalar untouched (ADR-0021); gate+e2e+race yeşil.
 
 ### S-1 — Performer subprocess'i tam (sanitize edilmemiş) env miras alıyor → GH_TOKEN + DSN sızıntısı
 `command_engine.go execRunner`: `cmd.Env = append(os.Environ(), env...)`. Faz-2'de `GH_TOKEN` (repo-write) + `CONDUCTOR_DSN` (PG şifre) daemon env'inde → `claude -p --dangerously-skip-permissions` (saldırgan-etkili repo) okuyabilir/exfiltrate edebilir.
@@ -45,6 +46,6 @@ engine.go Faz-2 boyunca byte-frozen; statestore additive-only; **merge yetkisi y
 - **L3/L4** privatestore cacheKey çakışması; pgstore id TrimSpace yok (loud-fail, hardening).
 
 ## Önerilen düzeltme grupları
-- **R-1 (multi-host lease güvenliği):** C-1 (background heartbeat) + C-2 (owner-scoped release). KRİTİK+YÜKSEK.
+- **R-1 (multi-host lease güvenliği):** C-1 (background heartbeat) + C-2 (owner-scoped release). KRİTİK+YÜKSEK. — ✅ DONE (2026-06-18).
 - **R-2 (secret containment):** S-1 + S-2 (performer + gate env sanitize, allowlist). YÜKSEK.
 - **R-3 (sertleştirme):** S-3 (trust-doc + argv guard) + M1 (base-drift) + S-4/S-5/L1/L2/L3/L4.

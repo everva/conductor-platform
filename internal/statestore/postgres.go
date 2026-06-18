@@ -324,6 +324,20 @@ func (s *PostgresStore) ReleaseLease(ctx context.Context, projectID string) erro
 	return nil
 }
 
+// ReleaseLeaseOwned releases the project's lease ONLY when it is still held by the
+// given (hostID, taskID) owner (ADR-0021 additive, C-2). The owner fencing is in
+// the WHERE clause, so a holder whose lease was false-reaped and re-acquired by
+// ANOTHER host deletes zero rows here and never touches the new holder's lease. It
+// is idempotent: deleting nothing (no lease, or a different owner) returns nil, not
+// an error, matching ReleaseLease's idempotency.
+func (s *PostgresStore) ReleaseLeaseOwned(ctx context.Context, projectID, hostID, taskID string) error {
+	const q = `DELETE FROM leases WHERE project_id = $1 AND host_id = $2 AND task_id = $3`
+	if _, err := s.pool.Exec(ctx, q, projectID, hostID, taskID); err != nil {
+		return fmt.Errorf("release lease (owned) for project %q: %w", projectID, err)
+	}
+	return nil
+}
+
 // GetLease returns the lease on the project, or a wrapped ErrNotFound.
 func (s *PostgresStore) GetLease(ctx context.Context, projectID string) (Lease, error) {
 	const q = `SELECT project_id, host_id, task_id, acquired_at FROM leases WHERE project_id = $1`

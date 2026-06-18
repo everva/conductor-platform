@@ -292,3 +292,26 @@ Deterministik kanıt = kalite kapısı (LLM asla karar mercii); sahte-yeşil ASL
   DOKUNULMADI (additive, ADR-0021). Offline gate (build+test+vet+golangci v2.12.0) + e2e (E2E ./internal/conductor/) +
   `-race ./internal/sentinel/ ./internal/conductor/` YEŞİL; gofmt temiz; yeni dep yok; gerçek-claude advisor gate-dışı
   (tag+env+stub). **→ Dalga C TAMAM (2C-1 done) → FAZ-2 TAMAM (Dalga A + B + C hepsi done).**
+- **Faz-2 adversarial review (docs/REVIEW-FAZ2-FINDINGS.md, 2026-06-18)** — 4 paralel review-agent + orchestrator;
+  KRİTİK C-1 + YÜKSEK C-2 multi-host lease güvenlik bulguları (R-1 grubu). Mimari invariant'lar temiz.
+- **R-1 (multi-host lease güvenliği: C-1 + C-2)** ✅ done. **C-1 (KRİTİK) host-heartbeat starvation fix:**
+  host-registry heartbeat'i tick gövdesinden AYRILDI. Daemon `Run` (loop modu) artık ADANMIŞ bir arka-plan
+  goroutine başlatır (`runHostHeartbeat`): sabit cadence (`hbInterval`, default 30s) ile `store.HostHeartbeat`'i
+  develop süresinden BAĞIMSIZ vurur, daemon ömrü boyunca, ctx-cancel'da temiz durur (join'li, leak yok). Tick-içi
+  heartbeat KALDIRILDI (goroutine onu ikame eder); `-once` modu Run'da tek heartbeat atar. Sonuç: 30dk'lık develop
+  boyunca canlı host ~30s'de bir taze kalır → reconcile reaper (`HostHeartbeatOwnerLive`, host-stale 2dk) onu ASLA
+  false-reap etmez (repo-per-1/ADR-0008 korunur). **Test (cmd/conductor/heartbeat_c1_test.go):** enjekte clock +
+  bloklayan "develop in progress" goroutine ile arka-plan heartbeat'in tick-ilerlemesinden bağımsız ilerlediği ve
+  10 host-stale penceresi (20dk simüle develop) boyunca host'un CANLI kaldığı kanıtlandı; goroutine'siz GERÇEKTEN ölü
+  host'un hâlâ reap edildiği negatif testi. **C-2 (YÜKSEK) owner-blind release fix:** StateStore'a ADDITIVE
+  `ReleaseLeaseOwned(ctx, projectID, hostID, taskID)` eklendi (memory + PG: `DELETE ... WHERE project_id AND host_id
+  AND task_id`; owner değilse hiçbir şey silmez = temiz idempotent no-op). Frozen `ReleaseLease(ctx,projectID)`
+  DEĞİŞMEDİ (reconcile reaper onu meşru force-release için kullanır). Conductor kendi post-tick release defer'ı (normal
+  + approve-merge yolları) artık `ReleaseLeaseOwned`'ı edindiği lease ile (project+host+task) çağırır → false-reap→
+  re-acquire sonrası eski sahip YENİ sahibin lease'ini silemez. Picker arayüzü + registry additive güncellendi.
+  **Test:** statestore conformance (memory + skip-gated PG) `ReleaseLeaseOwnedFencesByOwner` (farklı owner'ın lease'i
+  hayatta kalır, wrong-task no-op, idempotent); conductor seam `release_owned_c2_test.go` (tick owner-scoped release'i
+  doğru owner ile çağırır + owner-blind ReleaseLease 0 kez; mid-tick reap+host-B re-acquire sonrası host-B lease'i
+  hayatta kalır uçtan-uca). engine.go + EXISTING statestore imzaları + tools/builder DOKUNULMADI (ADR-0021 additive).
+  Offline gate (build+test+vet+golangci v2.12.0) + e2e (E2E ./internal/conductor/) + `-race ./internal/conductor/
+  ./internal/reconcile/ ./cmd/conductor/` YEŞİL; gofmt temiz; yeni dep yok. **→ C-1, C-2 FIXED.**

@@ -62,6 +62,13 @@ const (
 	defaultBaseBranch = "develop"
 	// defaultInterval is the gap between ticks in loop mode.
 	defaultInterval = 30 * time.Second
+	// defaultHeartbeatInterval is the cadence of the background host-registry
+	// heartbeat (C-1). At 30s it is well within the reconcile reaper's host-stale
+	// threshold (CONDUCTOR_HOST_STALE, 2m default), so a live host running a long
+	// develop (up to -timeout 30m) is refreshed ~every 30s and never false-reaped.
+	// It is decoupled from the tick interval so a long develop (which blocks the
+	// tick) cannot starve the heartbeat.
+	defaultHeartbeatInterval = 30 * time.Second
 	// defaultTimeout bounds a single develop subprocess so a hung performer cannot
 	// stall a tick forever (the engine enforces this via ctx).
 	defaultTimeout = 30 * time.Minute
@@ -646,10 +653,21 @@ type Daemon struct {
 	// store is the StateStore the daemon ticks against; it is retained so the tick
 	// loop can advance this host's registry heartbeat (ADR-0024 agent-per-host).
 	store statestore.StateStore
-	// hostID is this host's registry id; the per-tick host-heartbeat advances its
-	// LastHeartbeat (separate from the ADR-0016 FILE heartbeat, which is liveness
-	// telemetry, not a PG registry row).
+	// hostID is this host's registry id; a DEDICATED background goroutine advances
+	// its LastHeartbeat on a fixed cadence (separate from the ADR-0016 FILE
+	// heartbeat, which is liveness telemetry, not a PG registry row).
 	hostID string
+	// hbInterval is the cadence of the background host-registry heartbeat (C-1). It
+	// is INDEPENDENT of develop duration: the heartbeat goroutine fires every
+	// hbInterval regardless of how long a tick blocks, so a host running a long
+	// (up to -timeout) develop stays fresh and is never false-reaped by the
+	// reconcile job (HostHeartbeatOwnerLive, host-stale default 2m). Zero selects
+	// defaultHeartbeatInterval.
+	hbInterval time.Duration
+	// hbClock is the injectable wall clock the heartbeat goroutine stamps with. Nil
+	// uses time.Now; a test injects a controllable clock to prove the heartbeat
+	// advances independent of tick progress without sleeping a real develop.
+	hbClock func() time.Time
 	// hb writes the liveness heartbeat each tick (ADR-0016). It is nil when no
 	// -heartbeat path is configured; *heartbeat.Writer treats a nil receiver as a
 	// no-op, so the daemon stays non-breaking without nil-guards at call sites.
@@ -910,18 +928,19 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 	}
 
 	return &Daemon{
-		cond:     cond,
-		project:  cfg.project,
-		interval: cfg.interval,
-		once:     cfg.once,
-		logger:   logger,
-		store:    store,
-		hostID:   cfg.hostID,
-		hb:       hb,
-		health:   health,
-		httpAddr: cfg.httpAddr,
-		snap:     snap,
-		closer:   closer,
+		cond:       cond,
+		project:    cfg.project,
+		interval:   cfg.interval,
+		once:       cfg.once,
+		logger:     logger,
+		store:      store,
+		hostID:     cfg.hostID,
+		hbInterval: defaultHeartbeatInterval,
+		hb:         hb,
+		health:     health,
+		httpAddr:   cfg.httpAddr,
+		snap:       snap,
+		closer:     closer,
 	}, nil
 }
 
@@ -1207,8 +1226,61 @@ func (noopHoldout) Fetch(_ context.Context, _ string) (verify.Holdout, error) {
 // once mode (so CI sees a non-zero exit on failure); in loop mode a per-tick
 // error is logged and the loop continues — one bad task must not kill the daemon.
 // A cancelled context is a clean shutdown, not an error.
+// heartbeatNow stamps the host-registry heartbeat once, best-effort (C-1). It is
+// the single write the goroutine repeats and the one -once mode does directly. The
+// write uses a stand-alone context (not the tick/loop ctx) so an in-flight
+// shutdown unwind does not cancel a heartbeat mid-flight; a write error is logged
+// but never propagated — liveness telemetry must not break or stop the daemon. A
+// nil store (defensive) is a no-op.
+func (d *Daemon) heartbeatNow() {
+	if d.store == nil {
+		return
+	}
+	clock := d.hbClock
+	if clock == nil {
+		clock = func() time.Time { return time.Now().UTC() }
+	}
+	if hbErr := d.store.HostHeartbeat(context.Background(), d.hostID, clock()); hbErr != nil {
+		d.logger.Warn("host heartbeat failed", slog.String("host", d.hostID), slog.String("err", hbErr.Error()))
+	}
+}
+
+// runHostHeartbeat advances this host's registry LastHeartbeat on a FIXED cadence
+// (hbInterval, default 30s) for the daemon's lifetime, until ctx is cancelled (C-1,
+// ADR-0024 agent-per-host). It is the fix for host-heartbeat starvation: because it
+// runs in its OWN goroutine, the heartbeat keeps firing every hbInterval even while
+// a tick blocks for a long develop (up to -timeout 30m) — so the reconcile reaper
+// (HostHeartbeatOwnerLive, host-stale 2m default) always sees this LIVE host as
+// fresh and never false-reaps its active lease (which would let a second host
+// acquire the same repo, violating repo-per-1, ADR-0008). A genuinely dead daemon
+// stops the goroutine (ctx cancelled / process gone), its heartbeat goes stale, and
+// the reaper correctly frees the lease.
+//
+// It fires an immediate heartbeat on entry (so liveness is fresh the instant the
+// loop starts, not one interval later) and then on every tick of the ticker.
+func (d *Daemon) runHostHeartbeat(ctx context.Context) {
+	interval := d.hbInterval
+	if interval <= 0 {
+		interval = defaultHeartbeatInterval
+	}
+	d.heartbeatNow()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			d.heartbeatNow()
+		}
+	}
+}
+
 func (d *Daemon) Run(ctx context.Context) error {
 	if d.once {
+		// -once: no loop, so no heartbeat goroutine — a single heartbeat keeps this
+		// host's registry liveness fresh for the one pass (C-1).
+		d.heartbeatNow()
 		_, err := d.tick(ctx)
 		return err
 	}
@@ -1223,6 +1295,22 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// (ctx cancel / SIGINT-SIGTERM), with no goroutine or socket leak.
 	stopHealth := d.startHealthServer(ctx)
 	defer stopHealth()
+
+	// Background host-registry heartbeat (C-1): a DEDICATED goroutine advances this
+	// host's LastHeartbeat every hbInterval for the daemon's lifetime, INDEPENDENT
+	// of how long any tick blocks for a develop. It is bound to a child context
+	// cancelled on Run's return, and we wait for it to exit before returning so the
+	// goroutine never outlives the daemon (no leak, clean shutdown).
+	hbCtx, stopHB := context.WithCancel(ctx)
+	hbDone := make(chan struct{})
+	go func() {
+		defer close(hbDone)
+		d.runHostHeartbeat(hbCtx)
+	}()
+	defer func() {
+		stopHB()
+		<-hbDone
+	}()
 
 	ticker := time.NewTicker(d.interval)
 	defer ticker.Stop()
@@ -1360,18 +1448,13 @@ func (d *Daemon) tick(ctx context.Context) (conductor.TickResult, error) {
 		d.logger.Warn("heartbeat write failed", slog.String("err", hbErr.Error()))
 	}
 
-	// Host-registry heartbeat (ADR-0024 agent-per-host, 2B-1): advance this host's
-	// LastHeartbeat in the SHARED store so multi-host readers see it as live. This
-	// is a PG registry row, SEPARATE from the ADR-0016 FILE heartbeat above. It is
-	// best-effort: a write error is logged but never fails the tick. A stand-alone
-	// context (not the tick ctx) keeps the liveness write going even as a cancelled
-	// tick unwinds. The host was registered on startup, so ErrNotFound is unexpected
-	// and surfaced (rather than silently re-registering here).
-	if d.store != nil {
-		if hbErr := d.store.HostHeartbeat(context.Background(), d.hostID, time.Now().UTC()); hbErr != nil {
-			d.logger.Warn("host heartbeat failed", slog.String("host", d.hostID), slog.String("err", hbErr.Error()))
-		}
-	}
+	// NOTE (C-1): the host-registry heartbeat is NO LONGER advanced here. A long
+	// develop (up to -timeout 30m) would leave LastHeartbeat stale for the whole
+	// tick, and the reconcile reaper (HostHeartbeatOwnerLive, host-stale 2m) would
+	// then false-reap this LIVE host's lease → repo-per-1 (ADR-0008) violation. The
+	// heartbeat is now driven by a DEDICATED background goroutine (runHostHeartbeat),
+	// started by Run in loop mode and firing every hbInterval INDEPENDENT of tick
+	// progress, so a busy host stays fresh. -once mode does a single heartbeat in Run.
 
 	// Record the last-tick snapshot /status reads (P4-2). The snapshot is always
 	// non-nil; it is concurrency-safe so the HTTP handler never races this write.
