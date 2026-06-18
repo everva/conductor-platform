@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/everva/conductor-platform/internal/events"
+	"github.com/everva/conductor-platform/internal/intake"
 	"github.com/everva/conductor-platform/internal/statestore"
 )
 
@@ -129,6 +130,10 @@ func run(ctx context.Context, argv []string, logger *slog.Logger, stderr io.Writ
 		reader: asReader(bus),
 		token:  cfg.token,
 		clock:  time.Now,
+		// Production distiller: the real `claude -p` subscription path (no API key).
+		// It only DRAFTS proposed scenarios for human review at POST /distill; it
+		// persists nothing. Tests inject a stub via the apiServer field instead.
+		distiller: intake.NewCommandDistiller(),
 	}
 
 	// Log ONLY the addr and the backend NAME — never the DSN or the token.

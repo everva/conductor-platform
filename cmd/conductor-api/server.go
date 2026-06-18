@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/everva/conductor-platform/internal/events"
+	"github.com/everva/conductor-platform/internal/intake"
 	"github.com/everva/conductor-platform/internal/statestore"
 )
 
@@ -45,6 +46,12 @@ type apiServer struct {
 	reader events.EventReader
 	// token is the expected bearer token (constant-time compared, never echoed).
 	token string
+	// distiller is the assisted-distillation seam (ADR-0005, ADR-0012) backing
+	// POST /projects/{id}/distill: it turns a free-text conversation into PROPOSED,
+	// shape-validated scenarios for human review (never persists). main.go wires the
+	// production intake.NewCommandDistiller (claude -p); tests inject a stub. It is
+	// drafting-only — when nil the distill endpoint returns 501 rather than panicking.
+	distiller intake.Distiller
 	// clock is the injectable time source for heartbeat-age and generated_at, so
 	// time-derived JSON is deterministic in tests. Defaults to time.Now in main.
 	clock func() time.Time
@@ -80,6 +87,9 @@ func (s *apiServer) routes() http.Handler {
 	// Go 1.22 method-aware routing keeps these distinct from the GET patterns above.
 	mux.Handle("POST /projects", s.requireAuth(http.HandlerFunc(s.handleOnboard)))
 	mux.Handle("POST /projects/{id}/intake", s.requireAuth(http.HandlerFunc(s.handleIntake)))
+	// Drafting helper (3B-4a): conversation → PROPOSED scenarios + intake-ready YAML
+	// for human review. It persists NOTHING; approval flows through POST /intake.
+	mux.Handle("POST /projects/{id}/distill", s.requireAuth(http.HandlerFunc(s.handleDistill)))
 	mux.Handle("POST /projects/{id}/pause", s.requireAuth(http.HandlerFunc(s.handlePause)))
 	mux.Handle("POST /projects/{id}/resume", s.requireAuth(http.HandlerFunc(s.handleResume)))
 	mux.Handle("POST /projects/{id}/abort", s.requireAuth(http.HandlerFunc(s.handleAbort)))

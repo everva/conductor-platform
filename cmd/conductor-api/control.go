@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -24,6 +25,7 @@ import (
 	"github.com/everva/conductor-platform/internal/conductor"
 	"github.com/everva/conductor-platform/internal/intake"
 	"github.com/everva/conductor-platform/internal/statestore"
+	"gopkg.in/yaml.v3"
 )
 
 // controlDefaultBaseBranch is the integration branch onboarded projects default
@@ -50,6 +52,13 @@ type onboardRequest struct {
 // exactly as conductorctl does.
 type approveRequest struct {
 	TaskID string `json:"task_id"`
+}
+
+// distillRequest is the JSON body of POST /projects/{id}/distill: the free-text
+// conversation to distill into PROPOSED scenarios. An empty/absent conversation
+// is rejected (the distiller has nothing to work on).
+type distillRequest struct {
+	Conversation string `json:"conversation"`
 }
 
 // handleOnboard: POST /projects — register a project for repo, idempotent by
@@ -144,6 +153,81 @@ func (s *apiServer) handleIntake(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleDistill: POST /projects/{id}/distill — turn the request body's free-text
+// conversation into PROPOSED, shape-validated scenarios for human review. This is
+// an ADDITIVE drafting helper (ADR-0005, ADR-0012 §4): it REUSES the existing
+// intake.Distiller seam and PERSISTS NOTHING. The response carries both the
+// structured scenarios (for the UI to render) and an intake-ready YAML string that
+// the EXISTING POST /projects/{id}/intake accepts verbatim, so the human approve
+// step is just re-POSTing that YAML.
+//
+// Honest, never-fake-green mapping of the distiller's outcome:
+//   - success                       → 200 {"scenarios":[...],"yaml":"..."}
+//   - intake.ErrNoScenarios         → 422 (the model gave nothing usable)
+//   - intake.ErrMalformedScenarios  → 422 (a block was found but did not validate)
+//   - any other (runner/exec) error → 502 (never leaking command/secret details)
+//   - nil distiller (misconfigured) → 501
+//
+// The conversation is NEVER logged or echoed (it may carry sensitive context).
+func (s *apiServer) handleDistill(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	if s.distiller == nil {
+		writeError(w, http.StatusNotImplemented, "distiller not configured")
+		return
+	}
+
+	var req distillRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if strings.TrimSpace(req.Conversation) == "" {
+		writeError(w, http.StatusBadRequest, "conversation is required")
+		return
+	}
+
+	ctx := r.Context()
+
+	// Distill against a REAL project so the UI never drafts into the void; this is
+	// a read-only existence check (no mutation).
+	if _, err := s.store.GetProject(ctx, id); err != nil {
+		if errors.Is(err, statestore.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	scenarios, err := s.distiller.Distill(ctx, req.Conversation)
+	if err != nil {
+		switch {
+		case errors.Is(err, intake.ErrNoScenarios):
+			writeError(w, http.StatusUnprocessableEntity, "no scenarios could be distilled from the conversation")
+		case errors.Is(err, intake.ErrMalformedScenarios):
+			// Descriptive and secret-free (validation/decode detail), never the
+			// conversation or a command line.
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+		default:
+			// Runner/exec failure: do NOT leak command or secret details.
+			writeError(w, http.StatusBadGateway, "distiller failed")
+		}
+		return
+	}
+
+	yamlStr, err := marshalIntakeYAML(scenarios)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, distillResultDTO{
+		Scenarios: scenarios,
+		YAML:      yamlStr,
+	})
+}
+
 // handlePause: POST /projects/{id}/pause — set the project's first-class paused
 // run-state via the SAME StorePauser the daemon and CLI use. Idempotent. An
 // unknown project surfaces as ErrNotFound → 404.
@@ -224,6 +308,38 @@ func (s *apiServer) handleApprove(w http.ResponseWriter, r *http.Request) {
 type intakeResultDTO struct {
 	Created []string `json:"created"`
 	Skipped []string `json:"skipped"`
+}
+
+// distillResultDTO is the JSON shape returned by POST distill: the structured
+// PROPOSED scenarios (rendered with their intake.Scenario yaml tags via the JSON
+// encoder — the field names match the YAML schema the UI already knows) and the
+// intake-ready YAML string. The yaml field is exactly what POST /intake accepts,
+// so the human approve step is a verbatim re-POST of it. Nothing is persisted.
+type distillResultDTO struct {
+	Scenarios []intake.Scenario `json:"scenarios"`
+	YAML      string            `json:"yaml"`
+}
+
+// marshalIntakeYAML renders the distilled scenarios into the EXACT multi-document
+// YAML stream that intake.LoadYAML accepts: each scenario is one YAML document,
+// separated by "---", encoded via the Scenario struct's existing yaml tags (so the
+// round-trip through LoadYAML reproduces the same scenarios). LoadYAML decodes ONE
+// Scenario per document — it is NOT a `scenarios:` wrapper — so we emit a plain
+// document stream, never the distiller's internal fenced/wrapped form.
+func marshalIntakeYAML(scenarios []intake.Scenario) (string, error) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	for i := range scenarios {
+		if err := enc.Encode(scenarios[i]); err != nil {
+			_ = enc.Close()
+			return "", err
+		}
+	}
+	if err := enc.Close(); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
 
 // toProjectDTO maps a statestore.Project onto the SAME projectDTO shape the read
