@@ -123,5 +123,12 @@ Gateway (3A) olduğu gibi reuse; web bileşenleri (3B) fork panellerine (webview
   Go'nun `go build ./...`'i kırmasını önler — root modül dokunulmadı). Bağımsız doğrulama (Rule#9): non-web değişiklik
   yalnız `.gitignore`, Go gate yeşil (0 web pkg), `events.gen.ts` Go-generator'a **byte-identical**, tsc-0/eslint-0/
   vitest-7-pass kendi koştum, Playwright smoke geçti → ALL PASS.
-- Sıradaki: **3B-1** — filo dashboard (projeler/host/task canlı: REST + WS; status/lease/outcome/heartbeat-tazeliği).
-  Not (3B-1 için): tarayıcı↔gateway cross-origin → Vite dev-proxy veya gateway CORS gerekecek (scaffold same-origin).
+- ✅ **3B-1 — Filo dashboard** (2026-06-18, commit `0a84456`): `web/src/fleet/` — `useFleet` (REST 5s-poll +
+  WS-event nudge), FleetStatusBar / ProjectsTable (paused+lease) / HostsPanel (heartbeat-tazeliği fresh/stale/never
+  @60s) / TasksView (abort/approved rozet, id-sıralı) / EventTicker (intervention vurgulu). **Vite dev-proxy**
+  (`/projects /hosts /status /events /ws` → gateway; CORS gereksiz, prod=ingress same-origin). Bağımsız doğrulama
+  (Rule#9): scope+Go-unaffected + frontend gate (tsc-0/lint-0/vitest-28/build) + **canlı uçtan-uca** (tarayıcı-origin
+  →Vite-proxy→gerçek gateway→gerçek PG: /status+/projects(alpha)+/tasks([AL-1]) gerçek veri, no-token→401) +
+  Playwright(mocked) 2-pass → ALL PASS.
+- Sıradaki: **3B-2** — canlı event akışı (WS-tabanlı tam event feed; phase/kind; intervention-needed vurgulu;
+  proje filtresi). EventTicker'ı tam bir akış görünümüne genişlet.
