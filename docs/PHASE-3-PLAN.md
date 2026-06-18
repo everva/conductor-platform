@@ -92,4 +92,12 @@ Gateway (3A) olduğu gibi reuse; web bileşenleri (3B) fork panellerine (webview
 - ✅ **Yan-bulgu düzeltme** (commit `8135d80`): `TestRunCheck_ExitCodes` time-bomb'ı — FRESH heartbeat sabit geçmiş
   tarihte (12:00 UTC) damgalanıyordu, 13:00 UTC sonrası STALE'e dönüp gate'i kırıyordu. `time.Now()`'a çevrildi
   (ürün runCheck doğruydu; salt test fixture hatası). Agent'ın "pre-existing+alakasız" raporu bağımsız doğrulandı.
-- Sıradaki: **3A-2b** (conductor-api `/ws` WebSocket live-push + `GET /events?project=&task=&since=&limit=` REST).
+- ✅ **3A-2b — Live events (WS + /events REST)** (2026-06-18, commit `5678f14`): conductor-api `/ws` WebSocket
+  (`github.com/coder/websocket`; Subscribe→tipli push; query-param filtre; auth header-VEYA-`?token=` upgrade'den
+  ÖNCE, constant-time, log'lanmaz) + `GET /events?project=&task=&phase=&kind=&intervention=&since=&limit=` REST
+  (EventReader→JSON; phase/kind/since/limit validation; empty→`[]`; reader-yoksa 501). Yalnız cmd/conductor-api +
+  go.mod/sum değişti. Bağımsız doğrulama (Rule#9): scope+gate (build/vet/golangci-0/race/regresyon) + **canlı
+  cross-process** (AYRI süreç gerçek-PG'ye publish → gateway PG LISTEN/NOTIFY → WS client aldı; /events real-PG
+  geçmiş; kind-filtre; token'sız-WS→401; secret-leak=0) kendi koştum → ALL PASS.
+- **DALGA 3A ilerleme:** 3A-0 karar ✅, 3A-1 read-API ✅, 3A-2 live-events ✅ — kalan **3A-3** (control POST) + **3A-4** (paketleme).
+- Sıradaki: **3A-3** (Control API REST POST: onboard/intake/pause/resume/abort/approve — conductor seam reuse, auth-gated).
