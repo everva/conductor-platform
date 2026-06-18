@@ -3,7 +3,9 @@ package engine
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -392,6 +394,60 @@ func TestCommandEngine_DevelopRunsInWorkspace(t *testing.T) {
 	}
 	if !containsAll(string(gotStdin), "A-3", sampleWS.Path) {
 		t.Errorf("stdin missing task/workspace context: %s", gotStdin)
+	}
+}
+
+// TestExecRunner_StripsSecretEnvFromPerformer is the S-1 proof at the engine
+// level through the REAL execRunner path (NewCommandEngine, not a fake runner):
+// the develop performer is `sh -c 'env; {verdict}'` which dumps its own
+// environment to stdout. With GH_TOKEN + CONDUCTOR_DSN + CLAUDE_CODE_OAUTH_TOKEN
+// set in the parent, the performer's env must NOT contain the daemon's secrets
+// (GH_TOKEN/CONDUCTOR_DSN) but MUST still carry the Claude OAuth token and PATH
+// (denylist, not aggressive strip). We read the dumped env straight off the
+// performer stdout, so this asserts the actual cmd.Env the subprocess received.
+func TestExecRunner_StripsSecretEnvFromPerformer(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	t.Setenv("GH_TOKEN", "ghp_faketokenvalue")
+	t.Setenv("CONDUCTOR_DSN", "postgres://leak:leak@host/db")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "claude-oauth-fake")
+
+	// The performer dumps its env, then emits a valid Verdict so Develop returns
+	// cleanly and we can capture the env via the engine's normal path.
+	dump := `env; echo '{"result":"pass","summary":"ok"}'`
+	e := NewCommandEngine(RecipeConfig{
+		DevelopCmd: []string{"sh", "-c", dump},
+		Timeout:    10 * time.Second,
+	})
+
+	// Capture the performer's combined output (which begins with its env dump) by
+	// running the real runner directly — same code path NewCommandEngine uses.
+	out, err := execRunner(context.Background(), []string{"sh", "-c", dump}, t.TempDir(), nil, nil)
+	if err != nil {
+		t.Fatalf("execRunner: %v", err)
+	}
+	env := string(out)
+
+	for _, secret := range []string{"GH_TOKEN=", "CONDUCTOR_DSN="} {
+		if strings.Contains(env, secret) {
+			t.Errorf("performer env leaked daemon secret %q (S-1 not fixed)", secret)
+		}
+	}
+	if !strings.Contains(env, "CLAUDE_CODE_OAUTH_TOKEN=claude-oauth-fake") {
+		t.Errorf("Claude OAuth token was stripped — performer would break (over-sanitized)")
+	}
+	if !strings.Contains(env, "PATH=") {
+		t.Errorf("PATH was stripped — toolchain would break (over-sanitized)")
+	}
+
+	// And the engine end-to-end still parses the verdict cleanly via the same path.
+	v, err := e.Develop(context.Background(), sampleTask, Workspace{Path: t.TempDir(), Branch: "b"})
+	if err != nil {
+		t.Fatalf("Develop via real execRunner: %v", err)
+	}
+	if v.Result != "pass" {
+		t.Fatalf("verdict = %+v, want pass", v)
 	}
 }
 

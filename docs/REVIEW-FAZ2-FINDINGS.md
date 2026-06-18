@@ -22,13 +22,13 @@ engine.go Faz-2 boyunca byte-frozen; statestore additive-only; **merge yetkisi y
 `postgres.go` / `memory.go` `DELETE ... WHERE project_id` (host/task fencing yok). C-1 reap→re-acquire sonrası A bitince B'nin satırını siler.
 - **FIX (uygulandı):** ADDITIVE `ReleaseLeaseOwned(ctx, projectID, hostID, taskID)` StateStore'a eklendi (memory + PG: `WHERE project_id AND host_id AND task_id`; owner değilse no-op idempotent). Frozen `ReleaseLease(ctx,projectID)` DEĞİŞMEDİ (reconcile reaper kullanır). Conductor post-tick release defer'i (normal + approve-merge) edindiği lease ile `ReleaseLeaseOwned` çağırır → eski sahip yeni sahibin lease'ini silemez. Picker arayüzü + registry additive güncellendi. Test: conformance `ReleaseLeaseOwnedFencesByOwner` (memory + skip-gated PG) + conductor `release_owned_c2_test.go` (owner-scoped çağrı + mid-tick reap+B re-acquire sonrası B lease'i hayatta). engine.go + EXISTING imzalar untouched (ADR-0021); gate+e2e+race yeşil.
 
-### S-1 — Performer subprocess'i tam (sanitize edilmemiş) env miras alıyor → GH_TOKEN + DSN sızıntısı
-`command_engine.go execRunner`: `cmd.Env = append(os.Environ(), env...)`. Faz-2'de `GH_TOKEN` (repo-write) + `CONDUCTOR_DSN` (PG şifre) daemon env'inde → `claude -p --dangerously-skip-permissions` (saldırgan-etkili repo) okuyabilir/exfiltrate edebilir.
-- **FIX:** execRunner env'ini sanitize et (GH_TOKEN/CONDUCTOR_*/secret-shaped strip; tercihen toolchain allowlist). Performer'ın token'a ihtiyacı yok (git=helper, merge/push=daemon-tarafı).
+### S-1 — Performer subprocess'i tam (sanitize edilmemiş) env miras alıyor → GH_TOKEN + DSN sızıntısı — ✅ FIXED (R-2, 2026-06-18)
+`command_engine.go execRunner`: eski `cmd.Env = append(os.Environ(), env...)`. Faz-2'de `GH_TOKEN` (repo-write) + `CONDUCTOR_DSN` (PG şifre) daemon env'inde → `claude -p --dangerously-skip-permissions` (saldırgan-etkili repo) okuyabilir/exfiltrate edebilir.
+- **FIX (uygulandı):** `cmd.Env = append(envsafe.Sanitize(os.Environ()), env...)`. Yeni leaf paket `internal/envsafe` tek paylaşımlı **DENYLIST** sanitizer'ı tutar (import-cycle yok; engine.go FROZEN, additive ADR-0021). Denylist daemon'ın KENDİ sırlarını siler — `GH_TOKEN`/`GITHUB_TOKEN` (exact) + her `CONDUCTOR_*` (prefix, DSN dahil) — ve KEEP eder: PATH/HOME/GO*/`CLAUDE_*` (OAuth token)/locale. Aggressive `*_TOKEN/*_SECRET` strip DEĞİL: o Claude OAuth token'ı öldürür ve performer'ı bozardı. Performer'ın GH_TOKEN/DSN'e ihtiyacı yok (git=credential-helper .git/config'te, provisioner daemon-tarafı; push/merge daemon-tarafı). Recipe/operatör `env` arg'ı sanitize SONRASI eklenir (operatör-authored config, sırla doldurulmamalı). Test: `engine.TestExecRunner_StripsSecretEnvFromPerformer` (gerçek execRunner; `sh -c 'env'` performer'ı GH_TOKEN/DSN içermez, CLAUDE_CODE_OAUTH_TOKEN+PATH içerir) + `envsafe` birim testleri.
 
-### S-2 — verify.sanitizedEnv yalnız CONDUCTOR_* siliyor, GH_TOKEN'ı değil → gate+holdout sızıntısı
-`verify.go:265`. Her gate (`go test`/`npm test`/…) + holdout, saldırgan-etkili commit'i GH_TOKEN'lı env'de koşar.
-- **FIX:** sanitizedEnv GH_TOKEN'ı (+ bilinen secret anahtarları) da strip etsin; tercihen allowlist.
+### S-2 — verify.sanitizedEnv yalnız CONDUCTOR_* siliyor, GH_TOKEN'ı değil → gate+holdout sızıntısı — ✅ FIXED (R-2, 2026-06-18)
+`verify.go` eski `sanitizedEnv` yalnız `CONDUCTOR_*` siliyordu. Her gate (`go test`/`npm test`/…) + holdout, saldırgan-etkili commit'i GH_TOKEN'lı env'de koşuyordu.
+- **FIX (uygulandı):** `sanitizedEnv()` artık aynı paylaşımlı `envsafe.Sanitize(os.Environ())` denylist'ini kullanıyor (GH_TOKEN/GITHUB_TOKEN + CONDUCTOR_*). Gate + holdout subprocess'leri daemon sırlarını görmez; PATH/toolchain korunur (DRY, S-1 ile tek kaynak). Test: mevcut `TestRunGate_StripsConductorEnv` genişletildi — parent'taki GH_TOKEN gate'e görünmez, PATH görünür.
 
 ## 🟡 ORTA
 ### S-3 — Saldırgan-kontrollü .conductor/config.yaml → host'ta keyfi argv
@@ -47,5 +47,5 @@ engine.go Faz-2 boyunca byte-frozen; statestore additive-only; **merge yetkisi y
 
 ## Önerilen düzeltme grupları
 - **R-1 (multi-host lease güvenliği):** C-1 (background heartbeat) + C-2 (owner-scoped release). KRİTİK+YÜKSEK. — ✅ DONE (2026-06-18).
-- **R-2 (secret containment):** S-1 + S-2 (performer + gate env sanitize, allowlist). YÜKSEK.
+- **R-2 (secret containment):** S-1 + S-2 (performer + gate env sanitize). YÜKSEK. — ✅ DONE (2026-06-18): paylaşımlı `internal/envsafe` denylist (GH_TOKEN/GITHUB_TOKEN + CONDUCTOR_*) execRunner + verify.sanitizedEnv'de; gate+e2e+race yeşil.
 - **R-3 (sertleştirme):** S-3 (trust-doc + argv guard) + M1 (base-drift) + S-4/S-5/L1/L2/L3/L4.

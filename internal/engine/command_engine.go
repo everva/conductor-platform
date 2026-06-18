@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/everva/conductor-platform/internal/envsafe"
 	"github.com/everva/conductor-platform/internal/statestore"
 )
 
@@ -462,17 +463,28 @@ func mustJSON(v any) []byte {
 }
 
 // execRunner is the production runnerFunc: it runs argv via exec.CommandContext
-// in dir with the parent environment plus env, feeds stdin, and returns combined
-// stdout+stderr (the performer narrates on both, and auth/JSON markers can land
-// on either). The process is started in its own group so Control can signal the
-// whole performer tree, not just the leader.
+// in dir with the SANITIZED parent environment plus env, feeds stdin, and
+// returns combined stdout+stderr (the performer narrates on both, and auth/JSON
+// markers can land on either). The process is started in its own group so
+// Control can signal the whole performer tree, not just the leader.
+//
+// SECURITY (S-1): the parent env is run through envsafe.Sanitize before it
+// reaches the performer (`claude -p --dangerously-skip-permissions` over
+// attacker-influenced repo content). That denylist strips the daemon's OWN
+// secrets — GH_TOKEN/GITHUB_TOKEN (repo-write) and every CONDUCTOR_* var
+// (incl. CONDUCTOR_DSN, the Postgres password) — which the performer never needs
+// (git auth is a credential-helper in .git/config; push/merge are daemon-side).
+// It KEEPS PATH/HOME/toolchain and the Claude OAuth env so the performer still
+// runs. The recipe/operator-supplied env arg is appended AFTER sanitization and
+// is NOT stripped: it is operator-authored config, not the daemon's secrets;
+// operators must not place daemon secrets there.
 func execRunner(ctx context.Context, argv []string, dir string, stdin []byte, env []string) ([]byte, error) {
 	if len(argv) == 0 {
 		return nil, errors.New("engine: empty command")
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // argv is the operator-supplied recipe command.
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(envsafe.Sanitize(os.Environ()), env...)
 	cmd.Stdin = bytes.NewReader(stdin)
 	configureProcessGroup(cmd)
 

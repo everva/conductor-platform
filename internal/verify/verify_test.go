@@ -191,31 +191,33 @@ func TestVerifier_DevelopWorktree_Unmutated(t *testing.T) {
 }
 
 // TestRunGate_StripsConductorEnv proves the gate subprocess does NOT inherit the
-// daemon's own CONDUCTOR_* config env (FIX #2): a CONDUCTOR_DSN set in the parent
-// must be invisible to the gated project's commands, so it cannot leak into the
-// project's env-reading tests. The gate greps its env for CONDUCTOR_DSN and exits
-// non-zero (fails) if the variable is present; a passing gate proves it was
-// stripped. A control assertion confirms a NON-CONDUCTOR var (PATH) still passes
-// through so we only strip the daemon's config, not the whole environment.
+// daemon's own secrets — CONDUCTOR_* config (FIX #2) AND GH_TOKEN (S-2): a
+// CONDUCTOR_DSN and a GH_TOKEN set in the parent must be invisible to the gated
+// project's commands, so they cannot leak into the attacker-influenced project's
+// env-reading tests / exfiltrate. The gate greps its env and exits non-zero
+// (fails) if either is present; a passing gate proves both were stripped. A
+// control assertion confirms a NON-secret var (PATH) still passes through so we
+// only strip the daemon's known secrets, not the whole environment.
 func TestRunGate_StripsConductorEnv(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")
 	}
 	t.Setenv("CONDUCTOR_DSN", "postgres://leak:leak@host/db")
+	t.Setenv("GH_TOKEN", "ghp_faketokenvalue")
 
 	dir := t.TempDir()
 
-	// Gate fails (exit 1) iff CONDUCTOR_DSN is visible in its environment.
-	leakGate := Gate{Name: "no-conductor-env", Argv: []string{
-		"sh", "-c", `if env | grep -q '^CONDUCTOR_'; then exit 1; fi; exit 0`,
+	// Gate fails (exit 1) iff CONDUCTOR_* or GH_TOKEN is visible in its env.
+	leakGate := Gate{Name: "no-secret-env", Argv: []string{
+		"sh", "-c", `if env | grep -qE '^(CONDUCTOR_|GH_TOKEN=)'; then exit 1; fi; exit 0`,
 	}}
 	c := runGate(context.Background(), dir, leakGate)
 	if c.Result != checkPass {
-		t.Fatalf("gate saw a CONDUCTOR_* var in its env (env not sanitized): %+v", c)
+		t.Fatalf("gate saw a daemon secret (CONDUCTOR_*/GH_TOKEN) in its env (env not sanitized): %+v", c)
 	}
 
-	// Control: PATH (a non-CONDUCTOR var the toolchain needs) MUST still reach the
-	// gate, proving we strip only the daemon's config and not the whole env.
+	// Control: PATH (a non-secret var the toolchain needs) MUST still reach the
+	// gate, proving we strip only the daemon's secrets and not the whole env.
 	pathGate := Gate{Name: "has-path", Argv: []string{
 		"sh", "-c", `if [ -z "$PATH" ]; then exit 1; fi; exit 0`,
 	}}

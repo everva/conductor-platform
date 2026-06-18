@@ -315,3 +315,21 @@ Deterministik kanıt = kalite kapısı (LLM asla karar mercii); sahte-yeşil ASL
   hayatta kalır uçtan-uca). engine.go + EXISTING statestore imzaları + tools/builder DOKUNULMADI (ADR-0021 additive).
   Offline gate (build+test+vet+golangci v2.12.0) + e2e (E2E ./internal/conductor/) + `-race ./internal/conductor/
   ./internal/reconcile/ ./cmd/conductor/` YEŞİL; gofmt temiz; yeni dep yok. **→ C-1, C-2 FIXED.**
+- **R-2 (secret containment: S-1 + S-2)** ✅ done (2026-06-18). Daemon spawn ettiği subprocess'lere (performer +
+  gate/holdout) saldırgan-etkili repo içeriği üzerinde kendi sırlarını sızdırıyordu. **Tek paylaşımlı DENYLIST
+  sanitizer** yeni leaf paket `internal/envsafe`'te (`Sanitize(environ []string) []string`); import-cycle yok, engine.go
+  FROZEN kaldı (additive ADR-0021). Denylist daemon'ın KENDİ sırlarını siler — `GH_TOKEN`/`GITHUB_TOKEN` (exact-key) +
+  her `CONDUCTOR_*` (prefix; `CONDUCTOR_DSN` PG şifresi dahil) — ve performer/gate'in ihtiyaç duyduğu HER ŞEYİ tutar:
+  PATH/HOME/GO*/locale + `CLAUDE_*` (Claude OAuth token). DENYLIST seçimi bilinçli: aggressive `*_TOKEN/*_SECRET`
+  strip CLAUDE_CODE_OAUTH_TOKEN'ı öldürür ve performer'ı bozardı; performer GH_TOKEN/DSN'e ihtiyaç duymaz (git auth =
+  .git/config credential-helper, provisioner daemon-tarafı; push/merge daemon-tarafı). **S-1:** `command_engine.go
+  execRunner` → `cmd.Env = append(envsafe.Sanitize(os.Environ()), env...)` (recipe/operatör `env` arg'ı sanitize
+  SONRASI, operatör-authored config olarak korunur). **S-2:** `verify.go sanitizedEnv()` artık aynı
+  `envsafe.Sanitize`'ı kullanıyor (DRY; eski yalnız-CONDUCTOR_* mantığı GH_TOKEN'ı da kapsayacak şekilde tek kaynağa
+  taşındı). **Test:** `envsafe` birim testleri (GH_TOKEN/GITHUB_TOKEN/CONDUCTOR_DSN/CONDUCTOR_FOO silinir;
+  PATH/HOME/CLAUDE_CODE_OAUTH_TOKEN/GOCACHE/MY_VAR korunur; input mutate edilmez); `engine.
+  TestExecRunner_StripsSecretEnvFromPerformer` GERÇEK execRunner ile (`sh -c 'env'` performer'ı parent'taki
+  GH_TOKEN/CONDUCTOR_DSN içermez ama CLAUDE_CODE_OAUTH_TOKEN+PATH içerir; Develop uçtan-uca verdict parse eder);
+  genişletilmiş `verify.TestRunGate_StripsConductorEnv` (GH_TOKEN gate'e görünmez, PATH görünür). engine.go interface +
+  statestore + tools/builder DOKUNULMADI. Offline gate (build+test+vet+golangci v2.12.0) + e2e (E2E ./internal/
+  conductor/) + `-race ./internal/engine/ ./internal/verify/` YEŞİL; gofmt temiz; yeni dep yok. **→ S-1, S-2 FIXED.**
