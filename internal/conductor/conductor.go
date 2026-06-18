@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/everva/conductor-platform/internal/engine"
@@ -560,6 +561,18 @@ func (c *Conductor) runTask(ctx context.Context, project statestore.Project, tas
 	// Independent PASS (and auto-merge tier): squash-merge into the base with a
 	// [task:<id>] trailer and mark the task done (ADR-0004).
 	sha, mErr := c.merger.SquashMerge(ctx, project, task, ws)
+	// ADR-0022 push-fail: a *PushError means the merge LANDED LOCALLY (valid sha)
+	// but the opt-in remote-push failed. The task is DONE (merged locally); we do
+	// NOT block and do NOT undo the merge — we surface a push-failed event/log so
+	// the operator knows the remote was not updated. This must precede the generic
+	// merge-failure block so a push failure is never misclassified as a merge failure.
+	if pushErr := pushFailure(mErr); pushErr != nil {
+		c.markMergedPushFailed(ctx, task, pushErr)
+		if err := c.markDone(ctx, task); err != nil {
+			return TickResult{}, fmt.Errorf("conductor: tick: mark done after push-failed %q: %w", task.ID, err)
+		}
+		return TickResult{Outcome: OutcomeMerged, TaskID: task.ID, Verdict: verdict, Review: review, MergeSHA: pushErr.SHA}, nil
+	}
 	if mErr != nil {
 		// Merge failed AFTER an independent pass: block for inspection, never lie.
 		if blockErr := c.markBlocked(ctx, task); blockErr != nil {
@@ -581,6 +594,37 @@ func (c *Conductor) runTask(ctx context.Context, project statestore.Project, tas
 		Review:   review,
 		MergeSHA: sha,
 	}, nil
+}
+
+// pushFailure reports whether err is the ADR-0022 merged-locally-but-push-failed
+// signal (a *PushError), returning it for the caller, or nil otherwise. It keeps
+// the "is this a push-fail not a merge-fail?" decision in one place so both the
+// normal and the approve-merge paths classify it identically.
+func pushFailure(err error) *PushError {
+	var pe *PushError
+	if errors.As(err, &pe) {
+		return pe
+	}
+	return nil
+}
+
+// markMergedPushFailed surfaces the ADR-0022 push-failure without altering the
+// task's done outcome: it logs and emits a push-failed event (merge landed locally,
+// remote NOT updated). It is the operator-visibility guarantee — never silent-loss —
+// and never undoes the local merge. The event reuses the optional Emitter seam
+// (N-9); with no emitter the slog line still records it.
+func (c *Conductor) markMergedPushFailed(ctx context.Context, task statestore.Task, pushErr *PushError) {
+	slog.Warn("conductor: merged locally but remote-push FAILED (remote not updated, task stays done)",
+		slog.String("project", task.ProjectID), slog.String("task", task.ID),
+		slog.String("merge_sha", pushErr.SHA), slog.String("remote", pushErr.Remote),
+		slog.String("error", pushErr.Err.Error()))
+	c.emit(ctx, task, events.PhaseMerge, events.KindInterventionNeeded, map[string]any{
+		"reason":    "push-failed",
+		"merge_sha": pushErr.SHA,
+		"remote":    pushErr.Remote,
+		"error":     pushErr.Err.Error(),
+		"detail":    "merge landed locally; remote not updated (ADR-0022). Task is done; operator must push the base.",
+	})
 }
 
 // resolveHoldoutRef returns the REPO-EXTERNAL hidden-holdout locator the verifier
@@ -872,6 +916,16 @@ func (c *Conductor) mergeApproved(ctx context.Context, project statestore.Projec
 	// Re-verify passed: squash-merge the PRESERVED verified branch with the
 	// [task:<id>] trailer and mark done. NO develop ran.
 	sha, mErr := c.merger.SquashMerge(ctx, project, task, ws)
+	// ADR-0022 push-fail (approve path): the merge landed locally; an opt-in push
+	// failure keeps the approved task done and surfaces a push-failed event, never
+	// blocking (which would discard the human-approved, merged work) and never undoing.
+	if pushErr := pushFailure(mErr); pushErr != nil {
+		c.markMergedPushFailed(ctx, task, pushErr)
+		if err := c.markDoneClearApproval(ctx, task); err != nil {
+			return TickResult{}, fmt.Errorf("conductor: tick: approve-merge mark done after push-failed %q: %w", task.ID, err)
+		}
+		return TickResult{Outcome: OutcomeApprovedMerged, TaskID: task.ID, Review: review, MergeSHA: pushErr.SHA}, nil
+	}
 	if mErr != nil {
 		if blockErr := c.blockApprovedReject(ctx, task); blockErr != nil {
 			return TickResult{}, fmt.Errorf("conductor: tick: approve-merge failed and block failed: %w", errors.Join(mErr, blockErr))

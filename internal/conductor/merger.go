@@ -2,6 +2,7 @@ package conductor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,22 +21,103 @@ import (
 // It operates in the per-project CLONE (the worktree's main repo), not the
 // throwaway per-task worktree, because the base branch is checked out there and a
 // `git worktree` cannot have the same branch checked out twice.
+//
+// Remote-push (ADR-0022, opt-in, default OFF): after a SUCCESSFUL squash-merge +
+// commit, when push is enabled, the merger pushes the advanced base branch to a
+// remote (default `origin`), authenticated via a gh-token credential helper
+// (ADR-0017; deploy-keys forbidden). The local merge is the source of truth: a
+// push failure NEVER undoes the merge and NEVER fails the task — it is surfaced as
+// a PushError carrying the valid local merge SHA so the tick can log it and emit a
+// push-failed event (merge landed locally, remote not updated). Default-OFF keeps
+// behavior byte-identical to the local-only Faz-1 model.
 type GitMerger struct {
 	// clonePath resolves the owning clone directory for a project. It is injected
 	// so the merger does not duplicate the provisioner's layout knowledge; a nil
 	// value falls back to deriving the clone from the worktree's git common dir.
 	clonePath func(projectID string) string
+	// push is the opt-in remote-push config (ADR-0022). The zero value (Enabled
+	// false) means local-only merge — the pre-1.5-c behavior — so a GitMerger
+	// constructed without WithPush never touches a remote.
+	push PushConfig
 }
+
+// PushConfig is the opt-in remote-push configuration for GitMerger (ADR-0022). The
+// zero value is push DISABLED (local-only merge, the default/backward-compatible
+// behavior). Construct via WithPush; the token is delivered to git via a credential
+// helper, never via argv/env, and is NEVER logged or committed.
+type PushConfig struct {
+	// Enabled turns the post-merge remote-push step ON. Default false = local-only
+	// merge (no remote contact), byte-identical to the pre-1.5-c behavior.
+	Enabled bool
+	// Remote is the git remote pushed to on a successful merge. Empty defaults to
+	// defaultPushRemote ("origin").
+	Remote string
+	// GHToken is the gh-token the push credential helper authenticates with
+	// (ADR-0017). Empty means no helper is installed (e.g. a local bare-repo origin
+	// that needs no auth, as in tests). It is never logged or committed; push errors
+	// redact it.
+	GHToken string
+}
+
+// defaultPushRemote is the remote GitMerger pushes the merged base to when a
+// PushConfig enables push without naming a remote (ADR-0022).
+const defaultPushRemote = "origin"
+
+// PushError signals that the squash-merge SUCCEEDED locally but the subsequent
+// opt-in remote-push FAILED (ADR-0022). It is the load-bearing signal shape: when
+// SquashMerge returns a non-nil error that is a *PushError, the SHA it returns is
+// the VALID local merge commit (the task is done, merged locally) and Err is the
+// push failure — the remote was NOT updated. The tick keys on this via errors.As to
+// keep the task done while surfacing a push-failed event/log (never silent-loss,
+// never fake-green, never undo the local merge). Any OTHER error from SquashMerge
+// is a genuine merge failure (empty SHA, base not advanced).
+type PushError struct {
+	// SHA is the valid local merge commit; the base branch advanced to it.
+	SHA string
+	// Remote is the remote the push targeted.
+	Remote string
+	// Err is the underlying (token-redacted) push failure.
+	Err error
+}
+
+// Error renders the push failure, making clear the merge landed locally.
+func (e *PushError) Error() string {
+	return fmt.Sprintf("git merger: merged locally (sha %s) but push to %q FAILED (remote not updated): %v", e.SHA, e.Remote, e.Err)
+}
+
+// Unwrap exposes the underlying push error for errors.Is/As chains.
+func (e *PushError) Unwrap() error { return e.Err }
 
 // Compile-time assertion that *GitMerger satisfies the Merger seam.
 var _ Merger = (*GitMerger)(nil)
 
+// Option configures a GitMerger at construction (additive; ADR-0021). Options are
+// applied in order after the base merger is built.
+type Option func(*GitMerger)
+
+// WithPush enables the opt-in post-merge remote-push (ADR-0022). With cfg.Enabled
+// false it is a no-op (local-only merge), so passing a disabled config is identical
+// to not passing the option at all. An empty cfg.Remote defaults to "origin".
+func WithPush(cfg PushConfig) Option {
+	return func(m *GitMerger) {
+		if cfg.Remote == "" {
+			cfg.Remote = defaultPushRemote
+		}
+		m.push = cfg
+	}
+}
+
 // NewGitMerger returns a GitMerger that resolves a project's clone via clonePath.
 // Pass the provisioner's clone-path function so the merger merges in the same
 // clone the worktree was cut from. A nil clonePath derives the clone from the
-// worktree itself.
-func NewGitMerger(clonePath func(projectID string) string) *GitMerger {
-	return &GitMerger{clonePath: clonePath}
+// worktree itself. Options (e.g. WithPush) are additive; with none the merger is
+// local-only (the pre-1.5-c behavior).
+func NewGitMerger(clonePath func(projectID string) string, opts ...Option) *GitMerger {
+	m := &GitMerger{clonePath: clonePath}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 // SquashMerge squash-merges ws.Branch into project.BaseBranch in the owning clone
@@ -87,7 +169,56 @@ func (m *GitMerger) SquashMerge(ctx context.Context, project statestore.Project,
 		// do NOT restore (that would discard a real merge); surface the read error.
 		return "", fmt.Errorf("git merger: resolve merge sha: %w", err)
 	}
-	return strings.TrimSpace(sha), nil
+	mergeSHA := strings.TrimSpace(sha)
+
+	// Opt-in remote-push (ADR-0022), AFTER a successful merge+commit so it never
+	// interacts with restoreBase (that runs only on FAILURE). The local merge is
+	// already the source of truth: a push failure does NOT undo the merge and does
+	// NOT fail the task — it is returned as a *PushError carrying the valid merge
+	// SHA so the tick keeps the task done while surfacing a push-failed event/log.
+	// Default-OFF (push disabled) is a no-op, so behavior is byte-identical to the
+	// local-only model.
+	if m.push.Enabled {
+		if perr := m.pushBase(ctx, repo, project.BaseBranch); perr != nil {
+			return mergeSHA, &PushError{SHA: mergeSHA, Remote: m.push.Remote, Err: perr}
+		}
+	}
+	return mergeSHA, nil
+}
+
+// pushBase pushes the (already-advanced) base branch to the configured remote
+// (ADR-0022), authenticated via a gh-token credential helper installed on the
+// clone's LOCAL config (ADR-0017; deploy-keys forbidden), reusing the provisioner/
+// holdout pattern. The token is delivered only through the helper — never via argv
+// or env, so it cannot leak into process listings — and is redacted from any
+// returned error. With no token the helper is skipped (a local bare-repo origin
+// needs no auth, as in tests). The caller wraps a non-nil result in a *PushError
+// (the merge already stands locally); pushBase itself never undoes the merge.
+func (m *GitMerger) pushBase(ctx context.Context, repo, baseBranch string) error {
+	if strings.TrimSpace(m.push.GHToken) != "" {
+		helper := fmt.Sprintf("!f() { echo \"username=x-access-token\"; echo \"password=%s\"; }; f", m.push.GHToken)
+		if err := git(ctx, repo, "config", "--local", "credential.helper", helper); err != nil {
+			return m.redactPush(fmt.Errorf("configure gh-token credential helper: %w", err))
+		}
+	}
+	if err := git(ctx, repo, "push", m.push.Remote, baseBranch); err != nil {
+		return m.redactPush(fmt.Errorf("push %s %s: %w", m.push.Remote, baseBranch, err))
+	}
+	return nil
+}
+
+// redactPush removes the gh-token from a push error so a git error that echoed the
+// token (e.g. in a URL or the configured helper) never surfaces or is logged
+// (ADR-0017/0022). With no token it returns the error unchanged.
+func (m *GitMerger) redactPush(err error) error {
+	if err == nil {
+		return nil
+	}
+	tok := strings.TrimSpace(m.push.GHToken)
+	if tok == "" {
+		return err
+	}
+	return errors.New(strings.ReplaceAll(err.Error(), tok, "x-access-token:REDACTED"))
 }
 
 // restoreBase returns the base checkout to baseRef with a CLEAN worktree+index

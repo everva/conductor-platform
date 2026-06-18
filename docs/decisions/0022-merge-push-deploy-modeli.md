@@ -36,4 +36,11 @@ remote, host-üstü tek doğruluk kaynağıdır → push birinci-sınıf olur. (
 - Default davranış (yerel-merge) değişmez; mevcut testler/e2e yeşil kalır.
 
 ## Durum
-🔄 Uygulanıyor (1.5-c).
+✅ Uygulandı (1.5-c). GitMerger'a opt-in push (additive `WithPush(PushConfig{Enabled,Remote,GHToken})`);
+başarılı squash-merge sonrası `git push <remote> <base>` gh-token credential-helper ile (redact'li).
+Push-fail sinyali: `SquashMerge` geçerli merge SHA + `*PushError` döner (merge yerelde durur, geri alınmaz);
+tick `errors.As` ile yakalar, task'ı **done** bırakır ve `push-failed` event'i (merge-phase
+intervention-needed) + slog.Warn yayar (sessiz-kayıp yok, sahte-yeşil yok). Daemon wiring:
+`-push`/`CONDUCTOR_PUSH` (default false) + `-push-remote`/`CONDUCTOR_PUSH_REMOTE` (default origin),
+gh-token `CONDUCTOR_GH_TOKEN`/`GH_TOKEN`'dan (1.5-a ile paylaşımlı, asla loglanmaz). Default-OFF
+yerel-merge davranışı byte-identik korunur; mevcut testler/e2e yeşil.

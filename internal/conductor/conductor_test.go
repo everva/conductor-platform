@@ -88,11 +88,15 @@ func (f *fakeVerifier) Verify(context.Context, engine.Verdict, engine.Workspace,
 type fakeMerger struct {
 	calls int
 	sha   string
+	// err, when set, is returned alongside sha. A *PushError with a valid sha models
+	// the ADR-0022 merged-locally-but-push-failed signal so tick-level handling is
+	// testable without a real broken remote.
+	err error
 }
 
 func (f *fakeMerger) SquashMerge(context.Context, statestore.Project, statestore.Task, engine.Workspace) (string, error) {
 	f.calls++
-	return f.sha, nil
+	return f.sha, f.err
 }
 
 // --- harness ----------------------------------------------------------------

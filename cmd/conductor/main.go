@@ -75,6 +75,10 @@ const (
 	// shell expansion). Override with -holdout-cmd. It is unused when no holdout
 	// store is configured.
 	defaultHoldoutCmd = "go test ./..."
+	// defaultPushRemote is the git remote the opt-in post-merge push targets when
+	// -push is set without -push-remote (ADR-0022). Override with -push-remote /
+	// CONDUCTOR_PUSH_REMOTE.
+	defaultPushRemote = "origin"
 	// defaultHeartbeatStale is the age past which the independent stall-detector
 	// (-check) considers the heartbeat STALE. Generous relative to the default
 	// 30s tick interval so a single slow tick does not false-alert; an external
@@ -169,6 +173,15 @@ type config struct {
 	// can opt INTO golangci-lint; if it does, golangci-lint MUST be installed or the
 	// gate fails deterministically (never silently skipped).
 	recipeDir string
+	// push, when true, enables the opt-in post-merge remote-push (ADR-0022): after a
+	// successful squash-merge the daemon pushes the advanced base branch to pushRemote.
+	// Default false = LOCAL-ONLY merge (the Faz-1 behavior; no remote contact), so a
+	// daemon that does not opt in never writes to a real remote. A push failure keeps
+	// the task done and surfaces a push-failed event (never silent-loss, never undo).
+	push bool
+	// pushRemote is the git remote the opt-in push targets (ADR-0022). Default
+	// "origin". Only meaningful when push is true. It is operator config, not a secret.
+	pushRemote string
 	// governance, when true (the DEFAULT), wires the risk-layered merge policy
 	// (governance.DefaultPolicy, ADR-0003/N-10) into the conductor so high-tier
 	// (T3/T4) and untiered tasks are HELD for a human after a green gate instead of
@@ -281,6 +294,10 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		"repo dir whose .conductor/config.yaml (ADR-0009) supplies the verify gate recipe; empty = built-in default gates (go build + go test + go vet). A configured recipe may opt into golangci-lint, which must then be installed or the gate fails")
 	holdoutPrivateCache := fs.String("holdout-private-cache", envOr("CONDUCTOR_HOLDOUT_PRIVATE_CACHE", ""),
 		"cache dir the private: holdout backing (ADR-0018) clones private holdout repos under; empty = private: scheme unconfigured (a private: locator then errors clearly). Path is logged, the gh-token is not")
+	push := fs.Bool("push", envBoolOr("CONDUCTOR_PUSH", false),
+		"opt-in (ADR-0022): after a successful squash-merge, push the base branch to -push-remote (gh-token from CONDUCTOR_GH_TOKEN/GH_TOKEN). Default false = local-only merge. A push failure keeps the task done and emits a push-failed event")
+	pushRemote := fs.String("push-remote", envOr("CONDUCTOR_PUSH_REMOTE", defaultPushRemote),
+		"git remote the opt-in post-merge push targets (ADR-0022); only used with -push")
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "conductor — Faz-1a tick daemon")
@@ -375,6 +392,10 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		// (CONDUCTOR_GH_TOKEN, falling back to GH_TOKEN). It is never logged.
 		holdoutPrivateCache: *holdoutPrivateCache,
 		holdoutGHToken:      envOr("CONDUCTOR_GH_TOKEN", os.Getenv("GH_TOKEN")),
+		// Opt-in remote-push (ADR-0022). The gh-token is reused from the env-only
+		// holdout token (CONDUCTOR_GH_TOKEN / GH_TOKEN) so it never appears in argv.
+		push:       *push,
+		pushRemote: *pushRemote,
 	}, nil
 }
 
@@ -481,9 +502,24 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		storeOnlyCloser()
 	}
 
+	// Opt-in remote-push (ADR-0022): default OFF = local-only merge. When enabled,
+	// a successful squash-merge pushes the base to cfg.pushRemote via a gh-token
+	// credential helper (reusing the env-only token); a push failure keeps the task
+	// done and emits a push-failed event. The token is NEVER logged.
 	merger := conductor.NewGitMerger(func(projectID string) string {
 		return cfg.rootDir + "/clones/" + projectID
-	})
+	}, conductor.WithPush(conductor.PushConfig{
+		Enabled: cfg.push,
+		Remote:  cfg.pushRemote,
+		GHToken: cfg.holdoutGHToken,
+	}))
+	if cfg.push {
+		logger.Info("remote-push enabled (ADR-0022)",
+			slog.String("remote", cfg.pushRemote),
+			slog.Bool("has_token", cfg.holdoutGHToken != ""))
+	} else {
+		logger.Info("remote-push disabled (ADR-0022): local-only merge", slog.Bool("push", false))
+	}
 
 	// Resource-governor (ADR-0008, N-5): admission control consulted before each
 	// lease/develop. The global count is derived from the shared lease table

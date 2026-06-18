@@ -91,4 +91,18 @@ Deterministik kanıt = kalite kapısı (LLM asla karar mercii); sahte-yeşil ASL
   throwaway repo):** tick1=held (merge yok, branch korundu), `approve`, tick2=approved-merged (mergeSHA 3674435,
   base'de `[task:T3-held]` trailer, develop hit-count=1). engine.go/builder dokunulmadı; gate+e2e+race yeşil;
   golangci v2.12.0 temiz.
-- Sıradaki: 1.5-c (GitMerger remote-push modeli) veya Dalga A.
+- **1.5-c GitMerger opt-in remote-push** ✅ done (ADR-0022). Additive: `GitMerger.WithPush(PushConfig{Enabled,Remote,GHToken})`
+  + `*PushError{SHA,Remote,Err}` sinyal tipi. Başarılı squash-merge+commit SONRASI (restoreBase yalnız FAILURE'da
+  koşar, etkileşim yok) push-enabled ise `git push <remote> <base>` gh-token credential-helper ile (ADR-0017 deseni,
+  token argv/env'e değil yalnız helper'a; hata redact'li). **Sinyal şekli:** `SquashMerge` geçerli merge SHA döner;
+  push fail'de `(sha, *PushError)` — non-nil hata + geçerli SHA = "merged-locally-but-push-failed". Tick `errors.As` ile
+  yakalar (`pushFailure`), task'ı **done** bırakır (`OutcomeMerged`+SHA), `markMergedPushFailed` ile slog.Warn +
+  `push-failed` event (merge-phase intervention-needed, payload: reason/merge_sha/remote/error) yayar — undo YOK,
+  block YOK, sessiz-kayıp YOK (normal + approve-merge yolları aynı). Daemon: `-push`/`CONDUCTOR_PUSH` (default false) +
+  `-push-remote`/`CONDUCTOR_PUSH_REMOTE` (default origin) + gh-token `CONDUCTOR_GH_TOKEN`/`GH_TOKEN`'dan (1.5-a paylaşımlı);
+  başlangıçta push on/off+remote loglanır, token ASLA. **Gerçek-git testleri (bare origin + clone):** push ON →
+  bare origin base merge SHA'ya ilerledi (+`[task:T-1]` trailer); push-fail (bogus remote) → merge SHA döndü, yerel base
+  merge+trailer'ı korudu (undo/loss yok), `*PushError` yüzeylendi; default OFF → origin'e dokunulmadı; token-redact
+  unit (helper doğrudan); tick-level push-failed → task done + event. engine.go + statestore frozen dokunulmadı;
+  builder dokunulmadı; gate (build+test+vet+golangci v2.12.0) + e2e + race yeşil; gofmt temiz; token leak yok.
+- Sıradaki: Dalga A veya uçtan-uca doğrulama (1.5-a/b/c tümleşik).
