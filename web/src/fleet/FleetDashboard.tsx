@@ -9,6 +9,7 @@ import { ProjectsTable } from "./ProjectsTable.tsx";
 import { HostsPanel } from "./HostsPanel.tsx";
 import { TasksView } from "./TasksView.tsx";
 import { EventTicker } from "./EventTicker.tsx";
+import { EventStreamView } from "../events/EventStreamView.tsx";
 import "./fleet.css";
 
 export interface FleetDashboardProps {
@@ -19,12 +20,18 @@ export interface FleetDashboardProps {
   makeClient?: (token: string) => FleetClient;
 }
 
+// DashboardTab toggles the cockpit between the fleet overview and the full event
+// stream (3B-2). The fleet view keeps the lightweight EventTicker; the stream view
+// is the full filterable/pausable feed.
+type DashboardTab = "fleet" | "events";
+
 export function FleetDashboard({
   token,
   onUnauthorized,
   makeClient,
 }: FleetDashboardProps) {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [tab, setTab] = useState<DashboardTab>("fleet");
 
   const fleet = useFleet({
     token,
@@ -57,28 +64,57 @@ export function FleetDashboard({
         </p>
       )}
 
-      <div className="fleet-grid">
-        <div className="fleet-col">
-          <ProjectsTable
-            projects={fleet.projects}
-            leasesByProject={fleet.leasesByProject}
-            selectedProjectId={selectedProjectId}
-            onSelect={setSelectedProjectId}
-          />
-          <TasksView
-            selectedProjectId={selectedProjectId}
-            tasks={
-              selectedProjectId !== null
-                ? fleet.tasksByProject[selectedProjectId]
-                : undefined
-            }
-          />
-        </div>
-        <div className="fleet-col">
-          <HostsPanel hosts={fleet.hosts} />
-          <EventTicker events={fleet.recentEvents} />
-        </div>
+      <div className="fleet-tabs" role="tablist" aria-label="Dashboard view">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "fleet"}
+          className={tab === "fleet" ? "fleet-tab active" : "fleet-tab"}
+          onClick={() => setTab("fleet")}
+        >
+          Fleet
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "events"}
+          className={tab === "events" ? "fleet-tab active" : "fleet-tab"}
+          onClick={() => setTab("events")}
+        >
+          Events
+        </button>
       </div>
+
+      {tab === "fleet" ? (
+        <div className="fleet-grid">
+          <div className="fleet-col">
+            <ProjectsTable
+              projects={fleet.projects}
+              leasesByProject={fleet.leasesByProject}
+              selectedProjectId={selectedProjectId}
+              onSelect={setSelectedProjectId}
+            />
+            <TasksView
+              selectedProjectId={selectedProjectId}
+              tasks={
+                selectedProjectId !== null
+                  ? fleet.tasksByProject[selectedProjectId]
+                  : undefined
+              }
+            />
+          </div>
+          <div className="fleet-col">
+            <HostsPanel hosts={fleet.hosts} />
+            <EventTicker events={fleet.recentEvents} />
+          </div>
+        </div>
+      ) : (
+        <EventStreamView
+          token={token}
+          projects={fleet.projects.map((p) => p.id)}
+          onUnauthorized={onUnauthorized}
+        />
+      )}
     </div>
   );
 }

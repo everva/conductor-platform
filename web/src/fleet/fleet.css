@@ -71,6 +71,29 @@
   background: #f87171;
 }
 
+/* --- view tabs (fleet | events) --- */
+.fleet-tabs {
+  display: flex;
+  gap: 0.4rem;
+}
+.fleet-tab {
+  padding: 0.35rem 0.85rem;
+  border: 1px solid #2a2f37;
+  border-radius: 0.4rem;
+  background: transparent;
+  color: #9aa4b2;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.fleet-tab:hover {
+  background: #21252d;
+}
+.fleet-tab.active {
+  background: #233044;
+  color: #e6e6e6;
+  border-color: #2f4a6b;
+}
+
 /* --- layout grid --- */
 .fleet-grid {
   display: grid;

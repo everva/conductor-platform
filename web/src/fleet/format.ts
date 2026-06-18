@@ -59,3 +59,39 @@ export function shortTime(value: string | number | null | undefined): string {
   }
   return d.toLocaleTimeString();
 }
+
+// absoluteTime renders an ISO timestamp as a full local date-time string for the
+// row title (hover) tooltip, falling back to the raw value when unparseable.
+export function absoluteTime(value: string | null | undefined): string {
+  if (value === null || value === undefined || value === "") {
+    return "—";
+  }
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) {
+    return value;
+  }
+  return d.toLocaleString();
+}
+
+// payloadPreview compactly stringifies an event payload for inline display: empty
+// payloads render as "" (caller omits the cell), and anything longer than `max`
+// chars is truncated with an ellipsis so a large diff/log can't blow out the row.
+export function payloadPreview(
+  payload: Record<string, unknown>,
+  max = 160,
+): string {
+  if (payload === null || typeof payload !== "object") {
+    return "";
+  }
+  const keys = Object.keys(payload);
+  if (keys.length === 0) {
+    return "";
+  }
+  let s: string;
+  try {
+    s = JSON.stringify(payload);
+  } catch {
+    return "";
+  }
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}

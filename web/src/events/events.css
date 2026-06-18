@@ -1,0 +1,139 @@
+/* Event stream view styles (3B-2). Builds on fleet.css (.fleet-panel / .badge /
+   .mono / .muted / .fleet-conn / .fleet-dot) — only the stream-specific bits live
+   here. Dark ops aesthetic, readable density. */
+
+.evt {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.evt-head {
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.evt-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.evt-controls button {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.3rem;
+  border: 1px solid #2a2f37;
+  background: transparent;
+  color: #e6e6e6;
+  cursor: pointer;
+}
+.evt-controls button:hover {
+  background: #21252d;
+}
+
+.evt-toggle.on {
+  background: #78350f;
+  color: #fde68a;
+  border-color: #78350f;
+}
+
+.evt-count {
+  min-width: 2ch;
+  text-align: right;
+}
+
+/* --- filter row --- */
+.evt-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.55rem 0.9rem;
+  border-bottom: 1px solid #2a2f37;
+}
+
+.evt-filters input[type="text"],
+.evt-filters select {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 0.3rem;
+  border: 1px solid #2a2f37;
+  background: #14171c;
+  color: #e6e6e6;
+}
+
+.evt-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: #cbd5e1;
+}
+
+/* --- feed --- */
+.evt-feed {
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.evt-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.35rem 0.9rem;
+  border-bottom: 1px solid #23272f;
+  font-size: 0.8rem;
+}
+.evt-row:hover {
+  background: #1d2128;
+}
+
+.evt-row.intervention {
+  background: #3b1d1d;
+  border-left: 3px solid #f87171;
+}
+.evt-row.intervention:hover {
+  background: #46211f;
+}
+
+.evt-time {
+  color: #9aa4b2;
+  white-space: nowrap;
+  width: 6.5rem;
+  flex: 0 0 auto;
+}
+
+.evt-loc {
+  flex: 0 0 auto;
+  color: #cbd5e1;
+}
+
+.badge.evt-phase {
+  background: #1e293b;
+  color: #93c5fd;
+  text-transform: lowercase;
+}
+
+.badge.evt-kind {
+  background: #2a2f37;
+  color: #cbd5e1;
+}
+
+.evt-marker {
+  color: #fca5a5;
+  font-weight: 700;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.evt-payload {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

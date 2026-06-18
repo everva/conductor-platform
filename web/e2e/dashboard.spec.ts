@@ -89,3 +89,50 @@ test("renders the fleet dashboard with mocked gateway", async ({ page }) => {
   await expect(page.getByRole("cell", { name: "t1", exact: true })).toBeVisible();
   await expect(page.getByText("approved")).toBeVisible();
 });
+
+const EVENTS = [
+  {
+    id: "ev-1",
+    ts: "2026-06-18T00:00:01.000Z",
+    project: "p1",
+    task: "t1",
+    phase: "develop",
+    kind: "progress",
+    payload: { msg: "building" },
+  },
+  {
+    id: "ev-2",
+    ts: "2026-06-18T00:00:02.000Z",
+    project: "p1",
+    task: "t1",
+    phase: "review",
+    kind: "intervention-needed",
+    payload: { reason: "human gate" },
+  },
+];
+
+test("renders the event stream tab with backfilled history (3B-2)", async ({ page }) => {
+  await page.route("**/ws*", (route) => route.fulfill({ status: 200, body: "" }));
+  await page.route("**/status", (route) => route.fulfill(json(STATUS)));
+  await page.route("**/hosts", (route) => route.fulfill(json(HOSTS)));
+  // /events must be registered AFTER the bare /projects glob would not match it;
+  // it is its own path so order vs projects/tasks is irrelevant here.
+  await page.route("**/events*", (route) => route.fulfill(json(EVENTS)));
+  await page.route("**/projects", (route) => route.fulfill(json(PROJECTS)));
+  await page.route("**/projects/*/tasks", (route) => route.fulfill(json(TASKS)));
+
+  await page.goto("/");
+  await page.getByLabel(/api token/i).fill("test-token");
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page.getByRole("region", { name: /fleet status/i })).toBeVisible();
+
+  // Switch to the Events tab; the backfilled history renders newest-first with the
+  // intervention row highlighted (marker visible).
+  await page.getByRole("tab", { name: /events/i }).click();
+  await expect(page.getByRole("region", { name: /event stream/i })).toBeVisible();
+  await expect(page.getByLabel(/intervention needed/i)).toBeVisible();
+  await expect(page.getByText('{"msg":"building"}')).toBeVisible();
+  // The pause toggle is present (its display-freeze behavior is covered exhaustively
+  // by the deterministic vitest suite; here we only assert it renders in-browser).
+  await expect(page.getByRole("button", { name: /^pause$/i })).toBeVisible();
+});
