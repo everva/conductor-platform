@@ -63,7 +63,10 @@ Not: builder tick-bug (~1dk tick-ölümü) nedeniyle A-3..C-2 Agent'larla kodlan
   En riskli varsayımı (engine mekaniği + LLM dayanıklılık + holdout izolasyon) önce test eder. (ADR-0013)
 - **Faz-1b (ölçek):** Postgres + resource-governor (paralel) + intake + scaffolder + events + governance-policy + heartbeat.
 - **Faz-2:** Engine 2. reçete + çok-host capability routing (iOS-lane→Mac) + sentinel Katman-2.
-- **Faz-3:** Observability UI (VS Code/web), Kontaktör-buildable.
+- **Faz-3:** ✅ TAMAM — API gateway (`cmd/conductor-api`, ADR-0025) + web cockpit (`web/`, ADR-0026: dashboard/
+  event-akış/müdahale/intake-chat) + uçtan-uca capstone (UI-origin task→Kontaktör develop/verify/merge→cockpit gözler).
+  Detay: [../PHASE-3-PLAN.md](../PHASE-3-PLAN.md). Gateway+web fork'a köprü (Faz-4 reuse eder).
+- **Faz-4 (sıradaki):** editör fork (devin/cursor-tarzı ajan-yönetimi) — gateway'i + web bileşenlerini reuse eder.
 
 ## Taşınan disiplin
 Orchestrator-only (kod sub-agent'a delege; karar-notu istisna) · Rule#9 (self-report'a güvenme,

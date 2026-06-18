@@ -161,5 +161,18 @@ Gateway (3A) olduğu gibi reuse; web bileşenleri (3B) fork panellerine (webview
   3C/sonra gateway DTO'ya snake_case json-tag eklenebilir, UI gerçeğe uyuyor.)
 - ✅✅ **DALGA 3B — WEB COCKPIT TAMAM** (3B-0 iskele · 3B-1 dashboard · 3B-2 event-akış · 3B-3 müdahale · 3B-4 intake-chat).
   Kullanıcının "yazışarak senaryo üret" çekirdek vizyonu UI'da canlı (gerçek claude -p ile uçtan-uca kanıtlı, 3B-4a).
-- Sıradaki: **DALGA 3C — 3C-1** uçtan-uca cockpit demo (UI'dan gerçek task sür: intake-chat→senaryo→Kontaktör'ü izle→
-  approve→merge; auth sertleştirme; cockpit'in kendi CI gate'i Go+frontend).
+- ✅ **3C-1 — Uçtan-uca + sertleştirme** (2026-06-18, commit `9016682`):
+  - **Frontend CI gate** (.github/workflows/ci.yml `frontend` job): Node20 + npm ci + **events.gen.ts↔Go codegen sync
+    check** (drift→fail) + tsc + eslint + vitest + build + Playwright(chromium). Go `gate` job'ıyla yan yana.
+  - **Auth sertleştirme** (gateway): startup'ta zayıf/placeholder token reddi (`validateToken`: <16 char VEYA
+    "REPLACE_ME"→exit 2; secret.yaml placeholder'ıyla deploy edilemez). Test'li (leak'siz).
+  - **Capstone uçtan-uca canlı demo** (kendi koştum): [UI-origin] gateway onboard + intake CAP-1 → Kontaktör daemon
+    (AYRI süreç, paylaşılan PG, deterministik performer) develop→verify (**public gate + hidden holdout store://**)→
+    **merge** → CAP-1 **done** → **cockpit cross-process /events ile tüm yaşam döngüsünü gözledi**
+    `[(develop,started),(verify,started),(merge,merge)]` + squash-merge `28f430f land CAP-1` + `outcome=merged
+    verdict=pass review=pass`. Tam döngü canlı kanıtlandı.
+  - Doğrulama (Rule#9): CI YAML valid + codegen-sync temiz; auth gate (build/vet/race/golangci-0/regresyon) yeşil;
+    capstone gerçek-PG + gerçek-daemon + gerçek-merge cross-process → ALL PASS.
+- ✅✅✅ **DALGA 3C TAMAM → FAZ-3 TAMAMLANDI.** API gateway (3A) + web cockpit (3B) + uçtan-uca/sertleştirme (3C).
+  Kullanıcının "yazışarak senaryo üret → standart kalite kapısından geçir" vizyonu web cockpit'te canlı, uçtan-uca
+  kanıtlı. **Faz-4 = editör fork** (gateway+web bileşenleri reuse; bu plandaki köprü gerekçesi gerçekleşti).
