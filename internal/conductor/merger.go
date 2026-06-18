@@ -60,18 +60,57 @@ func (m *GitMerger) SquashMerge(ctx context.Context, project statestore.Project,
 	if err := git(ctx, repo, "checkout", project.BaseBranch); err != nil {
 		return "", fmt.Errorf("git merger: checkout base %q: %w", project.BaseBranch, err)
 	}
+
+	// Record the base tip BEFORE touching the working tree. On ANY failure after
+	// this checkout (a squash conflict, a failed commit, ...) the base checkout must
+	// be restored to THIS exact commit with a clean worktree+index so the next tick
+	// re-derives from pristine state — a dirty/conflicted base corrupts the loop. The
+	// base ref must NOT advance on failure.
+	baseRef, err := gitOut(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("git merger: resolve base ref %q: %w", project.BaseBranch, err)
+	}
+	baseRef = strings.TrimSpace(baseRef)
+
 	if err := git(ctx, repo, "merge", "--squash", ws.Branch); err != nil {
+		m.restoreBase(ctx, repo, baseRef)
 		return "", fmt.Errorf("git merger: squash %q: %w", ws.Branch, err)
 	}
 	msg := fmt.Sprintf("%s\n\n[task:%s]", commitSubject(task), task.ID)
 	if err := git(ctx, repo, "commit", "--allow-empty", "-m", msg); err != nil {
+		m.restoreBase(ctx, repo, baseRef)
 		return "", fmt.Errorf("git merger: commit squash for %q: %w", task.ID, err)
 	}
 	sha, err := gitOut(ctx, repo, "rev-parse", "HEAD")
 	if err != nil {
+		// The commit succeeded but we cannot read it back: the base was advanced, so
+		// do NOT restore (that would discard a real merge); surface the read error.
 		return "", fmt.Errorf("git merger: resolve merge sha: %w", err)
 	}
 	return strings.TrimSpace(sha), nil
+}
+
+// restoreBase returns the base checkout to baseRef with a CLEAN worktree+index
+// after a failed merge, so the base branch is back at its original commit and the
+// next tick starts from pristine state. It is best-effort and idempotent: it
+// aborts an in-progress merge if one exists (a real --merge leaves MERGE_HEAD; a
+// --squash conflict does not, so the abort is a harmless no-op there), hard-resets
+// the index+tracked files to baseRef, and removes untracked residue the squash
+// left behind. Errors are non-fatal — they are wrapped onto the returned error's
+// context by the caller's primary failure, and there is nothing safer to do than
+// best-effort cleanup. It NEVER advances the base ref.
+func (m *GitMerger) restoreBase(ctx context.Context, repo, baseRef string) {
+	// `git merge --abort` only succeeds when a merge is in progress (MERGE_HEAD).
+	// A squash conflict leaves no MERGE_HEAD, so this errors harmlessly; the
+	// subsequent hard reset is what actually clears a squash conflict's index/worktree.
+	_ = git(ctx, repo, "merge", "--abort")
+	// Restore tracked files + index to the recorded base tip (clears conflict
+	// markers and un-advances the ref to exactly baseRef).
+	_ = git(ctx, repo, "reset", "--hard", baseRef)
+	// Drop any untracked files the squash introduced (new files from the task
+	// branch become untracked after the reset). -d removes empty dirs too; we do
+	// NOT pass -x so a project's ignored build artifacts are left untouched.
+	_ = git(ctx, repo, "clean", "-fd")
 }
 
 // repoFor resolves the repository the merge runs in: the injected clone path when

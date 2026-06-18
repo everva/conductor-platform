@@ -673,3 +673,80 @@ func TestGitMerger_SquashMerge_RealRepo(t *testing.T) {
 		t.Fatalf("returned sha %q != develop HEAD %q", sha, head)
 	}
 }
+
+// TestGitMerger_SquashMerge_ConflictRestoresCleanBase proves FIX #4: when the
+// per-task branch CONFLICTS with the base (both modify the same line divergently),
+// SquashMerge returns an error AND leaves the base checkout pristine — the base
+// branch is back at its original commit, `git status --porcelain` is EMPTY, and no
+// merge state is left behind. A dirty/conflicted base would corrupt the next tick.
+func TestGitMerger_SquashMerge_ConflictRestoresCleanBase(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	gitT(t, repo, "init", "-q", "-b", "develop")
+	gitT(t, repo, "config", "user.name", "test")
+	gitT(t, repo, "config", "user.email", "test@test")
+
+	conflictFile := filepath.Join(repo, "conflict.txt")
+	if err := os.WriteFile(conflictFile, []byte("original\n"), 0o644); err != nil {
+		t.Fatalf("write base: %v", err)
+	}
+	gitT(t, repo, "add", ".")
+	gitT(t, repo, "commit", "-q", "-m", "base")
+
+	// Cut a task branch that changes the SAME line one way...
+	branch := "conductor/proj-1/T-conflict"
+	gitT(t, repo, "checkout", "-q", "-b", branch)
+	if err := os.WriteFile(conflictFile, []byte("from-branch\n"), 0o644); err != nil {
+		t.Fatalf("write branch: %v", err)
+	}
+	gitT(t, repo, "add", ".")
+	gitT(t, repo, "commit", "-q", "-m", "branch change")
+
+	// ...and advance the base to change the SAME line the OTHER way, so a squash
+	// merge of the branch into the base genuinely conflicts.
+	gitT(t, repo, "checkout", "-q", "develop")
+	if err := os.WriteFile(conflictFile, []byte("from-base\n"), 0o644); err != nil {
+		t.Fatalf("write base divergent: %v", err)
+	}
+	gitT(t, repo, "add", ".")
+	gitT(t, repo, "commit", "-q", "-m", "base diverges")
+
+	baseBefore := gitT(t, repo, "rev-parse", "develop")
+
+	m := NewGitMerger(func(string) string { return repo })
+	project := statestore.Project{ID: "proj-1", BaseBranch: "develop"}
+	task := statestore.Task{ID: "T-conflict", ProjectID: "proj-1"}
+	ws := engine.Workspace{Path: repo, Branch: branch}
+
+	sha, err := m.SquashMerge(ctx, project, task, ws)
+	if err == nil {
+		t.Fatalf("SquashMerge: expected conflict error, got sha %q", sha)
+	}
+	if sha != "" {
+		t.Fatalf("SquashMerge: expected empty sha on failure, got %q", sha)
+	}
+
+	// The base ref must NOT have advanced.
+	baseAfter := gitT(t, repo, "rev-parse", "develop")
+	if baseAfter != baseBefore {
+		t.Fatalf("base ref advanced on failed merge: before=%s after=%s", baseBefore, baseAfter)
+	}
+
+	// The base checkout must be CLEAN: no conflict markers, no staged residue, no
+	// untracked files, no in-progress merge state.
+	if status := gitT(t, repo, "status", "--porcelain"); status != "" {
+		t.Fatalf("base checkout dirty after failed merge:\n%s", status)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".git", "MERGE_HEAD")); !os.IsNotExist(err) {
+		t.Fatalf("MERGE_HEAD still present after failed merge (err=%v)", err)
+	}
+
+	// The conflicting file must hold the BASE content, not a merged/marked version.
+	got, err := os.ReadFile(conflictFile)
+	if err != nil {
+		t.Fatalf("read conflict file: %v", err)
+	}
+	if string(got) != "from-base\n" {
+		t.Fatalf("conflict file not restored to base content, got %q", got)
+	}
+}
