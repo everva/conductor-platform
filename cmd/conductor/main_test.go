@@ -597,6 +597,54 @@ func TestRealDB_OnceTickMigratesAndRuns(t *testing.T) {
 	d2.Close()
 }
 
+// TestSplitArgs covers the quote-aware tokenizer (FIX #3): the no-quote default
+// must stay byte-identical to strings.Fields, single quotes are literal, double
+// quotes honor \" / \\ escapes, adjacent quoted/unquoted chunks collapse into one
+// token, the empty string yields an empty slice, and an unterminated quote errors.
+func TestSplitArgs(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    []string
+		wantErr bool
+	}{
+		{name: "empty", in: "", want: nil},
+		{name: "all whitespace", in: "  \t \n ", want: nil},
+		{name: "no-quote default unchanged", in: "claude -p", want: []string{"claude", "-p"}},
+		{name: "multiple spaces and tabs collapse", in: "  go   test\t./...  ", want: []string{"go", "test", "./..."}},
+		{name: "double-quoted multiword arg", in: `claude -p "the prompt with spaces"`, want: []string{"claude", "-p", "the prompt with spaces"}},
+		{name: "single-quoted multiword arg", in: `claude -p 'the prompt with spaces'`, want: []string{"claude", "-p", "the prompt with spaces"}},
+		{name: "adjacent flag + quoted value collapse", in: `-p"a b"`, want: []string{"-pa b"}},
+		{name: "adjacent single-quote chunk collapse", in: `'a'b`, want: []string{"ab"}},
+		{name: "adjacent quoted chunks collapse", in: `"a"'b'"c"`, want: []string{"abc"}},
+		{name: "escaped double quote inside dquote", in: `say "he said \"hi\""`, want: []string{"say", `he said "hi"`}},
+		{name: "escaped backslash inside dquote", in: `path "a\\b"`, want: []string{"path", `a\b`}},
+		{name: "backslash before other byte kept literal", in: `"a\nb"`, want: []string{`a\nb`}},
+		{name: "single quotes keep backslash literal", in: `'a\b'`, want: []string{`a\b`}},
+		{name: "empty quoted arg yields empty token", in: `cmd ""`, want: []string{"cmd", ""}},
+		{name: "default holdout cmd", in: "go test ./...", want: []string{"go", "test", "./..."}},
+		{name: "unterminated double quote", in: `claude -p "oops`, wantErr: true},
+		{name: "unterminated single quote", in: `claude -p 'oops`, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := splitArgs(tc.in)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("splitArgs(%q) = %v, want error", tc.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("splitArgs(%q): unexpected error: %v", tc.in, err)
+			}
+			if !equalStrs(got, tc.want) {
+				t.Fatalf("splitArgs(%q) = %#v, want %#v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func equalStrs(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

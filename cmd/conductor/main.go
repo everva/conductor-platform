@@ -64,13 +64,15 @@ const (
 	defaultTimeout = 30 * time.Minute
 	// defaultDevelopCmd is the subscription `claude -p` style performer the engine
 	// runs in the worktree. It carries NO key — the subscription session does. It
-	// is split on spaces into an argv (no shell). Override with -develop-cmd.
+	// is split into an argv with quote-aware tokenization (no shell expansion).
+	// Override with -develop-cmd.
 	defaultDevelopCmd = "claude -p"
 	// defaultHoldoutCmd is the argv used to run the injected hidden holdout suite
 	// inside the verify-worktree when a -holdout-store is configured (ADR-0018). It
 	// runs the project's full Go test suite over the reviewed code with the holdout
-	// files injected; it is split on spaces into an argv (no shell). Override with
-	// -holdout-cmd. It is unused when no holdout store is configured.
+	// files injected; it is split into an argv with quote-aware tokenization (no
+	// shell expansion). Override with -holdout-cmd. It is unused when no holdout
+	// store is configured.
 	defaultHoldoutCmd = "go test ./..."
 	// defaultHeartbeatStale is the age past which the independent stall-detector
 	// (-check) considers the heartbeat STALE. Generous relative to the default
@@ -236,7 +238,7 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 	rootDir := fs.String("root", envOr("CONDUCTOR_ROOT", ""), "workspace root for clones/worktrees (required)")
 	baseBranch := fs.String("base", envOr("CONDUCTOR_BASE_BRANCH", defaultBaseBranch), "integration base branch")
 	developCmd := fs.String("develop-cmd", envOr("CONDUCTOR_DEVELOP_CMD", defaultDevelopCmd),
-		"performer command run in the worktree (space-split argv, no shell; subscription claude -p style, no key)")
+		`performer command run in the worktree (quote-aware argv, no shell expansion; e.g. claude -p "do the task"; subscription claude -p style, no key)`)
 	hostID := fs.String("host", envOr("CONDUCTOR_HOST_ID", ""), "host id recorded on leases (default: hostname)")
 	interval := fs.Duration("interval", envDurationOr("CONDUCTOR_INTERVAL", defaultInterval), "gap between ticks in loop mode")
 	timeout := fs.Duration("timeout", envDurationOr("CONDUCTOR_TIMEOUT", defaultTimeout), "per-develop subprocess timeout")
@@ -261,7 +263,7 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 	holdoutStore := fs.String("holdout-store", envOr("CONDUCTOR_HOLDOUT_STORE", ""),
 		"repo-EXTERNAL root dir the hidden holdout (ADR-0018) is resolved under; empty = inert noop holdout (backward compatible). Path is logged, contents are not")
 	holdoutCmd := fs.String("holdout-cmd", envOr("CONDUCTOR_HOLDOUT_CMD", defaultHoldoutCmd),
-		"argv that runs the injected holdout suite in the verify-worktree (space-split, no shell); used only when -holdout-store is set")
+		"argv that runs the injected holdout suite in the verify-worktree (quote-aware, no shell expansion); used only when -holdout-store is set")
 	recipeDir := fs.String("recipe-dir", envOr("CONDUCTOR_RECIPE_DIR", ""),
 		"repo dir whose .conductor/config.yaml (ADR-0009) supplies the verify gate recipe; empty = built-in default gates (go build + go test + go vet). A configured recipe may opt into golangci-lint, which must then be installed or the gate fails")
 
@@ -307,7 +309,10 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		return config{}, fmt.Errorf("-interval must be positive in loop mode (got %s)", *interval)
 	}
 
-	cmd := splitArgv(*developCmd)
+	cmd, err := splitArgs(*developCmd)
+	if err != nil {
+		return config{}, fmt.Errorf("-develop-cmd: %w", err)
+	}
 	if len(cmd) == 0 {
 		return config{}, errors.New("-develop-cmd must not be empty")
 	}
@@ -315,7 +320,10 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 	// The holdout suite argv is parsed regardless, but only meaningful when a
 	// holdout store is configured. When the store IS set, an empty holdout command
 	// would leave the verifier with nothing to run, so reject it loudly.
-	hcmd := splitArgv(*holdoutCmd)
+	hcmd, err := splitArgs(*holdoutCmd)
+	if err != nil {
+		return config{}, fmt.Errorf("-holdout-cmd: %w", err)
+	}
 	if *holdoutStore != "" && len(hcmd) == 0 {
 		return config{}, errors.New("-holdout-cmd must not be empty when -holdout-store is set")
 	}
@@ -932,11 +940,88 @@ func (d *Daemon) tick(ctx context.Context) (conductor.TickResult, error) {
 	return res, nil
 }
 
-// splitArgv splits a command string into an argv on whitespace, dropping empty
-// fields. It is intentionally simple (no shell quoting): the develop command is
-// an operator-supplied program + flags, not a shell pipeline.
-func splitArgv(s string) []string {
-	return strings.Fields(s)
+// splitArgs splits a command string into an argv with QUOTE-AWARE, shell-like
+// word splitting — but the result is executed WITHOUT a shell, so NO `$`
+// expansion, NO pipes, and NO globbing ever happen: it is pure tokenization.
+//
+// Rules:
+//   - Bare whitespace (space/tab/newline) separates tokens.
+//   - A `'...'` chunk is a literal token chunk: every byte until the closing `'`
+//     is taken verbatim (no escapes inside single quotes).
+//   - A `"..."` chunk groups text and honors only the escapes `\"` and `\\`
+//     (a backslash before any other byte is kept literally, like the shell).
+//   - Adjacent quoted/unquoted chunks with no whitespace between them collapse
+//     into ONE token, so `-p"a b"` -> `-pa b` and `'a'b` -> `ab`.
+//   - The empty (or all-whitespace) string yields an empty slice.
+//   - An unterminated single or double quote is a clear error.
+//
+// The no-quote case is identical to strings.Fields: `claude -p` -> ["claude","-p"].
+func splitArgs(s string) ([]string, error) {
+	var (
+		args   []string
+		cur    strings.Builder
+		hasTok bool // a token is in progress (even if empty, e.g. "" -> one empty arg)
+	)
+	flush := func() {
+		if hasTok {
+			args = append(args, cur.String())
+			cur.Reset()
+			hasTok = false
+		}
+	}
+
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		c := runes[i]
+		switch c {
+		case ' ', '\t', '\n', '\r', '\f', '\v':
+			flush()
+		case '\'':
+			hasTok = true
+			j := i + 1
+			for j < len(runes) && runes[j] != '\'' {
+				cur.WriteRune(runes[j])
+				j++
+			}
+			if j >= len(runes) {
+				return nil, fmt.Errorf("unterminated single quote in %q", s)
+			}
+			i = j // skip the closing quote
+		case '"':
+			hasTok = true
+			j := i + 1
+			closed := false
+			for j < len(runes) {
+				if runes[j] == '\\' && j+1 < len(runes) {
+					next := runes[j+1]
+					if next == '"' || next == '\\' {
+						cur.WriteRune(next)
+						j += 2
+						continue
+					}
+					// A backslash before any other byte is kept literally.
+					cur.WriteRune('\\')
+					j++
+					continue
+				}
+				if runes[j] == '"' {
+					closed = true
+					break
+				}
+				cur.WriteRune(runes[j])
+				j++
+			}
+			if !closed {
+				return nil, fmt.Errorf("unterminated double quote in %q", s)
+			}
+			i = j // skip the closing quote
+		default:
+			hasTok = true
+			cur.WriteRune(c)
+		}
+	}
+	flush()
+	return args, nil
 }
 
 // envOr returns the value of env var key, or def when it is unset/empty.
