@@ -158,6 +158,48 @@ func (r *Reconciler) ReconcileTasks(ctx context.Context, project statestore.Proj
 	return nil
 }
 
+// HostHeartbeatOwnerLive builds an OwnerLive predicate for Config.OwnerLive that
+// reports a lease's owner DEAD when the owning HOST's last heartbeat is stale
+// (ADR-0024 agent-per-host, 2B-3). In a multi-host deployment PID-liveness is
+// meaningless across machines, so cross-host stale-lease reaping must be driven
+// by the host registry's LastHeartbeat instead: a host that stopped heartbeating
+// is treated as down and its lease becomes reapable, freeing the repo for another
+// capable host. A host whose heartbeat is FRESH (within hostStale of `now`) is
+// kept LIVE so a working host's lease is never wrongly reaped.
+//
+// Semantics (deterministic; `now` is injected, never read from the wall clock):
+//   - Owner host has a fresh heartbeat (now - LastHeartbeat <= hostStale) → LIVE
+//     (returns true): the lease is NOT reaped by this predicate.
+//   - Owner host's heartbeat is stale (now - LastHeartbeat > hostStale) → DEAD
+//     (returns false): the lease is reapable.
+//   - Owner host has NO registry row (GetHost → ErrNotFound) → treated as
+//     DEAD/unknown → reapable (returns false), CONSERVATIVELY: an unregistered or
+//     forgotten host cannot prove liveness, so its lease must not pin the repo
+//     forever. The TTL backstop (Config.LeaseTTL) still applies independently, so
+//     even a host that briefly disappears is bounded by both seams.
+//   - A store error other than ErrNotFound → treated as LIVE (returns true) so a
+//     transient lookup failure does NOT cause a spurious reap; the TTL backstop
+//     still bounds a truly dead lease.
+//
+// hostStale must be > 0; a non-positive threshold treats EVERY registered host as
+// dead (now - LastHeartbeat > 0 for any past heartbeat), which is almost never
+// intended, so callers should pass a real threshold (e.g. several heartbeat
+// intervals). The returned predicate looks the host up through the store on every
+// call (no caching), so it reflects the registry as of the pass.
+func HostHeartbeatOwnerLive(ctx context.Context, store statestore.StateStore, hostStale time.Duration, now time.Time) func(l statestore.Lease) bool {
+	return func(l statestore.Lease) bool {
+		h, err := store.GetHost(ctx, l.HostID)
+		if err != nil {
+			if errors.Is(err, statestore.ErrNotFound) {
+				return false // unknown/unregistered host → conservatively dead → reapable.
+			}
+			return true // transient lookup error → keep live; TTL backstop still bounds it.
+		}
+		age := now.Sub(h.LastHeartbeat)
+		return age <= hostStale // fresh heartbeat → live; stale → dead → reapable.
+	}
+}
+
 // parseTaskTrailer extracts the task ID from an EXACT `[task:<id>]` trailer
 // (ADR-0004 §Güncelleme). The whole trailer must be exactly "[task:<id>]" with a
 // non-empty id and no surrounding noise, so a malformed or decorated trailer

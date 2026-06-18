@@ -198,3 +198,28 @@ Deterministik kanıt = kalite kapısı (LLM asla karar mercii); sahte-yeşil ASL
   tools/builder DOKUNULMADI; Picker imzası değişMEDİ (routing registry config'inde); additive. Offline gate
   (build+test+vet+golangci v2.12.0) + e2e (E2E ./internal/conductor/) + `-race ./internal/registry/ ./internal/conductor/`
   YEŞİL; gofmt temiz; yeni dep yok; secret yok.
+
+- **Dalga B — 2B-3 (çok-host kanıtı agent-as-daemon + cross-host stale-lease reaping, ADR-0024)** ✅ done. İki konu:
+  (a) **Cross-host stale-lease reaping (host-heartbeat tabanlı):** PID-liveness makineler arası ANLAMSIZ; ölü bir host'un
+  lease'i HOST-HEARTBEAT bayatlığıyla serbest bırakılır. Yeni ADDITIVE yardımcı `reconcile.HostHeartbeatOwnerLive(ctx, store,
+  hostStale, now)` → `Config.OwnerLive` predicate'i kurar (B-3 seam'i; reconcile.Config.OwnerLive imzası DEĞİŞMEDİ).
+  **Semantik (deterministik, `now` enjekte):** owner host heartbeat'i taze (`now - LastHeartbeat <= hostStale`) → LIVE
+  (lease KORUNUR); bayat (`> hostStale`) → DEAD → reapable; host registry satırı YOK (GetHost ErrNotFound) → konservatif
+  DEAD/unknown → reapable (kanıtlayamaz, repo'yu sonsuza pinlememeli); ErrNotFound dışı store hatası → LIVE (geçici hata
+  spurious reap yapmamalı, TTL backstop yine bağlar). **TTL backstop korunur** (Config.LeaseTTL bağımsız ikinci seam).
+  **TAZE host'un lease'i YANLIŞ reap EDİLMEZ** (testle kanıtlandı: TTL=0 iken bile 2h-eski ama taze-heartbeat'li host
+  KORUNUR). Wiring: `reconcile.New(store, git, Config{LeaseTTL:…, OwnerLive: HostHeartbeatOwnerLive(…)})` (reconcile ZATEN
+  ayrı job olarak tasarlandı — ADR-0016; daemon-içi yeni background job EKLENMEDİ, frozen-engine riski sıfır).
+  (b) **İki-agent koordinasyon kanıtı (deterministik, gerçek-ağ YOK):** `internal/conductor/twohost_test.go` — TEK paylaşılan
+  in-memory StateStore üstünde İKİ Registry (her biri `WithCapabilities` = o host'un caps'i, daemon Picker kurulumuyla aynı):
+  host-linux `[linux,backend]`, host-mac `[ios-build,macos]`; tek proje, iki task (T-ios `Requires:[ios-build]`, T-generic
+  no-requires). Assert: **(1) host-üstü single-winner lease (N-4):** iki agent AYNI repoyu eşzamanlı lease'ler →
+  TAM 1 kazanır, diğeri ErrLeaseHeld (çift-yazım yok, tek lease satırı; N-4 concurrent testinin agent-seviyesi aynası).
+  **(2) capability routing (2B-2):** T-ios SADECE host-mac'te pickable; host-linux skip eder (T-generic'i alır; T-generic
+  done olunca host-linux NOTHING/ErrNotFound, host-mac T-ios). **(3) cross-host reap (2B-3):** host-mac ölü (bayat
+  heartbeat) lease tutarken → host-heartbeat OwnerLive lease'i serbest bırakır; TAZE host'un (host-linux başka repoda)
+  lease'i KORUNUR; reap sonrası capable host repoyu yeniden lease'ler. **reconcile unit testleri:** stale-host reaped,
+  unknown-host reaped (konservatif), fresh-host kept (TTL=0). engine.go + statestore imza + tools/builder DOKUNULMADI;
+  yalnız ADDITIVE (yeni exported `HostHeartbeatOwnerLive` + iki yeni test dosyası). Offline gate (build+test+vet+golangci
+  v2.12.0) + e2e (E2E ./internal/conductor/) + `-race ./internal/reconcile/ ./internal/conductor/ ./internal/registry/`
+  YEŞİL; gofmt temiz; yeni dep yok; secret yok.

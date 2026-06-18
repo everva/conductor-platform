@@ -155,6 +155,91 @@ func TestReconciler_Idempotent(t *testing.T) {
 	}
 }
 
+// TestHostHeartbeatOwnerLive_StaleHostReaped proves the cross-host stale-lease
+// reaping path (2B-3): a host whose registry heartbeat is stale is treated as DEAD
+// so its lease is reaped, while a host with a fresh heartbeat is LIVE so its lease
+// is kept — driven entirely by the host registry's LastHeartbeat (not PID), the
+// only liveness signal meaningful across machines.
+func TestHostHeartbeatOwnerLive_StaleHostReaped(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	const hostStale = 90 * time.Second
+
+	// host-mac: stale heartbeat (5m ago) holding the lease on proj.
+	// host-linux: fresh heartbeat (10s ago) holding a lease on proj-2.
+	if err := s.CreateProject(ctx, statestore.Project{ID: "proj-2", Repo: "o/r", BaseBranch: "develop"}); err != nil {
+		t.Fatalf("seed proj-2: %v", err)
+	}
+	if err := s.RegisterHost(ctx, statestore.Host{ID: "host-mac", Capabilities: []string{"ios-build"}, LastHeartbeat: now.Add(-5 * time.Minute)}); err != nil {
+		t.Fatalf("register host-mac: %v", err)
+	}
+	if err := s.RegisterHost(ctx, statestore.Host{ID: "host-linux", Capabilities: []string{"linux"}, LastHeartbeat: now.Add(-10 * time.Second)}); err != nil {
+		t.Fatalf("register host-linux: %v", err)
+	}
+	mustAcquire(t, s, statestore.Lease{ProjectID: proj, HostID: "host-mac", TaskID: "T-ios", AcquiredAt: now.Add(-1 * time.Minute)})
+	mustAcquire(t, s, statestore.Lease{ProjectID: "proj-2", HostID: "host-linux", TaskID: "T-generic", AcquiredAt: now.Add(-1 * time.Minute)})
+
+	// LeaseTTL deliberately LONG so TTL does NOT reap; only the host-heartbeat
+	// OwnerLive should free the stale host's lease (isolates the new predicate).
+	ol := HostHeartbeatOwnerLive(ctx, s, hostStale, now)
+	r := New(s, fakeGitLog{}, Config{LeaseTTL: time.Hour, OwnerLive: ol})
+	if err := r.ReapLeases(ctx, now); err != nil {
+		t.Fatalf("ReapLeases: %v", err)
+	}
+
+	if _, err := s.GetLease(ctx, proj); err == nil {
+		t.Fatalf("stale-host (host-mac) lease should have been reaped")
+	}
+	if _, err := s.GetLease(ctx, "proj-2"); err != nil {
+		t.Fatalf("fresh-host (host-linux) lease must be kept, got %v", err)
+	}
+}
+
+// TestHostHeartbeatOwnerLive_UnknownHostReaped proves the conservative
+// missing-host rule: a lease whose owner has NO registry row is treated as
+// dead/unknown and reaped (it cannot prove liveness).
+func TestHostHeartbeatOwnerLive_UnknownHostReaped(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+
+	mustAcquire(t, s, statestore.Lease{ProjectID: proj, HostID: "ghost", TaskID: "T-1", AcquiredAt: now.Add(-1 * time.Second)})
+
+	ol := HostHeartbeatOwnerLive(ctx, s, time.Minute, now)
+	r := New(s, fakeGitLog{}, Config{LeaseTTL: time.Hour, OwnerLive: ol})
+	if err := r.ReapLeases(ctx, now); err != nil {
+		t.Fatalf("ReapLeases: %v", err)
+	}
+	if _, err := s.GetLease(ctx, proj); err == nil {
+		t.Fatalf("unregistered-host lease should have been reaped (conservative)")
+	}
+}
+
+// TestHostHeartbeatOwnerLive_FreshHostKept asserts the predicate alone (no TTL)
+// keeps a fresh host's lease: OwnerLive returns true so isStale is false.
+func TestHostHeartbeatOwnerLive_FreshHostKept(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+
+	if err := s.RegisterHost(ctx, statestore.Host{ID: "live", LastHeartbeat: now.Add(-1 * time.Second)}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	mustAcquire(t, s, statestore.Lease{ProjectID: proj, HostID: "live", TaskID: "T-1", AcquiredAt: now.Add(-2 * time.Hour)})
+
+	// LeaseTTL=0 disables the TTL backstop, so ONLY OwnerLive can decide; a fresh
+	// host must keep its lease even though it is 2h old.
+	ol := HostHeartbeatOwnerLive(ctx, s, time.Minute, now)
+	r := New(s, fakeGitLog{}, Config{LeaseTTL: 0, OwnerLive: ol})
+	if err := r.ReapLeases(ctx, now); err != nil {
+		t.Fatalf("ReapLeases: %v", err)
+	}
+	if _, err := s.GetLease(ctx, proj); err != nil {
+		t.Fatalf("fresh host's lease must NOT be reaped, got %v", err)
+	}
+}
+
 // --- helpers ---
 
 func mustAcquire(t *testing.T, s statestore.StateStore, l statestore.Lease) {
