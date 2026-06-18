@@ -75,6 +75,16 @@ func (s *apiServer) routes() http.Handler {
 	mux.Handle("GET /hosts", s.requireAuth(http.HandlerFunc(s.handleHosts)))
 	mux.Handle("GET /status", s.requireAuth(http.HandlerFunc(s.handleStatus)))
 
+	// Protected control endpoints (3A-3): POST mutations that reflect into the
+	// shared store; the daemon honors them on its next tick (no direct command).
+	// Go 1.22 method-aware routing keeps these distinct from the GET patterns above.
+	mux.Handle("POST /projects", s.requireAuth(http.HandlerFunc(s.handleOnboard)))
+	mux.Handle("POST /projects/{id}/intake", s.requireAuth(http.HandlerFunc(s.handleIntake)))
+	mux.Handle("POST /projects/{id}/pause", s.requireAuth(http.HandlerFunc(s.handlePause)))
+	mux.Handle("POST /projects/{id}/resume", s.requireAuth(http.HandlerFunc(s.handleResume)))
+	mux.Handle("POST /projects/{id}/abort", s.requireAuth(http.HandlerFunc(s.handleAbort)))
+	mux.Handle("POST /projects/{id}/approve", s.requireAuth(http.HandlerFunc(s.handleApprove)))
+
 	// Historical event replay: standard bearer auth (header only).
 	mux.Handle("GET /events", s.requireAuth(http.HandlerFunc(s.handleEvents)))
 
