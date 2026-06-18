@@ -42,7 +42,8 @@ Not: builder tick-bug (~1dk tick-ölümü) nedeniyle A-3..C-2 Agent'larla kodlan
 | [0019](0019-builder-light-conductor.md) | İnşa aracı (builder) | xirigo'dan port light-conductor (`tools/builder/`); Go-gate; Faz-1a'yı otonom kodlar; ADR-0015/0016 canlı test; olgunlaşınca dogfood | ✅ Kapandı → **EMEKLİ** (ürün daemon'ı aştı; `tools/builder/DEPRECATED.md`, dogfood=`docs/DOGFOOD.md`) |
 | [0020](0020-control-pause-temsili.md) | Control/pause temsili | Pause+control vokabüleri (engine.Command); marker-task ilk temsil **→ ADR-0021 ile Project-durumuna taşındı (supersede)**; abort follow-up | ✅ Kapandı (pause temsili 0021'e taşındı) |
 | [0021](0021-statestore-additive-genisletme.md) | StateStore additive genişletme | "Frozen"=imza-bozan yasak ama **additive serbest** (kullanıcı onayı); UpdateProject eklendi; pause birinci-sınıf Project.Paused durumu (marker-task emekli); abort=Task.AbortRequested | ✅ Uygulandı (F-1 pause, F-2 abort) |
-| [0022](0022-merge-push-deploy-modeli.md) | Merge-sonrası push/deploy | Opt-in `-push` (default kapalı=yerel); gh-token auth; push-fail→done-kalır + açık event (sahte-yeşil/sessiz-kayıp yok); remote-executor ayrı ADR (2B-0) | 🔄 Uygulanıyor (1.5-c) |
+| [0022](0022-merge-push-deploy-modeli.md) | Merge-sonrası push/deploy | Opt-in `-push` (default kapalı=yerel); gh-token auth; push-fail→done-kalır + açık event (sahte-yeşil/sessiz-kayıp yok); remote-executor ayrı ADR (2B-0) | ✅ Uygulandı (1.5-c) |
+| [0023](0023-gorsel-verify-recetesi.md) | Görsel-verify reçetesi | Görsel-diff = deterministik reçete GATE'i (render→diff→exit-code, threshold), yeni verify-type DEĞİL; referans=holdout-benzeri repo-dışı; öznel-skor yok | 🔄 Uygulanıyor (2A-2) |
 
 ## Durum
 **Tüm Faz-1 tasarım kararları KAPANDI (ADR 0001–0018)** + 2 bağımsız adversarial review'ın 25 bulgusu kapatıldı
