@@ -42,6 +42,10 @@ func runConformanceSuite(t *testing.T, newStore storeFactory) {
 		{"ListTasksScopedByProject", confListTasksScoped},
 		{"ListOrderingStable", confListOrdering},
 		{"SliceFieldsRoundTrip", confSliceRoundTrip},
+		{"HostRegistryUpsert", confHostRegistryUpsert},
+		{"HostHeartbeatUpdates", confHostHeartbeat},
+		{"GetHostMissingReturnsErrNotFound", confGetHostMissing},
+		{"ListHosts", confListHosts},
 		{"LeaseLifecycle", confLeaseLifecycle},
 		{"AcquireLeaseSecondFails", confAcquireSecondFails},
 		{"ReleaseLeaseIdempotent", confReleaseIdempotent},
@@ -348,6 +352,127 @@ func confSliceRoundTrip(t *testing.T, s StateStore) {
 	}
 	if len(got2.Requires) != 0 || len(got2.Deps) != 0 {
 		t.Fatalf("empty slices round-trip = %+v", got2)
+	}
+}
+
+// confHostRegistryUpsert proves RegisterHost inserts a new host and then upserts
+// (overwrites capabilities + heartbeat) on a second call with the same ID, in
+// both stores (ADR-0024 self-registration). It also proves a zero LastHeartbeat
+// is stamped live on registration and an empty id is rejected.
+func confHostRegistryUpsert(t *testing.T, s StateStore) {
+	ctx := context.Background()
+
+	// Insert: a fresh host with capabilities and a zero heartbeat is stamped live.
+	if err := s.RegisterHost(ctx, Host{ID: "mac-1", Capabilities: []string{"ios-build", "macos", "web"}}); err != nil {
+		t.Fatalf("RegisterHost insert: %v", err)
+	}
+	got, err := s.GetHost(ctx, "mac-1")
+	if err != nil {
+		t.Fatalf("GetHost: %v", err)
+	}
+	if len(got.Capabilities) != 3 || got.Capabilities[0] != "ios-build" || got.Capabilities[2] != "web" {
+		t.Fatalf("capabilities round-trip = %v", got.Capabilities)
+	}
+	if got.LastHeartbeat.IsZero() {
+		t.Fatalf("zero LastHeartbeat must be stamped live on register, got zero")
+	}
+
+	// Upsert: re-register the SAME id with different capabilities + an explicit
+	// heartbeat. capabilities and heartbeat are overwritten, not duplicated.
+	hb := time.Unix(5000, 0).UTC()
+	if err := s.RegisterHost(ctx, Host{ID: "mac-1", Capabilities: []string{"linux", "backend"}, LastHeartbeat: hb}); err != nil {
+		t.Fatalf("RegisterHost upsert: %v", err)
+	}
+	got, err = s.GetHost(ctx, "mac-1")
+	if err != nil {
+		t.Fatalf("GetHost after upsert: %v", err)
+	}
+	if len(got.Capabilities) != 2 || got.Capabilities[0] != "linux" || got.Capabilities[1] != "backend" {
+		t.Fatalf("upsert did not overwrite capabilities: %v", got.Capabilities)
+	}
+	if !got.LastHeartbeat.Equal(hb) {
+		t.Fatalf("upsert heartbeat = %v, want %v", got.LastHeartbeat, hb)
+	}
+	// Exactly one row for the id (upsert, not insert).
+	list, err := s.ListHosts(ctx)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("ListHosts after upsert = %+v, err %v, want 1 host", list, err)
+	}
+
+	// A host with NO capabilities registers fine (backward compatible: matches
+	// only no-requires lanes; routing is 2B-2).
+	if err := s.RegisterHost(ctx, Host{ID: "bare"}); err != nil {
+		t.Fatalf("RegisterHost no-capabilities: %v", err)
+	}
+	bare, err := s.GetHost(ctx, "bare")
+	if err != nil {
+		t.Fatalf("GetHost bare: %v", err)
+	}
+	if len(bare.Capabilities) != 0 {
+		t.Fatalf("bare host capabilities = %v, want empty", bare.Capabilities)
+	}
+
+	// Empty id rejected.
+	if err := s.RegisterHost(ctx, Host{}); err == nil {
+		t.Fatal("RegisterHost empty id: want error, got nil")
+	}
+}
+
+// confHostHeartbeat proves HostHeartbeat advances LastHeartbeat on a registered
+// host and is ErrNotFound for an unknown host (no silent insert), in both stores.
+func confHostHeartbeat(t *testing.T, s StateStore) {
+	ctx := context.Background()
+	if err := s.RegisterHost(ctx, Host{ID: "h1", Capabilities: []string{"linux"}, LastHeartbeat: time.Unix(1000, 0).UTC()}); err != nil {
+		t.Fatalf("RegisterHost: %v", err)
+	}
+	beat := time.Unix(9000, 0).UTC()
+	if err := s.HostHeartbeat(ctx, "h1", beat); err != nil {
+		t.Fatalf("HostHeartbeat: %v", err)
+	}
+	got, err := s.GetHost(ctx, "h1")
+	if err != nil {
+		t.Fatalf("GetHost: %v", err)
+	}
+	if !got.LastHeartbeat.Equal(beat) {
+		t.Fatalf("LastHeartbeat = %v, want %v", got.LastHeartbeat, beat)
+	}
+	// Capabilities untouched by a heartbeat.
+	if len(got.Capabilities) != 1 || got.Capabilities[0] != "linux" {
+		t.Fatalf("heartbeat altered capabilities: %v", got.Capabilities)
+	}
+	// Heartbeat on an unknown host is ErrNotFound.
+	if err := s.HostHeartbeat(ctx, "ghost", beat); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("HostHeartbeat unknown: err = %v, want ErrNotFound", err)
+	}
+}
+
+// confGetHostMissing proves GetHost on an unknown id is ErrNotFound in both stores.
+func confGetHostMissing(t *testing.T, s StateStore) {
+	ctx := context.Background()
+	if _, err := s.GetHost(ctx, "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetHost missing: err = %v, want ErrNotFound", err)
+	}
+}
+
+// confListHosts proves ListHosts returns all registered hosts ordered by ID and
+// an empty (non-error) list when none are registered.
+func confListHosts(t *testing.T, s StateStore) {
+	ctx := context.Background()
+	none, err := s.ListHosts(ctx)
+	if err != nil || len(none) != 0 {
+		t.Fatalf("ListHosts empty = %+v, err %v", none, err)
+	}
+	for _, id := range []string{"h3", "h1", "h2"} {
+		if err := s.RegisterHost(ctx, Host{ID: id, Capabilities: []string{"linux"}}); err != nil {
+			t.Fatalf("RegisterHost %s: %v", id, err)
+		}
+	}
+	list, err := s.ListHosts(ctx)
+	if err != nil {
+		t.Fatalf("ListHosts: %v", err)
+	}
+	if len(list) != 3 || list[0].ID != "h1" || list[1].ID != "h2" || list[2].ID != "h3" {
+		t.Fatalf("ListHosts order = %+v, want [h1 h2 h3]", list)
 	}
 }
 

@@ -33,6 +33,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -116,6 +117,13 @@ type config struct {
 	once bool
 	// hostID identifies this host on the leases it acquires.
 	hostID string
+	// capabilities lists what this host can run (ADR-0024 agent-per-host): the
+	// daemon self-registers it in the host registry on startup so capability-routing
+	// (2B-2) can route a lane to this host only when lane.requires ⊆ capabilities
+	// (ADR-0008). Parsed from -capabilities / CONDUCTOR_CAPABILITIES (comma-separated,
+	// e.g. linux,backend,web or ios-build,macos,web). Empty = no capabilities (the
+	// host still registers; it matches only no-requires lanes — backward compatible).
+	capabilities []string
 	// globalCap is the governor's max concurrent tasks across all projects
 	// (ADR-0008). The lease table is the live count; this caps it.
 	globalCap int
@@ -266,6 +274,8 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 	developCmd := fs.String("develop-cmd", envOr("CONDUCTOR_DEVELOP_CMD", defaultDevelopCmd),
 		`performer command run in the worktree (quote-aware argv, no shell expansion; e.g. claude -p "do the task"; subscription claude -p style, no key)`)
 	hostID := fs.String("host", envOr("CONDUCTOR_HOST_ID", ""), "host id recorded on leases (default: hostname)")
+	capabilities := fs.String("capabilities", envOr("CONDUCTOR_CAPABILITIES", ""),
+		"comma-separated host capabilities self-registered in the host registry (ADR-0024), e.g. linux,backend,web or ios-build,macos,web; empty = no capabilities (matches only no-requires lanes)")
 	interval := fs.Duration("interval", envDurationOr("CONDUCTOR_INTERVAL", defaultInterval), "gap between ticks in loop mode")
 	timeout := fs.Duration("timeout", envDurationOr("CONDUCTOR_TIMEOUT", defaultTimeout), "per-develop subprocess timeout")
 	once := fs.Bool("once", envBoolOr("CONDUCTOR_ONCE", false), "run a single tick and exit (exit 0 on success)")
@@ -377,6 +387,7 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		developCmd:        cmd,
 		once:              *once,
 		hostID:            host,
+		capabilities:      splitCapabilities(*capabilities),
 		globalCap:         *globalCap,
 		loadCeiling:       *loadCeiling,
 		heartbeatPath:     *heartbeat,
@@ -408,6 +419,13 @@ type Daemon struct {
 	interval time.Duration
 	once     bool
 	logger   *slog.Logger
+	// store is the StateStore the daemon ticks against; it is retained so the tick
+	// loop can advance this host's registry heartbeat (ADR-0024 agent-per-host).
+	store statestore.StateStore
+	// hostID is this host's registry id; the per-tick host-heartbeat advances its
+	// LastHeartbeat (separate from the ADR-0016 FILE heartbeat, which is liveness
+	// telemetry, not a PG registry row).
+	hostID string
 	// hb writes the liveness heartbeat each tick (ADR-0016). It is nil when no
 	// -heartbeat path is configured; *heartbeat.Writer treats a nil receiver as a
 	// no-op, so the daemon stays non-breaking without nil-guards at call sites.
@@ -477,6 +495,25 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		closer()
 		return nil, fmt.Errorf("ensure project %q: %w", cfg.project, err)
 	}
+
+	// Self-registration in the host registry (ADR-0024 agent-per-host, 2B-1): the
+	// daemon records its identity + capabilities so capability-routing (2B-2) and
+	// multi-host coordination can read which hosts exist and what each can run. It
+	// is an UPSERT (RegisterHost), so a restart refreshes capabilities + heartbeat
+	// rather than failing. It runs for BOTH backends: for a shared Postgres store it
+	// is the cross-host registry; for the in-memory single-process store it registers
+	// into that process's own store (harmless, keeps the path uniform). Capabilities
+	// are logged (operator config, not a secret); no token is touched.
+	if err := store.RegisterHost(context.Background(), statestore.Host{
+		ID:           cfg.hostID,
+		Capabilities: cfg.capabilities,
+	}); err != nil {
+		closer()
+		return nil, fmt.Errorf("register host %q: %w", cfg.hostID, err)
+	}
+	logger.Info("host registered (ADR-0024 agent-per-host)",
+		slog.String("host", cfg.hostID),
+		slog.String("capabilities", strings.Join(cfg.capabilities, ",")))
 
 	prov, err := provisioner.New(provisioner.Config{RootDir: cfg.rootDir})
 	if err != nil {
@@ -630,6 +667,8 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		interval: cfg.interval,
 		once:     cfg.once,
 		logger:   logger,
+		store:    store,
+		hostID:   cfg.hostID,
 		hb:       hb,
 		health:   health,
 		httpAddr: cfg.httpAddr,
@@ -1073,6 +1112,19 @@ func (d *Daemon) tick(ctx context.Context) (conductor.TickResult, error) {
 		d.logger.Warn("heartbeat write failed", slog.String("err", hbErr.Error()))
 	}
 
+	// Host-registry heartbeat (ADR-0024 agent-per-host, 2B-1): advance this host's
+	// LastHeartbeat in the SHARED store so multi-host readers see it as live. This
+	// is a PG registry row, SEPARATE from the ADR-0016 FILE heartbeat above. It is
+	// best-effort: a write error is logged but never fails the tick. A stand-alone
+	// context (not the tick ctx) keeps the liveness write going even as a cancelled
+	// tick unwinds. The host was registered on startup, so ErrNotFound is unexpected
+	// and surfaced (rather than silently re-registering here).
+	if d.store != nil {
+		if hbErr := d.store.HostHeartbeat(context.Background(), d.hostID, time.Now().UTC()); hbErr != nil {
+			d.logger.Warn("host heartbeat failed", slog.String("host", d.hostID), slog.String("err", hbErr.Error()))
+		}
+	}
+
 	// Record the last-tick snapshot /status reads (P4-2). The snapshot is always
 	// non-nil; it is concurrency-safe so the HTTP handler never races this write.
 	d.snap.record(d.ticks, outcome, time.Now())
@@ -1187,6 +1239,34 @@ func splitArgs(s string) ([]string, error) {
 	}
 	flush()
 	return args, nil
+}
+
+// splitCapabilities parses a comma-separated capability list into a normalized,
+// deterministic slice (ADR-0024): each entry is trimmed of surrounding whitespace,
+// empty entries are dropped, and the result is sorted + de-duplicated so a host's
+// registered capability set is stable regardless of input order or spacing. The
+// empty (or all-blank) string yields a nil slice — a host with no capabilities,
+// which still registers and matches only no-requires lanes (backward compatible).
+func splitCapabilities(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, p := range parts {
+		c := strings.TrimSpace(p)
+		if c == "" {
+			continue
+		}
+		if _, dup := seen[c]; dup {
+			continue
+		}
+		seen[c] = struct{}{}
+		out = append(out, c)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Strings(out)
+	return out
 }
 
 // envOr returns the value of env var key, or def when it is unset/empty.

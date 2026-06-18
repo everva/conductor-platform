@@ -360,6 +360,83 @@ func (s *PostgresStore) ListLeases(ctx context.Context) ([]Lease, error) {
 	return out, nil
 }
 
+// --- Hosts ------------------------------------------------------------------
+
+// RegisterHost upserts the host by ID (ADR-0024 self-registration): a single
+// INSERT ... ON CONFLICT (id) DO UPDATE rewrites capabilities and last_heartbeat
+// for an existing host or inserts a new row. A zero LastHeartbeat is stamped with
+// the current time so a fresh registration is always live (matching MemoryStore).
+func (s *PostgresStore) RegisterHost(ctx context.Context, h Host) error {
+	if h.ID == "" {
+		return fmt.Errorf("register host: %w: empty id", ErrInvalid)
+	}
+	caps, err := marshalStrings(h.Capabilities)
+	if err != nil {
+		return fmt.Errorf("register host %q: %w", h.ID, err)
+	}
+	lastHB := h.LastHeartbeat
+	if lastHB.IsZero() {
+		lastHB = time.Now().UTC()
+	}
+	const q = `
+INSERT INTO hosts (id, capabilities, last_heartbeat)
+VALUES ($1, $2, $3)
+ON CONFLICT (id) DO UPDATE SET capabilities = EXCLUDED.capabilities, last_heartbeat = EXCLUDED.last_heartbeat`
+	if _, err := s.pool.Exec(ctx, q, h.ID, caps, lastHB); err != nil {
+		return fmt.Errorf("register host %q: %w", h.ID, err)
+	}
+	return nil
+}
+
+// HostHeartbeat advances the host's last_heartbeat to t, or returns a wrapped
+// ErrNotFound if no host has that ID.
+func (s *PostgresStore) HostHeartbeat(ctx context.Context, hostID string, t time.Time) error {
+	const q = `UPDATE hosts SET last_heartbeat = $2 WHERE id = $1`
+	tag, err := s.pool.Exec(ctx, q, hostID, t)
+	if err != nil {
+		return fmt.Errorf("host heartbeat %q: %w", hostID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("host heartbeat %q: %w", hostID, ErrNotFound)
+	}
+	return nil
+}
+
+// GetHost returns the host by ID, or a wrapped ErrNotFound.
+func (s *PostgresStore) GetHost(ctx context.Context, id string) (Host, error) {
+	const q = `SELECT id, capabilities, last_heartbeat FROM hosts WHERE id = $1`
+	h, err := scanHost(s.pool.QueryRow(ctx, q, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Host{}, fmt.Errorf("get host %q: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return Host{}, fmt.Errorf("get host %q: %w", id, err)
+	}
+	return h, nil
+}
+
+// ListHosts returns all registered hosts, ordered by ID.
+func (s *PostgresStore) ListHosts(ctx context.Context) ([]Host, error) {
+	const q = `SELECT id, capabilities, last_heartbeat FROM hosts ORDER BY id`
+	rows, err := s.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("list hosts: %w", err)
+	}
+	defer rows.Close()
+	out := make([]Host, 0)
+	for rows.Next() {
+		h, err := scanHost(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list hosts: scan: %w", err)
+		}
+		out = append(out, h)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list hosts: %w", err)
+	}
+	return out, nil
+}
+
 // --- Scenarios --------------------------------------------------------------
 
 // CreateScenario persists a new scenario, failing with ErrAlreadyExists on a
@@ -473,6 +550,22 @@ func scanScenario(r rowScanner) (Scenario, error) {
 		return Scenario{}, err
 	}
 	return sc, nil
+}
+
+// scanHost reads a host row, decoding the jsonb capabilities column and
+// normalizing last_heartbeat to UTC so it round-trips identically to MemoryStore.
+func scanHost(r rowScanner) (Host, error) {
+	var h Host
+	var caps []byte
+	if err := r.Scan(&h.ID, &caps, &h.LastHeartbeat); err != nil {
+		return Host{}, err
+	}
+	var err error
+	if h.Capabilities, err = unmarshalStrings(caps); err != nil {
+		return Host{}, err
+	}
+	h.LastHeartbeat = h.LastHeartbeat.UTC()
+	return h, nil
 }
 
 // marshalStrings encodes a string slice to JSON for a jsonb column. A nil or

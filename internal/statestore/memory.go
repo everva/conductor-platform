@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"time"
 )
 
 // ErrAlreadyExists is returned by the Create* verbs when a record with the same
@@ -35,6 +36,7 @@ type MemoryStore struct {
 	tasks     map[string]Task
 	leases    map[string]Lease // keyed by ProjectID
 	scenarios map[string]Scenario
+	hosts     map[string]Host // keyed by Host.ID (ADR-0024 registry)
 }
 
 // NewMemoryStore returns an empty, ready-to-use in-memory StateStore.
@@ -44,6 +46,7 @@ func NewMemoryStore() *MemoryStore {
 		tasks:     make(map[string]Task),
 		leases:    make(map[string]Lease),
 		scenarios: make(map[string]Scenario),
+		hosts:     make(map[string]Host),
 	}
 }
 
@@ -234,6 +237,72 @@ func (s *MemoryStore) ListLeases(ctx context.Context) ([]Lease, error) {
 	return out, nil
 }
 
+// RegisterHost upserts the host by ID (ADR-0024 self-registration): a new ID is
+// inserted, an existing one has its capabilities and heartbeat overwritten. A
+// zero LastHeartbeat is stamped with the current time so a fresh registration is
+// always live.
+func (s *MemoryStore) RegisterHost(ctx context.Context, h Host) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if h.ID == "" {
+		return fmt.Errorf("register host: %w: empty id", ErrInvalid)
+	}
+	if h.LastHeartbeat.IsZero() {
+		h.LastHeartbeat = time.Now().UTC()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hosts[h.ID] = cloneHost(h)
+	return nil
+}
+
+// HostHeartbeat advances the host's LastHeartbeat to t, or returns a wrapped
+// ErrNotFound if the host is not registered.
+func (s *MemoryStore) HostHeartbeat(ctx context.Context, hostID string, t time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, ok := s.hosts[hostID]
+	if !ok {
+		return fmt.Errorf("host heartbeat %q: %w", hostID, ErrNotFound)
+	}
+	h.LastHeartbeat = t
+	s.hosts[hostID] = h
+	return nil
+}
+
+// GetHost returns the host by ID, or a wrapped ErrNotFound.
+func (s *MemoryStore) GetHost(ctx context.Context, id string) (Host, error) {
+	if err := ctx.Err(); err != nil {
+		return Host{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	h, ok := s.hosts[id]
+	if !ok {
+		return Host{}, fmt.Errorf("get host %q: %w", id, ErrNotFound)
+	}
+	return cloneHost(h), nil
+}
+
+// ListHosts returns all registered hosts, ordered by ID.
+func (s *MemoryStore) ListHosts(ctx context.Context) ([]Host, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Host, 0, len(s.hosts))
+	for _, h := range s.hosts {
+		out = append(out, cloneHost(h))
+	}
+	slices.SortFunc(out, func(a, b Host) int { return cmpString(a.ID, b.ID) })
+	return out, nil
+}
+
 // CreateScenario persists a new scenario, failing with ErrAlreadyExists on a
 // duplicate ID.
 func (s *MemoryStore) CreateScenario(ctx context.Context, sc Scenario) error {
@@ -300,6 +369,13 @@ func cloneScenario(sc Scenario) Scenario {
 	sc.Deps = slices.Clone(sc.Deps)
 	sc.Acceptance = slices.Clone(sc.Acceptance)
 	return sc
+}
+
+// cloneHost returns a deep copy of h, cloning its capabilities slice so the
+// caller and the store never share a backing array.
+func cloneHost(h Host) Host {
+	h.Capabilities = slices.Clone(h.Capabilities)
+	return h
 }
 
 // cmpString orders strings ascending for deterministic list ordering.

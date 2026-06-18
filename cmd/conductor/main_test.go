@@ -793,3 +793,110 @@ func TestResolveRecipe_CorruptConfigFailsLoud(t *testing.T) {
 		t.Fatal("resolveRecipe(corrupt): err = nil, want a hard parse error")
 	}
 }
+
+// TestParseConfig_Capabilities proves the -capabilities flag / CONDUCTOR_CAPABILITIES
+// env parse into a normalized, deterministic slice (trimmed, de-duped, sorted) and
+// that an unset/blank value yields no capabilities (ADR-0024 backward compat).
+func TestParseConfig_Capabilities(t *testing.T) {
+	t.Run("default empty", func(t *testing.T) {
+		t.Setenv("CONDUCTOR_CAPABILITIES", "")
+		cfg, err := parseConfig([]string{"-project", "p1", "-root", "/tmp/r"}, io.Discard)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		if len(cfg.capabilities) != 0 {
+			t.Fatalf("capabilities = %v, want empty by default", cfg.capabilities)
+		}
+	})
+
+	t.Run("from flag, normalized", func(t *testing.T) {
+		cfg, err := parseConfig([]string{
+			"-project", "p1", "-root", "/tmp/r",
+			"-capabilities", " web , ios-build, macos ,web,",
+		}, io.Discard)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		// trimmed, de-duped (web once), empty entries dropped, sorted.
+		if got, want := cfg.capabilities, []string{"ios-build", "macos", "web"}; !equalStrs(got, want) {
+			t.Fatalf("capabilities = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("from env", func(t *testing.T) {
+		t.Setenv("CONDUCTOR_CAPABILITIES", "linux,backend")
+		cfg, err := parseConfig([]string{"-project", "p1", "-root", "/tmp/r"}, io.Discard)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		if got, want := cfg.capabilities, []string{"backend", "linux"}; !equalStrs(got, want) {
+			t.Fatalf("capabilities = %v, want %v", got, want)
+		}
+	})
+}
+
+// TestNewDaemon_RegistersHostWithCapabilities proves startup self-registration
+// (ADR-0024 agent-per-host, 2B-1): newDaemon registers THIS host with its
+// capabilities in the store, and a tick advances the host-heartbeat. It asserts
+// directly against the daemon's in-memory store.
+func TestNewDaemon_RegistersHostWithCapabilities(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.once = true
+	cfg.hostID = "agent-mac-1"
+	cfg.capabilities = []string{"ios-build", "macos", "web"}
+
+	d, err := newDaemon(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("newDaemon: %v", err)
+	}
+	defer d.Close()
+
+	h, err := d.store.GetHost(context.Background(), "agent-mac-1")
+	if err != nil {
+		t.Fatalf("GetHost after startup: %v", err)
+	}
+	if got, want := h.Capabilities, []string{"ios-build", "macos", "web"}; !equalStrs(got, want) {
+		t.Fatalf("registered capabilities = %v, want %v", got, want)
+	}
+	if h.LastHeartbeat.IsZero() {
+		t.Fatalf("registration must stamp a live LastHeartbeat, got zero")
+	}
+	before := h.LastHeartbeat
+
+	// A tick advances the host-heartbeat (separate from the file heartbeat).
+	time.Sleep(2 * time.Millisecond)
+	if _, err := d.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	h2, err := d.store.GetHost(context.Background(), "agent-mac-1")
+	if err != nil {
+		t.Fatalf("GetHost after tick: %v", err)
+	}
+	if !h2.LastHeartbeat.After(before) {
+		t.Fatalf("tick did not advance host heartbeat: before=%v after=%v", before, h2.LastHeartbeat)
+	}
+}
+
+// TestNewDaemon_RegistersHostNoCapabilities proves the backward-compatible path:
+// a daemon with NO -capabilities still registers (empty capability set), so the
+// host appears in the registry and matches only no-requires lanes (routing is 2B-2).
+func TestNewDaemon_RegistersHostNoCapabilities(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.once = true
+	cfg.hostID = "agent-bare"
+	cfg.capabilities = nil
+
+	d, err := newDaemon(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("newDaemon: %v", err)
+	}
+	defer d.Close()
+
+	h, err := d.store.GetHost(context.Background(), "agent-bare")
+	if err != nil {
+		t.Fatalf("GetHost: %v", err)
+	}
+	if len(h.Capabilities) != 0 {
+		t.Fatalf("capabilities = %v, want empty", h.Capabilities)
+	}
+}

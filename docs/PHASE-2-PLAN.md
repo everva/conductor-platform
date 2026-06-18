@@ -160,3 +160,22 @@ Deterministik kanıt = kalite kapısı (LLM asla karar mercii); sahte-yeşil ASL
   exit 2→FAIL). **Dalga-B'ye AÇIKÇA ertelendi (Mac-host):** gerçek `xcodebuild test` derleme/koşma + maestro-on-simulator canlı
   (gerçek ekran-görüntüsü üretip visual gate'e besleyen render). engine.go + statestore frozen DOKUNULMADI (additive);
   tools/builder dokunulmadı. Gate (build+test+vet+golangci v2.12.0) + e2e YEŞİL; gofmt temiz; yeni Go dep yok; secret yok.
+
+- **Dalga B — 2B-1 (host registry + capabilities, ADR-0024 agent-per-host)** ✅ done. Agent-per-host'un EKSİK parçası =
+  HOST registry (lease zaten host-üstü N-4; Task'ta Lane+Requires zaten var ADR-0008). **Additive StateStore (ADR-0021,
+  mevcut imzalar değişMEDİ):** yeni `Host{ID, Capabilities []string, LastHeartbeat time.Time}` tipi + 4 metot:
+  `RegisterHost(ctx, Host)` (id'ye göre UPSERT — insert veya capabilities+heartbeat overwrite; zero LastHeartbeat→live damgası),
+  `HostHeartbeat(ctx, hostID, t)` (sadece LastHeartbeat ilerletir; bilinmeyen host→ErrNotFound), `GetHost(ctx, id)`
+  (ErrNotFound), `ListHosts(ctx)` (id sıralı). memory.go (hosts map + cloneHost, deep-copy) + postgres.go (`INSERT ... ON
+  CONFLICT (id) DO UPDATE`; capabilities jsonb, tasks.requires deseni; last_heartbeat UTC). **Migration 00007_hosts.sql**
+  (goose Up/Down: `hosts(id text pk, capabilities jsonb, last_heartbeat timestamptz)`). **Daemon self-register + host-heartbeat:**
+  yeni `-capabilities`/`CONDUCTOR_CAPABILITIES` (virgülle ayrık; trim+dedupe+sort → deterministik); newDaemon başlangıçta
+  `RegisterHost` (host id mevcut `-host`/hostname'den; her iki backend'de — paylaşımlı PG'de cross-host registry, in-memory
+  tek-proseste kendi store'una, zararsız); her tick `HostHeartbeat` (ADR-0016 DOSYA heartbeat'ten AYRI PG satırı; best-effort,
+  tick'i bozmaz). **Geriye-uyum:** capabilities yoksa boş set → host yine kaydolur, sadece no-requires lane'lere uyar
+  (routing 2B-2). **Stub-store güncellendi** (statestore_test stubStore additive 4 metot). **Kanıt:** conformance (memory + PG)
+  4 yeni host case'i (upsert insert→update, GetHost missing→ErrNotFound, ListHosts sıra, heartbeat LastHeartbeat ilerletir +
+  bilinmeyen→ErrNotFound); daemon testleri (-capabilities parse normalize + startup RegisterHost + tick heartbeat ilerletir +
+  no-capabilities yolu). GERÇEK docker-PG (port 55464) conformance koşuldu YEŞİL (19/19, 4 host dahil) + teardown. engine.go +
+  tools/builder DOKUNULMADI; mevcut imza değişMEDİ (additive). Offline gate (build+test+vet+golangci v2.12.0) + e2e + -race YEŞİL;
+  gofmt temiz; yeni dep yok; secret yok.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 // TestStateStoreIsImplementable is a compile-time guard that the frozen
@@ -24,20 +25,24 @@ func TestErrNotFoundIsSentinel(t *testing.T) {
 
 type stubStore struct{}
 
-func (*stubStore) CreateProject(context.Context, Project) error          { return nil }
-func (*stubStore) GetProject(context.Context, string) (Project, error)   { return Project{}, nil }
-func (*stubStore) ListProjects(context.Context) ([]Project, error)       { return nil, nil }
-func (*stubStore) UpdateProject(context.Context, Project) error          { return nil }
-func (*stubStore) CreateTask(context.Context, Task) error                { return nil }
-func (*stubStore) GetTask(context.Context, string) (Task, error)         { return Task{}, nil }
-func (*stubStore) ListTasks(context.Context, string) ([]Task, error)     { return nil, nil }
-func (*stubStore) UpdateTask(context.Context, Task) error                { return nil }
-func (*stubStore) AcquireLease(context.Context, Lease) error             { return nil }
-func (*stubStore) ReleaseLease(context.Context, string) error            { return nil }
-func (*stubStore) GetLease(context.Context, string) (Lease, error)       { return Lease{}, nil }
-func (*stubStore) ListLeases(context.Context) ([]Lease, error)           { return nil, nil }
-func (*stubStore) CreateScenario(context.Context, Scenario) error        { return nil }
-func (*stubStore) GetScenario(context.Context, string) (Scenario, error) { return Scenario{}, nil }
+func (*stubStore) CreateProject(context.Context, Project) error           { return nil }
+func (*stubStore) GetProject(context.Context, string) (Project, error)    { return Project{}, nil }
+func (*stubStore) ListProjects(context.Context) ([]Project, error)        { return nil, nil }
+func (*stubStore) UpdateProject(context.Context, Project) error           { return nil }
+func (*stubStore) CreateTask(context.Context, Task) error                 { return nil }
+func (*stubStore) GetTask(context.Context, string) (Task, error)          { return Task{}, nil }
+func (*stubStore) ListTasks(context.Context, string) ([]Task, error)      { return nil, nil }
+func (*stubStore) UpdateTask(context.Context, Task) error                 { return nil }
+func (*stubStore) AcquireLease(context.Context, Lease) error              { return nil }
+func (*stubStore) ReleaseLease(context.Context, string) error             { return nil }
+func (*stubStore) GetLease(context.Context, string) (Lease, error)        { return Lease{}, nil }
+func (*stubStore) ListLeases(context.Context) ([]Lease, error)            { return nil, nil }
+func (*stubStore) RegisterHost(context.Context, Host) error               { return nil }
+func (*stubStore) HostHeartbeat(context.Context, string, time.Time) error { return nil }
+func (*stubStore) GetHost(context.Context, string) (Host, error)          { return Host{}, nil }
+func (*stubStore) ListHosts(context.Context) ([]Host, error)              { return nil, nil }
+func (*stubStore) CreateScenario(context.Context, Scenario) error         { return nil }
+func (*stubStore) GetScenario(context.Context, string) (Scenario, error)  { return Scenario{}, nil }
 func (*stubStore) ListScenarios(context.Context, string) ([]Scenario, error) {
 	return nil, nil
 }

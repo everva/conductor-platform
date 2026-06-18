@@ -106,6 +106,31 @@ type Lease struct {
 	AcquiredAt time.Time
 }
 
+// Host is a self-registered executor node in the agent-per-host model (ADR-0024):
+// the conductor daemon runs on EVERY host and, on startup, records its identity
+// and capabilities here so capability-routing (lane.requires ⊆ host.capabilities,
+// ADR-0008/2B-2) and multi-host coordination can read which hosts exist and what
+// each can run. The host-spanning lease (project_id PK) already enforces
+// "one active task per repo" across hosts (ADR-0008); this registry is the
+// MISSING capability/liveness piece, added ADDITIVELY (ADR-0021).
+//
+// A host re-registers (upsert) every restart and heartbeats periodically; the
+// row is observable intent + last-seen liveness, not a counter — the live lease
+// table remains the source of truth for active work.
+type Host struct {
+	// ID is the stable identifier for the host (e.g. its hostname). It is the
+	// registry primary key; RegisterHost upserts by it.
+	ID string
+	// Capabilities lists what this host can run (e.g. linux, backend, web, or
+	// ios-build, macos, web). A lane is routable to this host only when its
+	// requires are a subset of these (ADR-0008). Empty = matches only no-requires
+	// lanes (backward compatible: a host with no -capabilities still registers).
+	Capabilities []string
+	// LastHeartbeat is when the host last reported liveness (UTC). RegisterHost and
+	// HostHeartbeat advance it; a stale value lets a reader treat the host as down.
+	LastHeartbeat time.Time
+}
+
 // Scenario is the intake-produced description of a task's acceptance (ADR-0005,
 // ADR-0010). The hidden holdout it references lives outside the repo (ADR-0018).
 type Scenario struct {
@@ -163,6 +188,21 @@ type StateStore interface {
 	GetLease(ctx context.Context, projectID string) (Lease, error)
 	// ListLeases returns all currently held leases.
 	ListLeases(ctx context.Context) ([]Lease, error)
+
+	// RegisterHost upserts the host by ID (ADR-0024 self-registration): it inserts
+	// a new host or, when one already exists, updates its capabilities and
+	// LastHeartbeat. It is the ADDITIVE host-registry seam (ADR-0021) the
+	// agent-per-host daemon calls on startup. A LastHeartbeat of zero is replaced
+	// with the current time so a fresh registration is always live.
+	RegisterHost(ctx context.Context, h Host) error
+	// HostHeartbeat advances the host's LastHeartbeat to t (ErrNotFound if the host
+	// is not registered). It is the cheap periodic liveness update separate from a
+	// full RegisterHost (which also rewrites capabilities).
+	HostHeartbeat(ctx context.Context, hostID string, t time.Time) error
+	// GetHost returns the host by ID, or ErrNotFound.
+	GetHost(ctx context.Context, id string) (Host, error)
+	// ListHosts returns all registered hosts.
+	ListHosts(ctx context.Context) ([]Host, error)
 
 	// CreateScenario persists a new scenario.
 	CreateScenario(ctx context.Context, s Scenario) error
