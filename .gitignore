@@ -1,0 +1,5 @@
+# Build artifacts produced by `make build` (cmd/conductor, cmd/conductorctl).
+/bin/
+
+# Local heartbeat / workspace scratch a dev `make run` may write.
+/heartbeat.json
