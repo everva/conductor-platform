@@ -93,11 +93,12 @@ N-1..N-11 (Faz-1b çekirdek) + P3-1..P3-5 (daemon üretim-entegrasyon) + ADR-002
 Postgres-backed daemon (cmd/conductor) + operatör CLI (cmd/conductorctl, paylaşılan -dsn) + events(PG LISTEN/NOTIFY) + governance(tier-gate) + governor + heartbeat + pause/resume kontrol + CI(GitHub Actions) + README + DEPLOY.md + Makefile + Dockerfile + docker-compose + k8s manifestleri + 21 ADR.
 ### SABAH — kullanıcı kararları alındı (2026-06-18), uygulanıyor:
 - ✅ **F-1: StateStore additive UpdateProject + pause→Project.Paused** (cf910a8, push'lu, ADR-0021). marker-task emekli; `UpdateProject` (memory+postgres real UPDATE+ErrNotFound), migration 00003 (projects.paused), StorePauser refactor. engine.go untouched, statestore.go additive-only. **Bağımsız doğrulandı:** gate+e2e yeşil, conformance UpdateProject (memory+PG), **kendi PG+binary'lerimde** pause→projects.paused=t (0 task!) → daemon outcome=paused → resume→f→noop.
-- 🔄 **F-2: Abort** (ŞİMDİ) — in-flight performer iptali: store'da abort-sinyali + daemon develop sırasında watcher→ctx-cancel→subprocess(process-group) kill→task güvenli geri-al, merge yok. engine.Command ActionAbort.
+- ✅ **F-2: Abort** (2cd334f, push'lu, ADR-0020/0021). `Task.AbortRequested` (additive) + migration 00004; `conductorctl abort --project` lease'ten çalışan task'ı çözer→flag; daemon develop'i child-ctx'te sarar + watcher (1s poll) abort'ta ctx-cancel→`exec.CommandContext`+Setpgid performer process-group'unu öldürür→task **ready**'e geri (re-runnable), flag temizlenir, verify/merge YOK. `Aborter` seam (nil=watcher yok). engine.go untouched, statestore additive. **Bağımsız doğrulandı:** gate+e2e+`-race` temiz, 7 abort testi PASS, **gerçek repo+PG+binary'lerle uçtan-uca**: onboard→intake→pick(todo)→clone+worktree→lease→develop(sleep) ÇALIŞIYOR → abort → outcome=aborted, task ready'e döndü, merge yok.
+- 🎁 **BONUS:** F-2 demo'su tam operatör-pipeline'ı gerçek git+PG+binary ile kanıtladı (onboard→intake→pick→provision→lease→develop). Kullanıcı kararları (F-1+F-2) TAMAM.
 
 ### KALAN (sonraki)
 3. **Builder tick-bug kök-çözümü** — gece-otonom RİSKLİ → gündüz temiz ortam.
-4. (Opsiyonel) gerçek throwaway repo'da gerçek `claude -p` ile TAM tick (clone→develop→verify→merge) uçtan-uca canlı tek koşu.
+4. (Opsiyonel) gerçek `claude -p` performer ile TAM tick (develop→verify→merge yeşil-yol) — pipeline F-2'de sleep-performer ile kanıtlandı; tek eksik canlı claude verdict→merge.
 
 ## FOLLOW-UP (kullanıcı kararı / risk → sabah)
 - Abort (in-flight iptal): kalıcı aborting sinyali + tick ctx-honor (ADR-0020 follow-up).
