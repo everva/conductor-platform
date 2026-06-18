@@ -91,11 +91,13 @@ Postgres-backed + operatör-CLI paylaşımlı store + events (PG LISTEN/NOTIFY) 
 N-1..N-11 (Faz-1b çekirdek) + P3-1..P3-5 (daemon üretim-entegrasyon) + ADR-0020 + P4-1..P4-4 (Docker/health-HTTP/Makefile+DEPLOY/k8s).
 ### Artefakt envanteri
 Postgres-backed daemon (cmd/conductor) + operatör CLI (cmd/conductorctl, paylaşılan -dsn) + events(PG LISTEN/NOTIFY) + governance(tier-gate) + governor + heartbeat + pause/resume kontrol + CI(GitHub Actions) + README + DEPLOY.md + Makefile + Dockerfile + docker-compose + k8s manifestleri + 21 ADR.
-### KALAN (KULLANICI KARARI / RİSK → bilinçli ertelendi, gece-otonom yapılmadı)
-1. **Abort** (in-flight performer iptali) — process-group sinyali; ADR-0020 follow-up.
-2. **StateStore'a toplamsal UpdateProject** (frozen'ın kontrollü gevşetilmesi) → pause'u marker-task yerine Project-durumuna taşı (ADR-0020 önerisi). **Kullanıcı kararı:** frozen gevşetilsin mi?
-3. **Builder tick-bug kök-çözümü** — gece-otonom RİSKLİ (önceki oturumları dengesizleştirdi) → bilinçli ertelendi.
-4. (Opsiyonel) gerçek throwaway repo'da gerçek `claude -p` ile TAM tick (clone→develop→verify→merge) — N-6 parça-parça doğruladı; uçtan-uca canlı tek koşu gündüz yapılabilir.
+### SABAH — kullanıcı kararları alındı (2026-06-18), uygulanıyor:
+- ✅ **F-1: StateStore additive UpdateProject + pause→Project.Paused** (cf910a8, push'lu, ADR-0021). marker-task emekli; `UpdateProject` (memory+postgres real UPDATE+ErrNotFound), migration 00003 (projects.paused), StorePauser refactor. engine.go untouched, statestore.go additive-only. **Bağımsız doğrulandı:** gate+e2e yeşil, conformance UpdateProject (memory+PG), **kendi PG+binary'lerimde** pause→projects.paused=t (0 task!) → daemon outcome=paused → resume→f→noop.
+- 🔄 **F-2: Abort** (ŞİMDİ) — in-flight performer iptali: store'da abort-sinyali + daemon develop sırasında watcher→ctx-cancel→subprocess(process-group) kill→task güvenli geri-al, merge yok. engine.Command ActionAbort.
+
+### KALAN (sonraki)
+3. **Builder tick-bug kök-çözümü** — gece-otonom RİSKLİ → gündüz temiz ortam.
+4. (Opsiyonel) gerçek throwaway repo'da gerçek `claude -p` ile TAM tick (clone→develop→verify→merge) uçtan-uca canlı tek koşu.
 
 ## FOLLOW-UP (kullanıcı kararı / risk → sabah)
 - Abort (in-flight iptal): kalıcı aborting sinyali + tick ctx-honor (ADR-0020 follow-up).
