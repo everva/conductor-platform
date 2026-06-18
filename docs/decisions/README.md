@@ -45,7 +45,8 @@ Not: builder tick-bug (~1dk tick-ölümü) nedeniyle A-3..C-2 Agent'larla kodlan
 | [0022](0022-merge-push-deploy-modeli.md) | Merge-sonrası push/deploy | Opt-in `-push` (default kapalı=yerel); gh-token auth; push-fail→done-kalır + açık event (sahte-yeşil/sessiz-kayıp yok); remote-executor ayrı ADR (2B-0) | ✅ Uygulandı (1.5-c) |
 | [0023](0023-gorsel-verify-recetesi.md) | Görsel-verify reçetesi | Görsel-diff = deterministik reçete GATE'i (render→diff→exit-code, threshold), yeni verify-type DEĞİL; referans=holdout-benzeri repo-dışı; öznel-skor yok | ✅ Uygulandı (2A-2 web, 2A-3 iOS) |
 | [0024](0024-remote-executor-agent-per-host.md) | Remote-executor (çok-host) | **Agent-per-host** (kullanıcı kararı): daemon her host'ta; merkezi-PG'den capability-uyan lease; iş yerelde; ssh/uzak-komut YOK; host-üstü lease zaten N-4'te | ✅ Uygulandı (Dalga B) |
-| [0025](0025-api-gateway.md) | API gateway (Faz-3) | **Ayrı `cmd/conductor-api` servisi** (kullanıcı kararı): read+control; daemon DEĞİŞMEZ; veri paylaşılan store/bus; kontrol mevcut conductor seam reuse (store-yansıması, daemon'a doğrudan-komut YOK); REST+WS, bearer-auth; frontend-agnostik (fork köprüsü) | ✅ Karar (3A-0); 3A-1 başlıyor |
+| [0025](0025-api-gateway.md) | API gateway (Faz-3) | **Ayrı `cmd/conductor-api` servisi** (kullanıcı kararı): read+control; daemon DEĞİŞMEZ; veri paylaşılan store/bus; kontrol mevcut conductor seam reuse (store-yansıması, daemon'a doğrudan-komut YOK); REST+WS, bearer-auth; frontend-agnostik (fork köprüsü) | ✅ Uygulandı (DALGA 3A: 3A-0..3A-4 tamam) |
+| [0026](0026-frontend-stack.md) | Frontend stack (Faz-3) | **React+Vite+TS**, `web/` izole araç zinciri; event tipleri N-9 codegen (drift yok); auth=bearer-token (sessionStorage); deterministik frontend gate = tsc+eslint+vitest+Playwright (Go gate felsefesi) | ✅ Karar (3B-0); iskele başlıyor |
 
 ## Durum
 **Tüm Faz-1 tasarım kararları KAPANDI (ADR 0001–0018)** + 2 bağımsız adversarial review'ın 25 bulgusu kapatıldı
