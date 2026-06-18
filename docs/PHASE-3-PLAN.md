@@ -130,5 +130,11 @@ Gateway (3A) olduğu gibi reuse; web bileşenleri (3B) fork panellerine (webview
   (Rule#9): scope+Go-unaffected + frontend gate (tsc-0/lint-0/vitest-28/build) + **canlı uçtan-uca** (tarayıcı-origin
   →Vite-proxy→gerçek gateway→gerçek PG: /status+/projects(alpha)+/tasks([AL-1]) gerçek veri, no-token→401) +
   Playwright(mocked) 2-pass → ALL PASS.
-- Sıradaki: **3B-2** — canlı event akışı (WS-tabanlı tam event feed; phase/kind; intervention-needed vurgulu;
-  proje filtresi). EventTicker'ı tam bir akış görünümüne genişlet.
+- ✅ **3B-2 — Canlı event akışı** (2026-06-18, commit `ddbb79c`): `web/src/events/` — `useEventFeed` (history
+  backfill `listEvents` + live `useEventStream`, id-dedupe, bounded-cap 1000, UI-pause, clear/reconnect) +
+  `EventStreamView` (newest-first, phase/kind rozet, payload preview, **intervention vurgulu**, proje/task/phase/
+  kind/intervention-only filtreleri backfill+subscription'ı birlikte sürer) + Fleet|Events tab. Bağımsız doğrulama
+  (Rule#9): yalnız web/ değişti + Go-unaffected + gate (tsc-0/lint-0/vitest-38/build) + Playwright 3-pass; dedupe/
+  cap/teardown(no-WS-leak)/pause/filter-consistency unit-test'li → ALL PASS.
+- Sıradaki: **3B-3** — müdahale: T3/T4 **approve**, pause/resume, abort UI'dan control API (POST) ile; optimistik
+  durum + onay; intervention-needed event'inden tek-tık aksiyon.
