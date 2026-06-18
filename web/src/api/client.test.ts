@@ -68,16 +68,13 @@ describe("ApiClient", () => {
     const body = {
       scenarios: [
         {
-          ID: "A-1",
-          Title: "First",
-          Lane: "backend",
-          Tier: "T1",
-          Deps: [],
-          Acceptance: ["does a thing"],
-          HoldoutRef: "store://holdouts/A-1/holdout_test.go",
-          PublicTestRef: "",
-          PublicTestsOutline: null,
-          Notes: "",
+          id: "A-1",
+          title: "First",
+          lane: "backend",
+          tier: "T1",
+          deps: [],
+          acceptance: ["does a thing"],
+          hidden_holdout_ref: "store://holdouts/A-1/holdout_test.go",
         },
       ],
       yaml: "id: A-1\n",
@@ -88,8 +85,8 @@ describe("ApiClient", () => {
     const res = await client.distill("proj", "build the thing");
 
     expect(res.yaml).toBe("id: A-1\n");
-    expect(res.scenarios[0].ID).toBe("A-1");
-    expect(res.scenarios[0].HoldoutRef).toBe("store://holdouts/A-1/holdout_test.go");
+    expect(res.scenarios[0].id).toBe("A-1");
+    expect(res.scenarios[0].hidden_holdout_ref).toBe("store://holdouts/A-1/holdout_test.go");
     const [url, init] = fetchFn.mock.calls[0];
     expect(String(url)).toBe("https://gw.test/projects/proj/distill");
     expect((init as RequestInit).body).toBe(

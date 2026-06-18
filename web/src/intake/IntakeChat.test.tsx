@@ -36,16 +36,13 @@ function project(over: Partial<Project> = {}): Project {
 
 function scenario(over: Partial<Scenario> = {}): Scenario {
   return {
-    ID: "A-1",
-    Title: "First distilled task",
-    Lane: "backend",
-    Tier: "T1",
-    Deps: [],
-    Acceptance: ["does the first thing"],
-    HoldoutRef: "store://holdouts/A-1/holdout_test.go",
-    PublicTestRef: "",
-    PublicTestsOutline: null,
-    Notes: "",
+    id: "A-1",
+    title: "First distilled task",
+    lane: "backend",
+    tier: "T1",
+    deps: [],
+    acceptance: ["does the first thing"],
+    hidden_holdout_ref: "store://holdouts/A-1/holdout_test.go",
     ...over,
   };
 }

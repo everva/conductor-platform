@@ -64,23 +64,18 @@ export interface IntakeResult {
   skipped: string[];
 }
 
-// Scenario mirrors intake.Scenario (internal/intake/scenario.go) AS SERIALIZED BY
-// the distill endpoint's distillResultDTO. The Go struct carries only `yaml:` tags,
-// so encoding/json emits the Go FIELD NAMES verbatim (PascalCase) — these keys are
-// therefore PascalCase, NOT snake_case. This is the RICH proposed scenario the human
-// reviews before approving; HoldoutRef points at the repo-EXTERNAL hidden holdout
-// (ADR-0018) and MUST NOT be a repo-relative path.
+// Scenario mirrors the distill endpoint's scenarioDTO (cmd/conductor-api/control.go):
+// a snake_case PROPOSED scenario the human reviews before approving. hidden_holdout_ref
+// points at the repo-EXTERNAL hidden holdout (ADR-0018) and MUST NOT be a repo-relative
+// path. (The gateway emits snake_case to match every other DTO; review sweep S-1.)
 export interface Scenario {
-  ID: string;
-  Title: string;
-  Lane: string;
-  Tier: string;
-  Deps: string[] | null;
-  Acceptance: string[] | null;
-  HoldoutRef: string;
-  PublicTestRef: string;
-  PublicTestsOutline: string[] | null;
-  Notes: string;
+  id: string;
+  title: string;
+  lane: string;
+  tier: string;
+  deps: string[];
+  acceptance: string[];
+  hidden_holdout_ref: string;
 }
 
 // DistillResult mirrors distillResultDTO (POST /projects/{id}/distill): the

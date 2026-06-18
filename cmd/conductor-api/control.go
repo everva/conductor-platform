@@ -232,8 +232,12 @@ func (s *apiServer) handleDistill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	dtos := make([]scenarioDTO, 0, len(scenarios))
+	for _, sc := range scenarios {
+		dtos = append(dtos, toScenarioDTO(sc))
+	}
 	writeJSON(w, http.StatusOK, distillResultDTO{
-		Scenarios: scenarios,
+		Scenarios: dtos,
 		YAML:      yamlStr,
 	})
 }
@@ -333,14 +337,47 @@ type intakeResultDTO struct {
 	Skipped []string `json:"skipped"`
 }
 
+// scenarioDTO is the snake_case JSON shape of a PROPOSED distilled scenario. We do
+// NOT serialize intake.Scenario directly: that type carries only yaml tags, so the
+// JSON encoder would emit Go PascalCase field names (ID, Title, …) — inconsistent
+// with every other gateway DTO (project/task/host/lease are snake_case) and awkward
+// for the web client (review sweep S-1). This DTO pins the snake_case contract.
+type scenarioDTO struct {
+	ID         string   `json:"id"`
+	Title      string   `json:"title"`
+	Lane       string   `json:"lane"`
+	Tier       string   `json:"tier"`
+	Deps       []string `json:"deps"`
+	Acceptance []string `json:"acceptance"`
+	HoldoutRef string   `json:"hidden_holdout_ref"`
+}
+
+// toScenarioDTO maps a distilled intake.Scenario onto the snake_case wire shape,
+// non-nilling the slices so they encode as [] not null. The rich-only fields
+// (PublicTestRef/Outline/Notes) are intentionally omitted — they are not part of
+// the proposed-scenario review contract (mirroring ToStateScenario's drop).
+func toScenarioDTO(s intake.Scenario) scenarioDTO {
+	deps := s.Deps
+	if deps == nil {
+		deps = []string{}
+	}
+	acc := s.Acceptance
+	if acc == nil {
+		acc = []string{}
+	}
+	return scenarioDTO{
+		ID: s.ID, Title: s.Title, Lane: s.Lane, Tier: s.Tier,
+		Deps: deps, Acceptance: acc, HoldoutRef: s.HoldoutRef,
+	}
+}
+
 // distillResultDTO is the JSON shape returned by POST distill: the structured
-// PROPOSED scenarios (rendered with their intake.Scenario yaml tags via the JSON
-// encoder — the field names match the YAML schema the UI already knows) and the
-// intake-ready YAML string. The yaml field is exactly what POST /intake accepts,
-// so the human approve step is a verbatim re-POST of it. Nothing is persisted.
+// PROPOSED scenarios (snake_case scenarioDTO) and the intake-ready YAML string. The
+// yaml field is exactly what POST /intake accepts, so the human approve step is a
+// verbatim re-POST of it. Nothing is persisted.
 type distillResultDTO struct {
-	Scenarios []intake.Scenario `json:"scenarios"`
-	YAML      string            `json:"yaml"`
+	Scenarios []scenarioDTO `json:"scenarios"`
+	YAML      string        `json:"yaml"`
 }
 
 // marshalIntakeYAML renders the distilled scenarios into the EXACT multi-document

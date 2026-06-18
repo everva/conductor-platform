@@ -318,7 +318,7 @@ export function IntakeChat({
                     <p className="fleet-empty">No scenarios in the proposal.</p>
                   ) : (
                     proposal.scenarios.map((s) => (
-                      <ScenarioCard key={s.ID} scenario={s} />
+                      <ScenarioCard key={s.id} scenario={s} />
                     ))
                   )}
                 </div>

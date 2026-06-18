@@ -72,6 +72,12 @@ func TestDistillHappyPathAndIntakeRoundTrip(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 
+	// Lock the snake_case wire contract (review sweep S-1): scenario JSON keys must
+	// be snake_case (like every other gateway DTO), NOT Go PascalCase.
+	if body := rec.Body.String(); !strings.Contains(body, `"hidden_holdout_ref"`) || strings.Contains(body, `"HoldoutRef"`) {
+		t.Fatalf("distill scenarios not snake_case: %s", body)
+	}
+
 	var res distillResultDTO
 	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
 		t.Fatalf("decode distill result: %v", err)

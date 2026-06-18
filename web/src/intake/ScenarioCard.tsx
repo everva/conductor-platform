@@ -11,22 +11,22 @@ export interface ScenarioCardProps {
 }
 
 export function ScenarioCard({ scenario }: ScenarioCardProps) {
-  const deps = scenario.Deps ?? [];
-  const acceptance = scenario.Acceptance ?? [];
+  const deps = scenario.deps ?? [];
+  const acceptance = scenario.acceptance ?? [];
 
   return (
     <article className="intake-scenario" data-testid="scenario-card">
       <header className="intake-scenario-head">
-        <span className="intake-scenario-id mono">{scenario.ID}</span>
-        <span className="intake-scenario-title">{scenario.Title}</span>
+        <span className="intake-scenario-id mono">{scenario.id}</span>
+        <span className="intake-scenario-title">{scenario.title}</span>
       </header>
 
       <div className="intake-scenario-meta">
         <span className="chip" data-testid="scenario-lane">
-          lane: {scenario.Lane}
+          lane: {scenario.lane}
         </span>
         <span className="chip" data-testid="scenario-tier">
-          tier: {scenario.Tier}
+          tier: {scenario.tier}
         </span>
         {deps.length > 0 && (
           <span className="intake-deps">
@@ -53,7 +53,7 @@ export function ScenarioCard({ scenario }: ScenarioCardProps) {
 
       <div className="intake-holdout" data-testid="scenario-holdout">
         <span className="intake-holdout-tag">hidden holdout</span>
-        <span className="intake-holdout-ref mono">{scenario.HoldoutRef}</span>
+        <span className="intake-holdout-ref mono">{scenario.hidden_holdout_ref}</span>
         <span className="intake-holdout-note muted">
           repo-external hidden acceptance check — verify before approving
         </span>
