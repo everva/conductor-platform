@@ -53,6 +53,7 @@ Zemin hazır: Postgres lease host-üstü "repo başına 1" atomik (N-4) + govern
   uzak); merkezi PG state + event. Kabul: iki-host kurulumda (yerel simüle: 2 agent) bir görev uzak host'ta develop→
   verify→merge; "repo başına 1" host-üstü kanıtlanır (iki host aynı repoya yazamaz).
 - **2B-4 — Host-başına kaynak cap + governor çok-host:** global cap + host-başına cap + host-yük; Mac≠Linux kapasite.
+- **2B-5 — Reconcile runner (BAĞIMSIZ recovery job)** — 2B-3 boşluğu: host-heartbeat OwnerLive + TTL helper VAR ama ürün tarafında reconcile.ReapLeases'i koşturan bir şey YOK → ölü-host lease'i pratikte reap olmuyor. ADR-0016 (bağımsız job) → `conductor -reconcile` modu (one-shot/loop) + k8s CronJob (P4-4 stallcheck deseni).
 
 ### Dalga C — Sentinel Katman-2 (gri-bölge LLM-danışman)
 - **2C-1 — Gri-bölge dedektörü + LLM-danışman:** deterministik taban "emin değilim" (process canlı AMA çıktı durdu)
