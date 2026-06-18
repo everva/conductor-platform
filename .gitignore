@@ -3,3 +3,14 @@
 
 # Local heartbeat / workspace scratch a dev `make run` may write.
 /heartbeat.json
+
+# Web cockpit (web/) — isolated frontend toolchain (ADR-0026). Source, configs,
+# package-lock.json and the generated events.gen.ts ARE committed; only build /
+# dependency / test artifacts are ignored.
+/web/node_modules/
+/web/dist/
+/web/test-results/
+/web/playwright-report/
+/web/playwright/.cache/
+/web/*.tsbuildinfo
+/web/.vite/

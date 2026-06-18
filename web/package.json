@@ -1,0 +1,42 @@
+{
+  "name": "conductor-cockpit",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Conductor Platform web cockpit (Faz-3 DALGA 3B) — React + Vite + TS over the conductor-api gateway (ADR-0025/0026).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "e2e": "playwright test",
+    "gen:events": "cd .. && go run ./cmd/eventgen -out web/src/types/events.gen.ts",
+    "gate": "npm run typecheck && npm run lint && npm run test"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@playwright/test": "^1.49.1",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "^9.17.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.16",
+    "globals": "^15.14.0",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.2",
+    "vite": "^6.0.5",
+    "vitest": "^3.0.5"
+  }
+}
