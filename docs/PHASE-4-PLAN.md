@@ -90,5 +90,18 @@ dalga başlarında.
 - ✅ **CI self-hosted sertleştirme** (yolda yakalanan 3 latent bug): e2e committer-identity (`a5ef5ba` provisioner.gitEnv
   pin), golangci-lint-action v6→v7 (`18175ee`, v2 uyumu), setup-go `cache:false` (`25ce0c8`, persistent GOMODCACHE tar
   çakışması). CI org-self-hosted runner'da tam yeşil (gate 1m13s).
-- Sıradaki sweep: **S-4** (private-repo auth-fail testi) · **S-6** (sentinel L1 zengin probe) · **S-7** (recipe argv sandbox)
-  · **S-3** (gerçek-claude advisor smoke, canlı) · **S-5** (iOS/maestro canlı — org-macos-1 runner). Sonra Faz-4 4A.
+- ✅ **S-4 private-repo auth-fail testi** (`16c2dba`): auth-configured private clone-fail → HATA (asla fake-green boş
+  holdout) + token redacted; deterministik `.invalid` host (offline).
+- ✅ **S-3 advisor canlı smoke + env-fix** (`3d46479`): **bulgu** — sentinel advisor `realClaudeRunner` sanitize'siz
+  `os.Environ()` veriyordu (F7/R-2 asimetrisi) → `envsafe.Sanitize` eklendi (GH_TOKEN/CONDUCTOR_* strip, claude-auth
+  korunur). + tag-gated real-claude advisor smoke (canlı doğrulandı: `advice=progressing`, mantıklı gerekçe).
+- ⏸️ **ERTELENDİ (düşük-değer/derin/infra — gerekçeli):**
+  - **S-6** sentinel L1 process-liveness probe: gerçek probe için engine'in performer process'ini session başına
+    izleyip Health'e additive `ProcessUp` eklemesi gerekir (derin değişiklik). Değer DÜŞÜK — Layer-3 backstop ölü
+    process'i zaten bağlıyor; sentinel docs bu inert-path'i açıkça kabul ediyor. Maliyet >> fayda → ertelendi.
+  - **S-7** recipe argv tam sandbox: mevcut durum doküman + shell-argv uyarısı + R-2 secret-containment ile riski
+    yönetiyor; tam sandbox (seccomp/namespace) derin + platform-bağımlı. Ertelendi.
+  - **S-5** iOS/maestro CANLI: gerçek maestro + iOS-simulator kurulumu `org-macos-1`'de gerekiyor (infra); reçete+
+    routing zaten hazır+test'li. Mac-host maestro provision edilince koşulur. Ertelendi (infra-bound).
+- **Sweep sonucu:** yüksek-değer/tractable maddeler (S-1/S-2/S-3/S-4) ✅ + yolda 4 latent bug (e2e-identity,
+  golangci-v7, setup-go-cache, advisor-env-leak) düzeltildi. CI self-hosted'da tam yeşil. **Sıradaki: Faz-4 → 4A-1.**
