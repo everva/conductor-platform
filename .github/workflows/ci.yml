@@ -28,7 +28,12 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          # cache:false on the self-hosted runner — its GOMODCACHE is persistent
+          # (already warm), and Go marks module files read-only, so the action's
+          # cache RESTORE tar fails with "Cannot open: File exists" trying to extract
+          # over them. Disabling the action cache avoids that conflict; the warm
+          # on-disk cache makes builds fast anyway.
+          cache: false
 
       - name: Build
         run: go build ./...
@@ -81,7 +86,10 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          # cache:false — persistent GOMODCACHE on the self-hosted runner makes the
+          # action's cache restore tar conflict with read-only module files
+          # ("Cannot open: File exists"). The warm on-disk cache suffices.
+          cache: false
 
       - name: Install (clean, from lockfile)
         run: npm ci
