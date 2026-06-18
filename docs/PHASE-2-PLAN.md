@@ -105,4 +105,5 @@ Deterministik kanıt = kalite kapısı (LLM asla karar mercii); sahte-yeşil ASL
   merge+trailer'ı korudu (undo/loss yok), `*PushError` yüzeylendi; default OFF → origin'e dokunulmadı; token-redact
   unit (helper doğrudan); tick-level push-failed → task done + event. engine.go + statestore frozen dokunulmadı;
   builder dokunulmadı; gate (build+test+vet+golangci v2.12.0) + e2e + race yeşil; gofmt temiz; token leak yok.
-- Sıradaki: Dalga A veya uçtan-uca doğrulama (1.5-a/b/c tümleşik).
+- **🏁 FAZ-1.5 TAMAM (1.5-a/b/c) — hepsi bağımsız doğrulandı, push'lu.** ADR-0022 ✅.
+- **Dalga A — 2A-1 (reçete altyapısı + Node/Python)** 🔄 ŞİMDİ: .conductor/config.yaml reçetesini tam pipe (develop-cmd + gates + verify-tipi, per-project); scaffolder profillerini gerçek çalışan reçetelere bağla; Node + Python canlı (onboard→gate→merge).
