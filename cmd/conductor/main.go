@@ -45,6 +45,7 @@ import (
 	"github.com/everva/conductor-platform/internal/governance"
 	"github.com/everva/conductor-platform/internal/governor"
 	"github.com/everva/conductor-platform/internal/heartbeat"
+	"github.com/everva/conductor-platform/internal/holdout"
 	"github.com/everva/conductor-platform/internal/provisioner"
 	"github.com/everva/conductor-platform/internal/registry"
 	"github.com/everva/conductor-platform/internal/statestore"
@@ -64,6 +65,12 @@ const (
 	// runs in the worktree. It carries NO key — the subscription session does. It
 	// is split on spaces into an argv (no shell). Override with -develop-cmd.
 	defaultDevelopCmd = "claude -p"
+	// defaultHoldoutCmd is the argv used to run the injected hidden holdout suite
+	// inside the verify-worktree when a -holdout-store is configured (ADR-0018). It
+	// runs the project's full Go test suite over the reviewed code with the holdout
+	// files injected; it is split on spaces into an argv (no shell). Override with
+	// -holdout-cmd. It is unused when no holdout store is configured.
+	defaultHoldoutCmd = "go test ./..."
 	// defaultHeartbeatStale is the age past which the independent stall-detector
 	// (-check) considers the heartbeat STALE. Generous relative to the default
 	// 30s tick interval so a single slow tick does not false-alert; an external
@@ -127,6 +134,18 @@ type config struct {
 	// DISABLES the server entirely, so the daemon's behavior is unchanged unless an
 	// operator opts in (e.g. ":8080"). It carries no secret.
 	httpAddr string
+	// holdoutStore is the repo-EXTERNAL root directory the filesystem HoldoutStore
+	// resolves hidden holdouts under (ADR-0018). Empty (the DEFAULT) keeps the inert
+	// noop holdout so the daemon's behavior is unchanged (backward compatible); a
+	// non-empty path wires holdout.FSStore so each scenario's HoldoutRef is fetched
+	// and injected into the verify-worktree. The root path is operator config (logged
+	// for diagnosis), not a secret; holdout file CONTENTS are never logged.
+	holdoutStore string
+	// holdoutCmd is the argv that runs the injected holdout suite inside the
+	// verify-worktree (space-split, no shell). It is only used when holdoutStore is
+	// set; it defaults to `go test ./...` so a configured holdout runs the project's
+	// hidden test suite against the reviewed code.
+	holdoutCmd []string
 	// governance, when true (the DEFAULT), wires the risk-layered merge policy
 	// (governance.DefaultPolicy, ADR-0003/N-10) into the conductor so high-tier
 	// (T3/T4) and untiered tasks are HELD for a human after a green gate instead of
@@ -231,6 +250,10 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		"listen address for the OPTIONAL health HTTP server (/healthz /readyz /status), e.g. :8080; empty = disabled")
 	governance := fs.Bool("governance", envBoolOr("CONDUCTOR_GOVERNANCE", true),
 		"wire the risk-layered merge policy (ADR-0003): high-tier/untiered tasks are HELD for a human after a green gate; false = auto-merge all (default true)")
+	holdoutStore := fs.String("holdout-store", envOr("CONDUCTOR_HOLDOUT_STORE", ""),
+		"repo-EXTERNAL root dir the hidden holdout (ADR-0018) is resolved under; empty = inert noop holdout (backward compatible). Path is logged, contents are not")
+	holdoutCmd := fs.String("holdout-cmd", envOr("CONDUCTOR_HOLDOUT_CMD", defaultHoldoutCmd),
+		"argv that runs the injected holdout suite in the verify-worktree (space-split, no shell); used only when -holdout-store is set")
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "conductor — Faz-1a tick daemon")
@@ -279,6 +302,14 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		return config{}, errors.New("-develop-cmd must not be empty")
 	}
 
+	// The holdout suite argv is parsed regardless, but only meaningful when a
+	// holdout store is configured. When the store IS set, an empty holdout command
+	// would leave the verifier with nothing to run, so reject it loudly.
+	hcmd := splitArgv(*holdoutCmd)
+	if *holdoutStore != "" && len(hcmd) == 0 {
+		return config{}, errors.New("-holdout-cmd must not be empty when -holdout-store is set")
+	}
+
 	host := *hostID
 	if host == "" {
 		if hn, err := os.Hostname(); err == nil {
@@ -303,6 +334,8 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		heartbeatProgress: *heartbeatProgress,
 		httpAddr:          *httpAddr,
 		governance:        *governance,
+		holdoutStore:      *holdoutStore,
+		holdoutCmd:        hcmd,
 	}, nil
 }
 
@@ -396,7 +429,11 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		Timeout:    cfg.timeout,
 	})
 
-	verf := verify.New(noopHoldout{}, verify.Config{HoldoutCmd: []string{"true"}})
+	verf, err := newVerifier(cfg, logger)
+	if err != nil {
+		closer()
+		return nil, fmt.Errorf("verifier: %w", err)
+	}
 
 	merger := conductor.NewGitMerger(func(projectID string) string {
 		return cfg.rootDir + "/clones/" + projectID
@@ -587,6 +624,33 @@ func newPolicy(cfg config, logger *slog.Logger) conductor.Policy {
 	}
 	logger.Info("governance policy active", slog.String("mode", "risk-layered (T3/T4 + untiered held for human)"))
 	return governance.DefaultPolicy()
+}
+
+// newVerifier constructs the independent verify gate (B-2) with the holdout store
+// selected by cfg.holdoutStore (ADR-0018, A.1). When a -holdout-store root is
+// configured, it wires the filesystem-backed holdout.FSStore so each scenario's
+// repo-external HoldoutRef is fetched and injected into the verify-worktree, and
+// the holdout suite runs cfg.holdoutCmd. When no root is configured (the DEFAULT),
+// it keeps the inert noopHoldout + ["true"] so the daemon's behavior is unchanged
+// (backward compatible). It logs WHICH holdout mode is active — including the store
+// ROOT path, which is operator config, not a secret — but never holdout CONTENTS.
+func newVerifier(cfg config, logger *slog.Logger) (*verify.Verifier, error) {
+	if cfg.holdoutStore == "" {
+		logger.Info("holdout mode selected",
+			slog.String("mode", "noop"),
+			slog.String("detail", "no -holdout-store; merge gate rides on public recipe gates only (ADR-0018 holdout inert)"))
+		return verify.New(noopHoldout{}, verify.Config{HoldoutCmd: []string{"true"}}), nil
+	}
+
+	store, err := holdout.New(cfg.holdoutStore)
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("holdout mode selected",
+		slog.String("mode", "fs-store"),
+		slog.String("root", store.Root()),
+		slog.String("cmd", strings.Join(cfg.holdoutCmd, " ")))
+	return verify.New(store, verify.Config{HoldoutCmd: cfg.holdoutCmd}), nil
 }
 
 // noopHoldout is an inert HoldoutStore: the daemon's merge decision rides on the

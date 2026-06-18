@@ -159,9 +159,23 @@ func runGate(ctx context.Context, dir string, g Gate) engine.Check {
 // passed plus non-revealing findings; it never copies the holdout into the
 // develop worktree and never leaks holdout contents into findings.
 func (v *Verifier) runHoldout(ctx context.Context, ws engine.Workspace, ref string) (findings []string, err error) {
+	// An empty locator means the scenario carries no repo-external holdout
+	// (ADR-0018): skip the holdout leg cleanly so a non-holdout project verifies on
+	// its public gates alone. This is additive and backward compatible — existing
+	// callers pass a non-empty ref, so the store is still consulted as before.
+	if strings.TrimSpace(ref) == "" {
+		return nil, nil
+	}
+
 	holdout, ferr := v.store.Fetch(ctx, ref)
 	if ferr != nil {
 		return nil, fmt.Errorf("fetch holdout: %w", ferr)
+	}
+
+	// A store may resolve an empty ref to an empty holdout (no files): with no
+	// files to inject and nothing to run, skip the verify-worktree dance entirely.
+	if len(holdout.Files) == 0 {
+		return nil, nil
 	}
 
 	// Throwaway verify-worktree as a sibling of the develop worktree, cut from
