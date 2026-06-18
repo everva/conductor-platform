@@ -6,11 +6,19 @@ import (
 	"time"
 )
 
+// defaultHistoryCap is the default number of recent events MemoryBus retains
+// for EventReader.ListEvents replay when WithHistoryCap is not given.
+const defaultHistoryCap = 1024
+
 // MemoryBus is an in-memory EventBus for single-process use and tests
 // (ADR-0011). Publish fans out synchronously to every matching subscriber over
 // a buffered channel; a subscriber whose buffer is full is skipped for that
 // event (drop-on-slow) rather than blocking every other subscriber, and its
 // Dropped counter is bumped. It is safe for concurrent use.
+//
+// It additionally retains a bounded history of recently-published events so it
+// can satisfy the additive EventReader seam (ListEvents); retention is extra
+// bookkeeping and does not change live fan-out (ADR-0021 additive growth).
 type MemoryBus struct {
 	// bufSize is the per-subscriber channel buffer.
 	bufSize int
@@ -22,6 +30,10 @@ type MemoryBus struct {
 	closed bool
 	nextID int64
 	subs   map[int64]*memSub
+	// history retains the most recent stamped events (oldest first) up to
+	// historyCap for EventReader.ListEvents; the oldest is evicted when over cap.
+	history    []Event
+	historyCap int
 }
 
 // memSub is one live subscription on a MemoryBus.
@@ -64,13 +76,24 @@ func WithIDFunc(fn func() string) MemoryOption {
 	}
 }
 
+// WithHistoryCap sets how many recent events the bus retains for ListEvents
+// replay (default defaultHistoryCap). A non-positive n is ignored.
+func WithHistoryCap(n int) MemoryOption {
+	return func(b *MemoryBus) {
+		if n > 0 {
+			b.historyCap = n
+		}
+	}
+}
+
 // NewMemoryBus returns an in-memory EventBus.
 func NewMemoryBus(opts ...MemoryOption) *MemoryBus {
 	b := &MemoryBus{
-		bufSize: 64,
-		now:     func() time.Time { return time.Now().UTC() },
-		newID:   randomID,
-		subs:    make(map[int64]*memSub),
+		bufSize:    64,
+		now:        func() time.Time { return time.Now().UTC() },
+		newID:      randomID,
+		subs:       make(map[int64]*memSub),
+		historyCap: defaultHistoryCap,
 	}
 	for _, o := range opts {
 		o(b)
@@ -109,6 +132,12 @@ func (b *MemoryBus) Publish(ctx context.Context, ev Event) error {
 	defer b.mu.Unlock()
 	if b.closed {
 		return ErrBusClosed
+	}
+	// Retain the stamped event for ListEvents replay, evicting the oldest when
+	// over cap. This is additive bookkeeping; live fan-out below is unchanged.
+	b.history = append(b.history, ev)
+	if len(b.history) > b.historyCap {
+		b.history = b.history[len(b.history)-b.historyCap:]
 	}
 	for _, s := range b.subs {
 		if !s.filter.Matches(ev) {
