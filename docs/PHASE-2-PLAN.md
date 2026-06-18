@@ -77,4 +77,6 @@ Deterministik kanıt = kalite kapısı (LLM asla karar mercii); sahte-yeşil ASL
 (Rule#9); frozen kontratlara additive; secret-leak yok; her merge gate'li; canlı optiway/xirigo'ya dokunma.
 
 ## İLERLEME KAYDI (her iş bitince güncelle)
-- Faz-2 planı oluşturuldu (2026-06-18). Sıradaki: Faz-1.5-a (holdout şemaları).
+- Faz-2 planı oluşturuldu (2026-06-18).
+- **1.5-a holdout şemaları** ✅ done (b791d62, push'lu). internal/holdout: Router (şema-dispatch) + PGStore (`pg://holdouts/<id>`, table `holdouts(id,path,content)`, migration 00005) + PrivateRepoStore (`private:<repo>#<path>`, gh-token, repo-dışı klon). Daemon: -dsn→pg auto, -holdout-private-cache+CONDUCTOR_GH_TOKEN→private; backward-compat (fs-only çalışır); unconfigured-scheme→açık hata. **Bağımsız doğrulandı:** kendi docker PG'imde 5 PGStore testi (-race), private local-repo 7 testi, Router dispatch, gate+e2e+race yeşil, frozen untouched, secret-leak yok (token redact).
+- Sıradaki: 1.5-b (T3 human-hold canlı demo + approve akışı).
