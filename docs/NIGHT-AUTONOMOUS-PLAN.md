@@ -108,8 +108,13 @@ Postgres-backed daemon (cmd/conductor) + operatör CLI (cmd/conductorctl, payla�
 - **🐞 DOGFOOD'UN BULDUĞU ÜRÜN BUG'LARI (Rule#9, düzeltilmedi — kullanıcı kararı):**
   1. **(ÖNEMLİ) Daemon verify-gate yalnız `go build`+`go test`** (main.go:484-487 HARDCODED); `go vet`+`golangci-lint` YOK → daemon'ın merge-gate'i CI/`make gate`'ten ZAYIF (vet/lint fail eden kod merge olabilir). Çekirdek "deterministik kalite kapısı" değer-önermesini zayıflatıyor.
   2. **(GERÇEK) Verify-gate subprocess daemon env'ini miras alıyor** + platformun kendi `TestParseConfig/dsn_defaults_empty` testi env-izole değil (t.Setenv yok) → CONDUCTOR_DSN export'luyken gate platformun KENDİ testini false-block ediyor. Bağımsız tekrar üretildi (main_test.go:172 FAIL).
-  3. (minör) `-develop-cmd` whitespace-split, shell yok → çok-kelimeli prompt wrapper script gerektiriyor.
-  4. (rough edge) GitMerger başarısız re-merge sonrası base checkout'u kirli bırakıyor.
+  3. (minör) `-develop-cmd` whitespace-split, shell yok → çok-kelimeli prompt wrapper script gerektiriyor. (AÇIK)
+  4. (rough edge) GitMerger başarısız re-merge sonrası base checkout'u kirli bırakıyor. (AÇIK)
+
+### Bug-fix (kullanıcı onayı: #1+#2) — ✅ done
+- **#2 env-izolasyon** ✅ (4fcae8d): verify gate+holdout subprocess'leri `sanitizedEnv()` ile CONDUCTOR_* ayıklanmış env'de koşar (PATH/HOME/GO* korunur) + platformun env-duyarlı default-testleri t.Setenv ile izole. **Bağımsız doğrulandı:** `CONDUCTOR_DSN=x go test -run TestParseConfig` artık PASS (önce FAIL), TestRunGate_StripsConductorEnv PASS.
+- **#1 tam gate + yapılandırılabilir** ✅ (a8ff629): daemon default gate = build+test+**vet**; golangci opt-in `.conductor/config.yaml`'dan (scaffolder.LoadRecipeGates — N-8→daemon boşluğu kapandı); eksik binary deterministik FAIL (sessiz-skip yok). **Bağımsız doğrulandı:** ResolveGates(default=build+test+vet / config→golangci) + missing-binary + round-trip testleri PASS, full gate+race+e2e yeşil, engine+builder 0 değişiklik.
+- **KALAN (minör, açık):** dogfood bug #3 (develop-cmd whitespace), #4 (GitMerger dirty-base).
 - **İş B — Builder tick-bug kök-çözümü** (A'dan sonra). İzole/temiz ortam + enstrümantasyon + hipotez-daraltma (launchd throttle / reconcile-kill / SIGKILL / reparent) + 20dk+ stabil tick kanıtı. Risk yüksek.
 
 ## FOLLOW-UP (kullanıcı kararı / risk → sabah)
