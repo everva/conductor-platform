@@ -29,10 +29,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -119,6 +122,11 @@ type config struct {
 	// read the heartbeat at heartbeatPath, print status, exit 0 FRESH / non-zero
 	// STALE|MISSING (ADR-0016 independent backstop).
 	check bool
+	// httpAddr is the listen address for the OPTIONAL health/observability HTTP
+	// server (k8s-style probes: /healthz /readyz /status). Empty (the DEFAULT)
+	// DISABLES the server entirely, so the daemon's behavior is unchanged unless an
+	// operator opts in (e.g. ":8080"). It carries no secret.
+	httpAddr string
 	// governance, when true (the DEFAULT), wires the risk-layered merge policy
 	// (governance.DefaultPolicy, ADR-0003/N-10) into the conductor so high-tier
 	// (T3/T4) and untiered tasks are HELD for a human after a green gate instead of
@@ -219,6 +227,8 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		"independent -check: if >0, a fresh heartbeat whose tick never advances for this long is STALE (stuck)")
 	check := fs.Bool("check", envBoolOr("CONDUCTOR_CHECK", false),
 		"run the INDEPENDENT stall-detector over -heartbeat and exit (0=FRESH, non-zero=STALE/MISSING); does not start the daemon")
+	httpAddr := fs.String("http-addr", envOr("CONDUCTOR_HTTP_ADDR", ""),
+		"listen address for the OPTIONAL health HTTP server (/healthz /readyz /status), e.g. :8080; empty = disabled")
 	governance := fs.Bool("governance", envBoolOr("CONDUCTOR_GOVERNANCE", true),
 		"wire the risk-layered merge policy (ADR-0003): high-tier/untiered tasks are HELD for a human after a green gate; false = auto-merge all (default true)")
 
@@ -291,6 +301,7 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		heartbeatPath:     *heartbeat,
 		heartbeatStale:    *heartbeatStale,
 		heartbeatProgress: *heartbeatProgress,
+		httpAddr:          *httpAddr,
 		governance:        *governance,
 	}, nil
 }
@@ -310,6 +321,22 @@ type Daemon struct {
 	hb *heartbeat.Writer
 	// ticks counts ticks attempted; it is the heartbeat's progress signal.
 	ticks uint64
+	// health is the OPTIONAL health/observability HTTP server (P4-2). It is nil
+	// when no -http-addr is configured (the DEFAULT), in which case Run starts no
+	// server and the daemon behaves exactly as before. When non-nil, Run starts it
+	// in a goroutine and shuts it down on the same ctx cancel as the tick loop.
+	health *healthServer
+	// httpAddr is the resolved listen address for health; empty disables the server.
+	httpAddr string
+	// boundAddr records the ACTUAL address the health listener bound (resolving an
+	// ephemeral ":0" to a real port). It is set once under boundMu when the server
+	// binds and read by boundHealthAddr; it lets a test discover the OS-assigned
+	// port without reaching into the serve goroutine.
+	boundMu   sync.Mutex
+	boundAddr string
+	// snap is the concurrency-safe last-tick snapshot /status reads. It is updated
+	// each tick. It is always non-nil so tick can record unconditionally.
+	snap *tickSnapshot
 	// closer releases backend resources on shutdown (the Postgres statestore pool
 	// AND, for a Postgres event bus, its LISTENer connections + pool). It is nil
 	// for the all-memory dev setup, which owns no external resource. Close invokes
@@ -439,6 +466,27 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 	// unconfigured heartbeat changes nothing about the daemon's behavior.
 	hb := heartbeat.NewWriter(cfg.heartbeatPath, cfg.hostID, cfg.project, os.Getpid(), nil)
 
+	// Last-tick snapshot + OPTIONAL health server (P4-2). The snapshot is always
+	// allocated so tick can record unconditionally; the health server is built only
+	// when -http-addr is set. Readiness probes the store via a cheap ListProjects on
+	// the FROZEN interface (no interface change, no concrete type-assert). The store
+	// backend name is derived from cfg.dsn (empty=memory) so /status never sees the
+	// DSN.
+	snap := &tickSnapshot{}
+	var health *healthServer
+	if cfg.httpAddr != "" {
+		now := time.Now()
+		health = &healthServer{
+			project:      cfg.project,
+			storeBackend: storeBackendName(cfg.dsn),
+			governance:   cfg.governance,
+			startedAt:    now,
+			clock:        time.Now,
+			snap:         snap,
+			ready:        storeReadyChecker{store: store},
+		}
+	}
+
 	return &Daemon{
 		cond:     cond,
 		project:  cfg.project,
@@ -446,8 +494,21 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		once:     cfg.once,
 		logger:   logger,
 		hb:       hb,
+		health:   health,
+		httpAddr: cfg.httpAddr,
+		snap:     snap,
 		closer:   closer,
 	}, nil
+}
+
+// storeBackendName maps the DSN to the human backend name surfaced by /status.
+// Empty DSN means the in-memory store; any non-empty DSN means Postgres. It
+// returns ONLY the backend name — never the DSN — so /status stays secret-free.
+func storeBackendName(dsn string) string {
+	if dsn == "" {
+		return "memory"
+	}
+	return "postgres"
 }
 
 // newStore selects and constructs the StateStore backend from cfg.dsn and returns
@@ -549,6 +610,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 		slog.String("project", d.project),
 		slog.Duration("interval", d.interval))
 
+	// Start the OPTIONAL health HTTP server alongside the loop (P4-2). It is nil
+	// when no -http-addr is configured, in which case this is a no-op. The returned
+	// shutdown closure is deferred so the server is drained on EVERY exit path
+	// (ctx cancel / SIGINT-SIGTERM), with no goroutine or socket leak.
+	stopHealth := d.startHealthServer(ctx)
+	defer stopHealth()
+
 	ticker := time.NewTicker(d.interval)
 	defer ticker.Stop()
 
@@ -579,6 +647,87 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 }
 
+// startHealthServer launches the OPTIONAL health HTTP server (P4-2) in a
+// goroutine and returns a shutdown closure the caller defers. When no -http-addr
+// is configured (d.health is nil), both are no-ops and the daemon behaves exactly
+// as before.
+//
+// Lifecycle: the listener is bound SYNCHRONOUSLY (so a bad/occupied address is
+// logged immediately, not swallowed in a goroutine) and ListenAndServe runs in
+// the goroutine. A watcher goroutine drains the server with a bounded grace
+// period when ctx is cancelled — the SAME ctx the tick loop unwinds on — so the
+// server stops with the loop on SIGINT/SIGTERM. The returned closure also drains
+// on ANY Run exit path, making the teardown idempotent and leak-free.
+func (d *Daemon) startHealthServer(ctx context.Context) func() {
+	if d.health == nil {
+		return func() {}
+	}
+
+	srv := &http.Server{
+		Addr:              d.httpAddr,
+		Handler:           d.health.routes(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	// Bind synchronously so an unusable address surfaces now (and disables the
+	// server) instead of failing silently inside the serve goroutine.
+	ln, err := net.Listen("tcp", d.httpAddr)
+	if err != nil {
+		d.logger.Error("health server: listen failed; health endpoints disabled",
+			slog.String("addr", d.httpAddr), slog.String("err", err.Error()))
+		return func() {}
+	}
+	d.boundMu.Lock()
+	d.boundAddr = ln.Addr().String()
+	d.boundMu.Unlock()
+	d.logger.Info("health server listening",
+		slog.String("addr", ln.Addr().String()),
+		slog.String("endpoints", "/healthz /readyz /status"))
+
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		if serveErr := srv.Serve(ln); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			d.logger.Error("health server: serve error", slog.String("err", serveErr.Error()))
+		}
+	}()
+
+	// Drain on ctx cancel (loop shutdown) with a bounded grace period.
+	go func() {
+		<-ctx.Done()
+		d.shutdownHealth(srv)
+	}()
+
+	// shutdown closure: idempotent drain for any Run exit path. http.Server.Shutdown
+	// is safe to call more than once (a second call returns immediately), so racing
+	// the watcher goroutine is harmless.
+	var once sync.Once
+	return func() {
+		once.Do(func() { d.shutdownHealth(srv) })
+		<-serveDone
+	}
+}
+
+// shutdownHealth gracefully drains the health server with a bounded grace period
+// so in-flight probes finish but a hung connection cannot stall shutdown. Errors
+// are logged, never fatal — health teardown must not block the daemon's exit.
+func (d *Daemon) shutdownHealth(srv *http.Server) {
+	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutCtx); err != nil {
+		d.logger.Warn("health server: shutdown error", slog.String("err", err.Error()))
+	}
+}
+
+// boundHealthAddr returns the actual address the health listener bound, or "" if
+// the server is disabled or has not bound yet. It exists so an end-to-end test can
+// discover the OS-assigned ephemeral port; production code reads the logged addr.
+func (d *Daemon) boundHealthAddr() string {
+	d.boundMu.Lock()
+	defer d.boundMu.Unlock()
+	return d.boundAddr
+}
+
 // tick runs one Conductor.Tick and emits a structured log line describing what
 // happened: outcome, the task picked (if any), the self-reported verdict and the
 // INDEPENDENT review verdict (the actual merge gate, Rule#9), and the merge SHA on
@@ -603,6 +752,10 @@ func (d *Daemon) tick(ctx context.Context) (conductor.TickResult, error) {
 	if hbErr := d.hb.Write(d.ticks, outcome); hbErr != nil {
 		d.logger.Warn("heartbeat write failed", slog.String("err", hbErr.Error()))
 	}
+
+	// Record the last-tick snapshot /status reads (P4-2). The snapshot is always
+	// non-nil; it is concurrency-safe so the HTTP handler never races this write.
+	d.snap.record(d.ticks, outcome, time.Now())
 
 	attrs := []any{
 		slog.String("project", d.project),

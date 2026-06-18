@@ -71,6 +71,11 @@ WORKDIR /workspace
 # Default workspace root so the daemon clones under the writable volume/dir.
 ENV CONDUCTOR_ROOT=/workspace
 
+# Optional health/observability HTTP server (P4-2): /healthz /readyz /status.
+# It is DISABLED unless CONDUCTOR_HTTP_ADDR is set (e.g. :8080), so the image's
+# default behavior is unchanged. We document the port; compose enables + probes it.
+EXPOSE 8080
+
 # tini as PID 1 -> signal-correct graceful shutdown (the daemon traps SIGTERM).
 ENTRYPOINT ["/sbin/tini", "--", "conductor"]
 

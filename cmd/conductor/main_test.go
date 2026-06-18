@@ -234,6 +234,75 @@ func TestParseConfig(t *testing.T) {
 	})
 }
 
+// TestParseConfig_HTTPAddr proves the -http-addr flag / CONDUCTOR_HTTP_ADDR env
+// is parsed, defaults to empty (server DISABLED → unchanged behavior), and the
+// flag wins over the env.
+func TestParseConfig_HTTPAddr(t *testing.T) {
+	t.Run("defaults empty (disabled)", func(t *testing.T) {
+		cfg, err := parseConfig([]string{"-project", "p1", "-root", "/tmp/r"}, io.Discard)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		if cfg.httpAddr != "" {
+			t.Fatalf("httpAddr = %q, want empty by default (HTTP server disabled)", cfg.httpAddr)
+		}
+	})
+
+	t.Run("from flag", func(t *testing.T) {
+		cfg, err := parseConfig([]string{"-project", "p1", "-root", "/tmp/r", "-http-addr", ":8080"}, io.Discard)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		if cfg.httpAddr != ":8080" {
+			t.Fatalf("httpAddr = %q, want :8080", cfg.httpAddr)
+		}
+	})
+
+	t.Run("from env", func(t *testing.T) {
+		t.Setenv("CONDUCTOR_HTTP_ADDR", ":9090")
+		cfg, err := parseConfig([]string{"-project", "p1", "-root", "/tmp/r"}, io.Discard)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		if cfg.httpAddr != ":9090" {
+			t.Fatalf("httpAddr = %q, want :9090 from env", cfg.httpAddr)
+		}
+	})
+
+	t.Run("flag overrides env", func(t *testing.T) {
+		t.Setenv("CONDUCTOR_HTTP_ADDR", ":9090")
+		cfg, err := parseConfig([]string{"-project", "p1", "-root", "/tmp/r", "-http-addr", ":7070"}, io.Discard)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		if cfg.httpAddr != ":7070" {
+			t.Fatalf("httpAddr = %q, want :7070 (flag wins over env)", cfg.httpAddr)
+		}
+	})
+}
+
+// TestDaemon_HTTPDisabledByDefault proves a daemon built with no -http-addr (the
+// default) has NO health server, so the daemon behaves exactly as before — no
+// server starts and startHealthServer is a no-op closure.
+func TestDaemon_HTTPDisabledByDefault(t *testing.T) {
+	cfg := testConfig(t) // httpAddr is the zero value (empty).
+	d, err := newDaemon(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("newDaemon: %v", err)
+	}
+	defer d.Close()
+
+	if d.health != nil {
+		t.Fatal("health server is non-nil with empty http-addr; want disabled by default")
+	}
+	// startHealthServer must be a safe no-op when disabled.
+	stop := d.startHealthServer(context.Background())
+	stop()
+	if d.boundHealthAddr() != "" {
+		t.Fatalf("boundHealthAddr = %q, want empty when server disabled", d.boundHealthAddr())
+	}
+}
+
 // TestParseConfig_Governance proves the -governance flag defaults to true (so
 // production human-gates high-tier merges), is togglable to false, and honors the
 // CONDUCTOR_GOVERNANCE env fallback with the flag winning over env.

@@ -61,10 +61,27 @@ services:
       # ready tasks it is never invoked, so the stack no-ops safely.
       CONDUCTOR_DEVELOP_CMD: ${CONDUCTOR_DEVELOP_CMD:-claude -p}
       CONDUCTOR_GOVERNANCE: ${CONDUCTOR_GOVERNANCE:-true}
+      # Enable the OPTIONAL health/observability HTTP server (P4-2) so this
+      # container has k8s-style probes. Empty would DISABLE it (default image
+      # behavior); here we opt in on :8080 for /healthz /readyz /status.
+      CONDUCTOR_HTTP_ADDR: ${CONDUCTOR_HTTP_ADDR:-:8080}
     # Override the image's default CMD (-h, which just prints usage) so the
     # daemon runs its tick LOOP. All config comes from the env above; the only
     # flag passed is the interval (also overridable via CONDUCTOR_INTERVAL).
     command: ["-interval", "${CONDUCTOR_INTERVAL:-15s}"]
+    ports:
+      # Publish the health endpoints so ops can curl /healthz /readyz /status.
+      - "${CONDUCTOR_HTTP_PORT:-8080}:8080"
+    healthcheck:
+      # Liveness probe: /healthz is 200 while the loop runs and does NOT depend on
+      # the DB, so a transient Postgres blip never flaps the container's health.
+      # alpine ships wget; -q is quiet, -O- writes to stdout (exit non-zero on a
+      # non-2xx response), so this is a correct, dependency-free probe.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
     volumes:
       # Persist clones/worktrees across restarts (the daemon's workspace root).
       - workspace:/workspace
