@@ -1,0 +1,241 @@
+/* Fleet dashboard styles (3B-1). Plain CSS, scoped by .fleet-* class names — a
+   clean ops dashboard, not a fancy one. Colors echo the dark shell in index.css. */
+
+.fleet {
+  padding: 1rem 1.25rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* --- status bar --- */
+.fleet-statusbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border: 1px solid #2a2f37;
+  border-radius: 0.5rem;
+  background: #1b1e24;
+}
+
+.fleet-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.fleet-stat-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9aa4b2;
+}
+
+.fleet-stat-value {
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+
+.fleet-stat-value.small {
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.fleet-spacer {
+  margin-left: auto;
+}
+
+.fleet-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.fleet-dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  display: inline-block;
+  background: #6b7280;
+}
+.fleet-dot.open {
+  background: #34d399;
+}
+.fleet-dot.connecting {
+  background: #fbbf24;
+}
+.fleet-dot.closed {
+  background: #f87171;
+}
+
+/* --- layout grid --- */
+.fleet-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 1rem;
+}
+.fleet-col {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+@media (max-width: 960px) {
+  .fleet-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- panels + tables --- */
+.fleet-panel {
+  border: 1px solid #2a2f37;
+  border-radius: 0.5rem;
+  background: #1b1e24;
+  overflow: hidden;
+}
+
+.fleet-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.9rem;
+  border-bottom: 1px solid #2a2f37;
+}
+
+.fleet-panel-head h2 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.fleet-panel-body {
+  overflow-x: auto;
+}
+
+table.fleet-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.fleet-table th,
+.fleet-table td {
+  text-align: left;
+  padding: 0.45rem 0.9rem;
+  border-bottom: 1px solid #23272f;
+  white-space: nowrap;
+}
+
+.fleet-table th {
+  color: #9aa4b2;
+  font-weight: 600;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.fleet-table tbody tr.selectable {
+  cursor: pointer;
+}
+.fleet-table tbody tr.selectable:hover {
+  background: #21252d;
+}
+.fleet-table tbody tr.selected {
+  background: #233044;
+}
+
+.fleet-empty {
+  padding: 0.9rem;
+  color: #9aa4b2;
+  font-size: 0.85rem;
+}
+
+.fleet-error {
+  margin: 0;
+  padding: 0.6rem 0.9rem;
+  color: #fca5a5;
+  font-size: 0.85rem;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+}
+
+.muted {
+  color: #9aa4b2;
+}
+
+/* --- chips + badges --- */
+.chip {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  margin: 0.05rem 0.2rem 0.05rem 0;
+  border-radius: 0.3rem;
+  background: #2a2f37;
+  color: #cbd5e1;
+  font-size: 0.72rem;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  border-radius: 0.3rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+.badge.paused {
+  background: #78350f;
+  color: #fde68a;
+}
+.badge.approved {
+  background: #064e3b;
+  color: #6ee7b7;
+}
+.badge.abort {
+  background: #7f1d1d;
+  color: #fca5a5;
+}
+
+.hb {
+  font-weight: 600;
+}
+.hb.fresh {
+  color: #6ee7b7;
+}
+.hb.stale {
+  color: #fbbf24;
+}
+.hb.never {
+  color: #f87171;
+}
+
+/* --- event ticker --- */
+.fleet-ticker {
+  display: flex;
+  flex-direction: column;
+}
+.fleet-ticker-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.35rem 0.9rem;
+  border-bottom: 1px solid #23272f;
+  font-size: 0.78rem;
+}
+.fleet-ticker-row.intervention {
+  background: #3b1d1d;
+}
+.fleet-ticker-kind {
+  font-weight: 600;
+}
+.fleet-ticker-kind.intervention {
+  color: #fca5a5;
+}
+.fleet-ticker-time {
+  color: #9aa4b2;
+  margin-left: auto;
+}

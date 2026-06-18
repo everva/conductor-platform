@@ -15,11 +15,21 @@ npm install
 npm run dev          # vite dev server on http://localhost:5173
 ```
 
-Point the cockpit at a gateway with `VITE_API_BASE` (default: same-origin):
+The dev server **proxies** the gateway paths (`/projects`, `/projects/.../tasks`,
+`/hosts`, `/status`, `/events`, and `/ws` with WebSocket upgrade) to a running
+gateway, so the browser stays **same-origin** and no gateway CORS change is needed.
+Point the proxy at your gateway with `VITE_API_TARGET` (default
+`http://localhost:8080`):
 
 ```sh
-VITE_API_BASE=http://localhost:8080 npm run dev
+VITE_API_TARGET=http://localhost:8080 npm run dev   # proxy → gateway, CORS-free
 ```
+
+The `ApiClient` base URL stays `""` (same-origin) so the exact same code path works
+through the dev proxy and in prod. **Prod (3C):** the ingress routes both the static
+app and the API under one origin — the cockpit and gateway are served same-origin,
+so there is no cross-origin call at all. (`VITE_API_BASE` can still override the REST
+base for a direct cross-origin gateway, but the proxy is the default dev path.)
 
 On first load you get the **token gate**: paste the gateway bearer token
 (`CONDUCTOR_API_TOKEN`). It is verified with a `GET /status` probe and, on
@@ -34,7 +44,8 @@ npm run gate         # typecheck + lint + test, in sequence
 
 - `npm run typecheck` → `tsc -b` (strict, 0 errors) across app / node-config / e2e.
 - `npm run lint` → `eslint . --max-warnings 0` (TS + react-hooks; zero warnings).
-- `npm run test` → `vitest run` (jsdom; client, TokenGate, useEventStream).
+- `npm run test` → `vitest run` (jsdom; client, TokenGate, useEventStream, useFleet,
+  fleet components, formatters).
 
 This mirrors the Go gate's philosophy: exit-code truth, no subjective score.
 
@@ -60,7 +71,10 @@ npx playwright install chromium    # one-time browser download
 npm run e2e                        # builds + `vite preview`, runs e2e/smoke.spec.ts
 ```
 
-The smoke spec asserts the token gate renders against the built app.
+`smoke.spec.ts` asserts the token gate renders against the built app;
+`dashboard.spec.ts` mocks the gateway with `page.route` (REST + a stubbed `/ws`),
+signs in, and asserts the fleet dashboard renders (project + host rows) — fully
+deterministic, no real gateway needed.
 
 ## Build
 
