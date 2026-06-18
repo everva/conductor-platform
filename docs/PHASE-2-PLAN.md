@@ -264,3 +264,31 @@ Deterministik kanıt = kalite kapısı (LLM asla karar mercii); sahte-yeşil ASL
   DOKUNULMADI; yalnız ADDITIVE (yeni mod + flag'ler + cloneGitReader + iki yeni dosya + CronJob). Offline gate
   (build+test+vet+golangci v2.12.0) + e2e (E2E ./internal/conductor/) + `-race ./cmd/conductor/` YEŞİL; gofmt temiz;
   yeni dep yok; secret yok. **→ Dalga B (çok-host) TAMAM (2B-0..2B-5 hepsi done).**
+- **Dalga C — 2C-1 (sentinel Katman-2 gri-bölge LLM-danışman, ADR-0006)** ✅ done. 3-katman tek karara
+  (`internal/sentinel.Sentinel.Assess(Signals) Result`) birleşti, **öncelik Katman-3 ÖNCE**: (1) Katman-3 backstop
+  İLK — `Elapsed >= MaxTotal` → advisor HİÇ çağrılmadan `Kill` (advisor "progressing" dese de tavanı aşamaz; DF-farkı
+  SIRALAMAYLA yapısal); (2) Katman-1 taban — taze çıktı → advisor'sız `Continue`, canlı-değil+stall → `Kill`; (3)
+  Katman-2 gri-bölge (NADİR) — canlı AMA `GraceUnsure`'dan uzun stall → advisor (`progressing→Continue`,
+  `stuck→Kill`, `needs_human→Escalate`); advisor yok/hata/enum-dışı → konservatif `Continue` (Katman-3'e kadar),
+  ASLA spurious escalate. **Advisor seam** = `engine.runnerFunc` aynası: `CommandAdvisor` gerçek `claude -p
+  --dangerously-skip-permissions` (subscription auth, key yok, sıkı timeout) `realclaude` build-tag +
+  `CP_REAL_CLAUDE=1` arkasında; default testlerde STUB (gate-dışı). **Parse** = `ParseVerdict` aynası (balanced
+  top-level `{...}`, SON geçerli `advice` enum'ı; malformed/enum-dışı → ERROR, asla sahte-tavsiye). **Wiring** = F-2
+  watcher deseni (`developWithSentinel`: develop child-ctx altında watcher periyodik `Assess` → `Kill`/`Escalate`
+  child-ctx iptal → performer process-group ölür [Setpgid], abort+sentinel aynı cancel makinesi, ilk iptal kazanır,
+  abort önceliği): `Kill`/`Escalate`→`OutcomeSentinelKilled` (task blocked, `sentinel-killed` reason +
+  intervention-needed event, **verify YOK + merge YOK + trailer YOK**, sahte-yeşil yok), `Continue`→develop -timeout'a
+  kadar (Katman-3 process tavanı). **ProgressProbe seam** = default engine `Health` (Layer-1 LastActivityTS) + elapsed;
+  test scripted probe. **Geriye-uyum:** nil Sentinel → bugünkü Katman-1+3 (mevcut develop/e2e DEĞİŞMEDEN yeşil).
+  **Daemon:** `-sentinel` (default kapalı) + `-sentinel-max-total` (0=`-timeout`) + `-sentinel-grace` +
+  `-sentinel-advisor` (gerçek claude, realclaude build; default build advisor'ı net hatayla deterministik 1+3'e düşürür).
+  **Testler (deterministik, stub advisor):** sentinel pkg — Layer-1 taze→Continue (advisor ÇAĞRILMADI); gri stuck→Kill;
+  gri needs_human→Escalate; **Layer-3: stub advisor "progressing" AMA Elapsed≥MaxTotal → Kill (advisor backstop'u
+  EZEMEZ, advisor hiç çağrılmadı) — KİLİT DF-farkı testi**; advisor'sız gri→Continue-until-backstop; advisor hata→
+  konservatif Continue; CommandAdvisor parse 3-geçerli + malformed/enum-dışı→error. conductor — stalling develop +
+  stub "stuck"→develop iptal + task blocked (merge yok); **stalling develop + GERÇEK Sentinel (advisor ALWAYS
+  progressing) + Elapsed past MaxTotal → backstop killed (uçtan-uca DF-farkı)**; Continue→develop bitti+merge; nil
+  Sentinel→merge (geriye-uyum); engineProgressProbe Health'ten türetir. engine.go + statestore imza + tools/builder
+  DOKUNULMADI (additive, ADR-0021). Offline gate (build+test+vet+golangci v2.12.0) + e2e (E2E ./internal/conductor/) +
+  `-race ./internal/sentinel/ ./internal/conductor/` YEŞİL; gofmt temiz; yeni dep yok; gerçek-claude advisor gate-dışı
+  (tag+env+stub). **→ Dalga C TAMAM (2C-1 done) → FAZ-2 TAMAM (Dalga A + B + C hepsi done).**

@@ -29,6 +29,7 @@ import (
 	"github.com/everva/conductor-platform/internal/events"
 	"github.com/everva/conductor-platform/internal/governance"
 	"github.com/everva/conductor-platform/internal/governor"
+	"github.com/everva/conductor-platform/internal/sentinel"
 	"github.com/everva/conductor-platform/internal/statestore"
 	"github.com/everva/conductor-platform/internal/verify"
 )
@@ -93,6 +94,16 @@ const (
 	// blocked the task instead of fake-greening it. The approval is cleared so a
 	// re-approval after a fix is a fresh decision.
 	OutcomeApprovedRejected Outcome = "approved-rejected"
+	// OutcomeSentinelKilled means the 3-layer sentinel progress-watchdog (ADR-0006,
+	// Faz-2 2C-1) cancelled the in-flight develop because the run was judged STUCK
+	// (Layer-2 advisor or a clearly-dead Layer-1) or hit the absolute ceiling
+	// (Layer-3 backstop), OR the gray-zone advisor judged a HUMAN is needed
+	// (Escalate). The develop child context was cancelled (killing the performer
+	// process group, the SAME mechanism as abort), so the tick ran NO verify and NO
+	// merge (no [task:<id>] trailer) and the task was BLOCKED with a sentinel reason
+	// plus an intervention-needed event — never fake-green. Layer-3 ALWAYS overrides
+	// the advisor: a "progressing" advice past the ceiling still lands here.
+	OutcomeSentinelKilled Outcome = "sentinel-killed"
 )
 
 // TickResult is the structured result of a single tick.
@@ -261,10 +272,22 @@ type Conductor struct {
 	pauser   Pauser
 	aborter  Aborter
 	approver Approver
+	// sentinel is the OPTIONAL 3-layer progress-watchdog decider (ADR-0006, 2C-1).
+	// Nil means no watchdog runs (Layer-1+3-only / today's behavior).
+	sentinel SentinelDecider
+	// probe is the OPTIONAL liveness-signal source for the sentinel watchdog. Nil
+	// uses the default engine-Health-derived probe; tests inject a scripted one.
+	probe ProgressProbe
+	// clock is the OPTIONAL injectable wall clock for the watchdog's elapsed/since
+	// computations. Nil uses time.Now.
+	clock func() time.Time
 	// abortPoll is how often the running-develop watcher polls the abort signal.
 	// Zero means the default (defaultAbortPoll); it is overridable so tests can
 	// drive the watcher deterministically without a wall-clock dependency.
 	abortPoll time.Duration
+	// sentinelPoll is how often the sentinel progress-watchdog re-assesses. Zero
+	// falls back to abortPoll (then defaultAbortPoll); overridable for tests.
+	sentinelPoll time.Duration
 }
 
 // Deps bundles the injected collaborators so New has a single, named-field
@@ -329,6 +352,27 @@ type Deps struct {
 	// the default (defaultAbortPoll). It exists so a test can drive the watcher
 	// deterministically (a tiny interval) without depending on wall-clock timing.
 	AbortPoll time.Duration
+	// Sentinel is the OPTIONAL 3-layer progress-watchdog decider (ADR-0006, Faz-2
+	// 2C-1). When set, the tick runs a watcher during develop that periodically
+	// Assesses liveness signals and cancels develop (killing the performer process
+	// group) on a Kill/Escalate decision — Layer-3 backstop ALWAYS overriding the
+	// gray-zone advisor. A nil Sentinel means no watchdog (Layer-1+3-only / today's
+	// behavior), keeping construction backward compatible — the daemon opts in by
+	// injecting a *sentinel.Sentinel.
+	Sentinel SentinelDecider
+	// Probe is the OPTIONAL liveness-signal source for the sentinel watchdog. A nil
+	// Probe uses the default probe derived from the engine's Health (ADR-0006
+	// Layer-1) plus elapsed wall time. Tests inject a scripted probe to model a
+	// stalled/dead/progressing run deterministically.
+	Probe ProgressProbe
+	// Clock is the OPTIONAL injectable wall clock for the watchdog's elapsed/since
+	// computations. Nil uses time.Now. It exists so a test can drive the backstop
+	// deterministically without sleeping.
+	Clock func() time.Time
+	// SentinelPoll overrides the sentinel watchdog's re-assess interval. Zero falls
+	// back to AbortPoll then defaultAbortPoll. It exists so a test can drive the
+	// watchdog deterministically without wall-clock timing.
+	SentinelPoll time.Duration
 }
 
 // New returns a Conductor wired from the injected collaborators. It errors if any
@@ -354,21 +398,25 @@ func New(d Deps) (*Conductor, error) {
 		hostID = "local"
 	}
 	return &Conductor{
-		store:     d.Store,
-		picker:    d.Picker,
-		prov:      d.Provisioner,
-		engine:    d.Engine,
-		verifier:  d.Verifier,
-		merger:    d.Merger,
-		recipe:    d.Recipe,
-		hostID:    hostID,
-		governor:  d.Governor,
-		emitter:   d.Emitter,
-		policy:    d.Policy,
-		pauser:    d.Pauser,
-		aborter:   d.Aborter,
-		approver:  d.Approver,
-		abortPoll: d.AbortPoll,
+		store:        d.Store,
+		picker:       d.Picker,
+		prov:         d.Provisioner,
+		engine:       d.Engine,
+		verifier:     d.Verifier,
+		merger:       d.Merger,
+		recipe:       d.Recipe,
+		hostID:       hostID,
+		governor:     d.Governor,
+		emitter:      d.Emitter,
+		policy:       d.Policy,
+		pauser:       d.Pauser,
+		aborter:      d.Aborter,
+		approver:     d.Approver,
+		sentinel:     d.Sentinel,
+		probe:        d.Probe,
+		clock:        d.Clock,
+		abortPoll:    d.AbortPoll,
+		sentinelPoll: d.SentinelPoll,
 	}, nil
 }
 
@@ -518,9 +566,17 @@ func (c *Conductor) runTask(ctx context.Context, project statestore.Project, tas
 	// other develop error so the tick reverts to a SAFE, re-runnable state instead
 	// of blocking. With a nil Aborter this is a plain develop (pre-F-2 behavior).
 	c.emit(ctx, task, events.PhaseDevelop, events.KindStarted, nil)
-	verdict, aborted, devErr := c.developWithAbort(ctx, task, ws)
+	verdict, aborted, sentRes, devErr := c.developWithSentinel(ctx, task, ws)
+	// Abort takes priority over a sentinel decision: an operator abort is an explicit
+	// human action and reverts to a re-runnable state, whereas a sentinel kill blocks.
 	if aborted {
 		return c.handleAbort(ctx, task)
+	}
+	// Sentinel progress-watchdog (2C-1): a Kill/Escalate cancelled develop. The
+	// develop returned a context-cancelled error; route it to the sentinel handler
+	// (block + intervention-needed), NOT the generic develop-error path.
+	if sentRes.Decision == sentinel.Kill || sentRes.Decision == sentinel.Escalate {
+		return c.handleSentinelDecision(ctx, task, sentRes)
 	}
 	if devErr != nil {
 		return c.handleDevelopError(ctx, task, devErr)
@@ -649,73 +705,6 @@ func (c *Conductor) resolveHoldoutRef(ctx context.Context, task statestore.Task)
 		return ""
 	}
 	return scn.HoldoutRef
-}
-
-// developWithAbort runs the engine's Develop under the control reverse-channel
-// ABORT watcher (ADR-0020 follow-up / F-2). It returns the develop verdict + error
-// and a third boolean reporting whether the develop was cancelled by an operator
-// abort (as opposed to any other develop failure), so the caller can route an
-// abort to a SAFE revert rather than a block.
-//
-// Mechanism: develop runs under a CHILD context derived from ctx. When an Aborter
-// is injected, a watcher goroutine polls the leased task's abort signal every
-// abortPoll; the FIRST time it reads true it cancels the child context. The
-// performer subprocess runs via exec.CommandContext with its own process group
-// (Setpgid, process_unix.go), so cancelling the child context kills the WHOLE
-// performer process group, not just the leader. The watcher is always joined
-// before this returns (no leaked goroutine, no post-return store access), so the
-// `aborted` flag is read race-free.
-//
-// With a nil Aborter, no watcher runs and this is a plain develop under ctx
-// (the pre-F-2 behavior), so existing wiring and tests are unaffected.
-func (c *Conductor) developWithAbort(ctx context.Context, task statestore.Task, ws engine.Workspace) (engine.Verdict, bool, error) {
-	if c.aborter == nil {
-		v, err := c.engine.Develop(ctx, task, ws)
-		return v, false, err
-	}
-
-	devCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	poll := c.abortPoll
-	if poll <= 0 {
-		poll = defaultAbortPoll
-	}
-
-	// aborted is written ONLY by the watcher goroutine and read ONLY after the
-	// watcher has exited (the <-watcherDone join below), so no mutex is needed: the
-	// channel close establishes the happens-before edge.
-	var aborted bool
-	watcherDone := make(chan struct{})
-	go func() {
-		defer close(watcherDone)
-		ticker := time.NewTicker(poll)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-devCtx.Done():
-				// Develop finished (or was cancelled by us already): stop watching.
-				return
-			case <-ticker.C:
-				req, err := c.aborter.AbortRequested(devCtx, task.ID)
-				if err != nil {
-					// A transient read error must NOT cancel a healthy develop; keep
-					// polling. A persistent error simply means abort never fires.
-					continue
-				}
-				if req {
-					aborted = true
-					cancel() // kills the performer process group via ctx.
-					return
-				}
-			}
-		}
-	}()
-
-	v, err := c.engine.Develop(devCtx, task, ws)
-	cancel()      // ensure the watcher's devCtx.Done() fires so it exits promptly.
-	<-watcherDone // join: establishes happens-before for the `aborted` read.
-	return v, aborted, err
 }
 
 // handleAbort reverts a task whose in-flight develop was cancelled by an operator

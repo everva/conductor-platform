@@ -30,5 +30,30 @@ Katman-1 (deterministik) ve Katman-3 (backstop) SOMUT mekanizmaları **ADR-0016*
 job). Katman-2 (LLM-danışman gri-bölge) **Faz-1b**'ye ertelendi (ADR-0013) — walking skeleton'da deterministik
 taban+backstop yeter.
 
+## Güncelleme (Faz-2 2C-1): Katman-2 ARTIK IMPLEMENTE
+Gri-bölge LLM-danışman (Katman-2) `internal/sentinel` paketinde gerçeklendi ve conductor develop'a
+progress-watchdog olarak bağlandı. 3-katman tek `Sentinel.Assess(signals)` kararında birleşti, **öncelik
+SIRASI Katman-3 ÖNCE** olacak şekilde:
+1. **Katman-3 backstop İLK kontrol** — `Elapsed >= MaxTotal` ise advisor HİÇ çağrılmadan `Kill`. Backstop
+   advisor'dan ÖNCE değerlendirildiği için, "progressing" diyen bir advisor bile mutlak tavanı AŞAMAZ. DF-farkı
+   burada YAPISAL: sıralama garantiler — LLM asla sonsuza bekletemez.
+2. **Katman-1 taban** — taze çıktı (`SinceActivity < FreshActivity`) → advisor ÇAĞRILMADAN `Continue` (sağlıklı
+   koşularda LLM yükü yok); process canlı DEĞİL + stall → `Kill` (kesinlikle ölü).
+3. **Katman-2 gri-bölge (NADİR)** — canlı AMA çıktı `GraceUnsure`'dan uzun durmuş → advisor çağrılır
+   (`progressing→Continue`, `stuck→Kill`, `needs_human→Escalate`). Advisor yok / advisor hatası /
+   enum-dışı → **konservatif `Continue`** (Katman-3'e kadar) — ASLA spurious escalate/kill.
+
+**Advisor seam:** `Advisor.Advise(ctx, lastOutput) (Advice, reason, error)`; tek somut `CommandAdvisor` =
+`engine.runnerFunc` aynası, gerçek `claude -p --dangerously-skip-permissions` (subscription auth, key yok, sıkı
+timeout) `realclaude` build-tag + `CP_REAL_CLAUDE=1` arkasında; default testlerde STUB (gate-dışı). Parse =
+`ParseVerdict` aynası (balanced top-level `{...}`, SON geçerli `advice` enum'ı; malformed/enum-dışı → ERROR,
+asla sahte-tavsiye). **Wiring:** F-2 abort-watcher deseni (`developWithSentinel`: develop child-ctx altında,
+watcher goroutine periyodik `Assess` → `Kill`/`Escalate` child-ctx'i iptal eder → performer process-group ölür);
+`Kill`→task blocked (`sentinel-killed` reason + intervention-needed event, verify/merge YOK, trailer YOK),
+`Escalate`→blocked + human-needed event, `Continue`→develop -timeout'a kadar. nil sentinel/advisor → bugünkü
+Katman-1+3 davranışı (geriye-uyumlu). Daemon: `-sentinel` (default kapalı) + `-sentinel-max-total` (Katman-3
+tavan; 0=`-timeout`) + `-sentinel-grace` + `-sentinel-advisor` (gerçek claude, realclaude build).
+
 ## Durum
-✅ Kapandı (ADR-0016 somutlar).
+✅ Kapandı — Katman-1+3 ADR-0016 somutları; **Katman-2 gri-bölge LLM-danışman Faz-2 2C-1'de implemente**
+(backstop her zaman kazanır; LLM gate-dışı).

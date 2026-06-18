@@ -229,6 +229,30 @@ type config struct {
 	// so every green task auto-merges (the pre-N-10 behavior). Default true so
 	// production correctly human-gates high-risk merges.
 	governance bool
+	// sentinel, when true, wires the 3-layer liveness progress-watchdog (ADR-0006,
+	// Faz-2 2C-1) into the conductor: during develop a watcher periodically Assesses
+	// liveness signals (engine Health + elapsed wall time) and, in the gray zone
+	// (alive but output stalled past the grace window), consults a gray-zone advisor;
+	// a Kill/Escalate cancels develop (killing the performer process group) and
+	// blocks the task. The Layer-3 deterministic backstop (sentinelMaxTotal) ALWAYS
+	// overrides the advisor. Default false = no watchdog (Layer-1+3-only via the
+	// per-develop -timeout, the pre-2C-1 behavior). The gray-zone LLM advisor is wired
+	// only when sentinelAdvisor is also true (and behind CP_REAL_CLAUDE); otherwise
+	// the watchdog runs deterministic Layers 1+3 only.
+	sentinel bool
+	// sentinelMaxTotal is the Layer-3 absolute ceiling: a develop running longer than
+	// this is killed regardless of any advisor verdict (the DF-difference). 0 = use
+	// the per-develop -timeout as the only ceiling (the watchdog's backstop disabled,
+	// process timeout still bounds the run). Only meaningful when sentinel is true.
+	sentinelMaxTotal time.Duration
+	// sentinelGrace is how long a develop must be stalled (no fresh activity) while
+	// still alive before the gray-zone advisor is consulted (ADR-0006 Katman-2). 0
+	// uses the package default. Only meaningful when sentinel is true.
+	sentinelGrace time.Duration
+	// sentinelAdvisor, when true, wires the gray-zone LLM advisor (real `claude -p`
+	// behind CP_REAL_CLAUDE=1; ADR-0006 Katman-2). Default false = deterministic
+	// Layers 1+3 only (no LLM). Only meaningful when sentinel is true.
+	sentinelAdvisor bool
 }
 
 // run parses argv, builds the daemon, and drives it once or in a loop. It is
@@ -447,6 +471,14 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		"listen address for the OPTIONAL health HTTP server (/healthz /readyz /status), e.g. :8080; empty = disabled")
 	governance := fs.Bool("governance", envBoolOr("CONDUCTOR_GOVERNANCE", true),
 		"wire the risk-layered merge policy (ADR-0003): high-tier/untiered tasks are HELD for a human after a green gate; false = auto-merge all (default true)")
+	sentinelOn := fs.Bool("sentinel", envBoolOr("CONDUCTOR_SENTINEL", false),
+		"wire the 3-layer liveness progress-watchdog (ADR-0006, 2C-1): kill a stuck/dead develop, escalate needs-human, backstop ALWAYS overrides the gray-zone advisor; false = no watchdog (Layer-1+3-only via -timeout, default false)")
+	sentinelMaxTotal := fs.Duration("sentinel-max-total", envDurationOr("CONDUCTOR_SENTINEL_MAX_TOTAL", 0),
+		"sentinel Layer-3 absolute ceiling: a develop running longer is killed regardless of any advisor verdict (the DF-difference); 0 = use -timeout as the only ceiling. Only meaningful with -sentinel")
+	sentinelGrace := fs.Duration("sentinel-grace", envDurationOr("CONDUCTOR_SENTINEL_GRACE", 0),
+		"sentinel gray-zone grace: how long a develop is stalled-but-alive before the advisor is consulted (ADR-0006 Katman-2); 0 = package default. Only meaningful with -sentinel")
+	sentinelAdvisor := fs.Bool("sentinel-advisor", envBoolOr("CONDUCTOR_SENTINEL_ADVISOR", false),
+		"wire the gray-zone LLM advisor (real `claude -p` behind CP_REAL_CLAUDE=1; ADR-0006 Katman-2); false = deterministic Layers 1+3 only. Only meaningful with -sentinel")
 	holdoutStore := fs.String("holdout-store", envOr("CONDUCTOR_HOLDOUT_STORE", ""),
 		"repo-EXTERNAL root dir the hidden holdout (ADR-0018) is resolved under; empty = inert noop holdout (backward compatible). Path is logged, contents are not")
 	holdoutCmd := fs.String("holdout-cmd", envOr("CONDUCTOR_HOLDOUT_CMD", defaultHoldoutCmd),
@@ -593,6 +625,12 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		// holdout token (CONDUCTOR_GH_TOKEN / GH_TOKEN) so it never appears in argv.
 		push:       *push,
 		pushRemote: *pushRemote,
+		// Sentinel 3-layer liveness watchdog (ADR-0006, 2C-1). Off by default; the
+		// gray-zone LLM advisor is wired only when sentinelAdvisor is also set.
+		sentinel:         *sentinelOn,
+		sentinelMaxTotal: *sentinelMaxTotal,
+		sentinelGrace:    *sentinelGrace,
+		sentinelAdvisor:  *sentinelAdvisor,
 	}, nil
 }
 
@@ -835,6 +873,11 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		// `conductorctl approve` in a separate process makes this daemon's next tick
 		// MERGE the held task's PRESERVED verified branch without re-developing.
 		Approver: conductor.NewStoreApprover(store),
+		// Sentinel 3-layer liveness progress-watchdog (ADR-0006, Faz-2 2C-1). Nil unless
+		// -sentinel is set, so the default daemon behavior is unchanged (Layer-1+3-only
+		// via -timeout). When wired, the Layer-3 backstop ALWAYS overrides the gray-zone
+		// advisor — the LLM can never make a run wait past the ceiling.
+		Sentinel: newSentinel(cfg, logger),
 	})
 	if err != nil {
 		closer()
