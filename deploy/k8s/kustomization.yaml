@@ -21,3 +21,4 @@ resources:
   - deployment.yaml
   - service.yaml
   - cronjob-stallcheck.yaml
+  - cronjob-reconcile.yaml

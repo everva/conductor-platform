@@ -48,6 +48,7 @@ import (
 	"github.com/everva/conductor-platform/internal/heartbeat"
 	"github.com/everva/conductor-platform/internal/holdout"
 	"github.com/everva/conductor-platform/internal/provisioner"
+	"github.com/everva/conductor-platform/internal/reconcile"
 	"github.com/everva/conductor-platform/internal/registry"
 	"github.com/everva/conductor-platform/internal/scaffolder"
 	"github.com/everva/conductor-platform/internal/statestore"
@@ -85,6 +86,16 @@ const (
 	// 30s tick interval so a single slow tick does not false-alert; an external
 	// alert job overrides via -heartbeat-stale / CONDUCTOR_HEARTBEAT_STALE.
 	defaultHeartbeatStale = 5 * time.Minute
+	// defaultLeaseTTL is the age past which the INDEPENDENT reconcile job (-reconcile)
+	// reaps a stale lease via the TTL backstop (ADR-0016, second seam alongside the
+	// host-heartbeat OwnerLive). Generous relative to a long-running develop so a
+	// healthy in-flight task is never reaped; override via -lease-ttl / CONDUCTOR_LEASE_TTL.
+	defaultLeaseTTL = 30 * time.Minute
+	// defaultHostStale is the host-heartbeat age past which the reconcile job's
+	// host-heartbeat OwnerLive (ADR-0024, 2B-3) treats the owning host as DEAD and
+	// its lease reapable. Several heartbeat intervals so a single missed beat does
+	// not free a live host's repo; override via -host-stale / CONDUCTOR_HOST_STALE.
+	defaultHostStale = 2 * time.Minute
 )
 
 func main() {
@@ -152,6 +163,20 @@ type config struct {
 	// read the heartbeat at heartbeatPath, print status, exit 0 FRESH / non-zero
 	// STALE|MISSING (ADR-0016 independent backstop).
 	check bool
+	// reconcile, when true, runs the INDEPENDENT recovery job instead of the daemon
+	// (ADR-0016): a conductor cannot rescue its own death, so the reaper runs as a
+	// SEPARATE process (a k8s CronJob), never as a goroutine inside the daemon's tick
+	// loop. One pass reaps stale/dead-host leases (ReapLeases) and derives merged
+	// tasks done from git trailers (ReconcileTasks). It REQUIRES -dsn (the shared
+	// Postgres store): reconciling across hosts needs the central store, never a
+	// process-local memory store. It short-circuits before daemon wiring.
+	reconcile bool
+	// leaseTTL is the age past which -reconcile reaps a stale lease (TTL backstop,
+	// ADR-0016). It is the reconcile.Config.LeaseTTL.
+	leaseTTL time.Duration
+	// hostStale is the host-heartbeat age past which -reconcile's host-heartbeat
+	// OwnerLive treats the owning host as dead and its lease reapable (ADR-0024, 2B-3).
+	hostStale time.Duration
 	// httpAddr is the listen address for the OPTIONAL health/observability HTTP
 	// server (k8s-style probes: /healthz /readyz /status). Empty (the DEFAULT)
 	// DISABLES the server entirely, so the daemon's behavior is unchanged unless an
@@ -226,6 +251,14 @@ func run(ctx context.Context, argv []string, logger *slog.Logger, stderr io.Writ
 		return runCheck(cfg, logger, stderr)
 	}
 
+	// Independent recovery job mode (ADR-0016): a conductor cannot rescue its own
+	// death, so the stale-lease reaper + git-trailer task reconcile run as a SEPARATE
+	// process (a k8s CronJob), never as a goroutine inside the daemon's tick loop.
+	// One pass against the shared store, then exit (0 ok / non-zero error).
+	if cfg.reconcile {
+		return runReconcile(ctx, cfg, logger, stderr)
+	}
+
 	d, err := newDaemon(cfg, logger)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "conductor: %v\n", err)
@@ -266,6 +299,109 @@ func runCheck(cfg config, logger *slog.Logger, stderr io.Writer) int {
 	return heartbeat.Detect(chk, heartbeat.LogNotifier{Logger: logger}, stderr)
 }
 
+// runReconcile is the INDEPENDENT recovery-job entry point (ADR-0016): it opens
+// the SHARED Postgres store from cfg.dsn, builds the deterministic Reconciler
+// (TTL backstop + host-heartbeat OwnerLive + a real git-log reader for trailer
+// reconcile), runs ONE pass (ReapLeases + ReconcileTasks across every project),
+// then exits — 0 on success, non-zero on error, so a k8s CronJob fails-loud on a
+// reconcile error. It is a SEPARATE process from the daemon (a conductor cannot
+// rescue its own death), never a goroutine in the tick loop, and it builds NONE
+// of the daemon's engine/verify/loop wiring. The DSN is never logged.
+func runReconcile(ctx context.Context, cfg config, logger *slog.Logger, stderr io.Writer) int {
+	store, closer, err := newStore(ctx, cfg, logger)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "conductor: %v\n", err)
+		return 1
+	}
+	defer closer()
+
+	// The git reader derives merged→done from EXACT [task:<id>] trailers on each
+	// project's base branch (ADR-0004/0010), reading the per-project clone the daemon
+	// merges into (rootDir/clones/<projectID>). When -root is unset the clones are not
+	// reachable, so trailer reconcile finds no commits (a clean no-op) — the lease
+	// reaper still runs fully, since it reads only the store. The reader shells out to
+	// `git log` (no LLM), mirroring the merger's git invocation.
+	gitReader := newCloneGitReader(cfg.rootDir)
+
+	now := time.Now().UTC()
+	if err := reconcileRun(ctx, store, gitReader, cfg, now, logger); err != nil {
+		_, _ = fmt.Fprintf(stderr, "conductor: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// reconcileRun executes ONE deterministic reconcile pass over the given store and
+// git reader (ADR-0016): it reaps stale/dead-host leases (ReapLeases) and derives
+// merged tasks done from git trailers (ReconcileTasks) for EVERY project. `now` is
+// injected so the pass is deterministic and unit-testable without os.Exit. It is
+// split from runReconcile so a test can drive it against an in-memory or real-PG
+// store with a fixed clock and a fake/real git reader. It logs the actions it takes
+// (leases reaped, projects reconciled) and never logs any secret.
+func reconcileRun(ctx context.Context, store statestore.StateStore, git reconcile.GitReader, cfg config, now time.Time, logger *slog.Logger) error {
+	// OwnerLive is the cross-host liveness predicate (ADR-0024, 2B-3): a lease whose
+	// owning host stopped heartbeating (older than cfg.hostStale) is reapable; a fresh
+	// host's lease is kept. The TTL backstop (cfg.leaseTTL) is the independent second
+	// seam. Both are deterministic in `now` (no hidden wall clock).
+	ownerLive := reconcile.HostHeartbeatOwnerLive(ctx, store, cfg.hostStale, now)
+	rec := reconcile.New(store, git, reconcile.Config{
+		LeaseTTL:  cfg.leaseTTL,
+		OwnerLive: ownerLive,
+	})
+
+	// Snapshot the live leases before the reap so the log can report WHICH leases the
+	// pass freed (ReapLeases itself returns only an error). This read is on the frozen
+	// interface; it is purely for observability and does not change the reap decision.
+	before, err := store.ListLeases(ctx)
+	if err != nil {
+		return fmt.Errorf("reconcile: list leases (pre-reap): %w", err)
+	}
+	if err := rec.ReapLeases(ctx, now); err != nil {
+		return err
+	}
+	after, err := store.ListLeases(ctx)
+	if err != nil {
+		return fmt.Errorf("reconcile: list leases (post-reap): %w", err)
+	}
+	stillHeld := make(map[string]struct{}, len(after))
+	for _, l := range after {
+		stillHeld[l.ProjectID] = struct{}{}
+	}
+	reaped := 0
+	for _, l := range before {
+		if _, held := stillHeld[l.ProjectID]; !held {
+			reaped++
+			logger.Info("reconcile: reaped stale lease (ADR-0016)",
+				slog.String("project", l.ProjectID),
+				slog.String("host", l.HostID),
+				slog.String("task", l.TaskID),
+				slog.Time("acquired_at", l.AcquiredAt))
+		}
+	}
+
+	// Git-trailer task reconcile (ADR-0004/0010): for EVERY project, derive merged
+	// tasks done from EXACT [task:<id>] trailers on the base branch. A project whose
+	// clone is unreachable yields no commits (clean no-op). A per-project error is
+	// fatal to the pass so the CronJob fails-loud rather than silently skipping work.
+	projects, err := store.ListProjects(ctx)
+	if err != nil {
+		return fmt.Errorf("reconcile: list projects: %w", err)
+	}
+	for _, p := range projects {
+		if err := rec.ReconcileTasks(ctx, p); err != nil {
+			return err
+		}
+	}
+
+	logger.Info("reconcile pass complete (ADR-0016 independent recovery job)",
+		slog.Int("leases_reaped", reaped),
+		slog.Int("leases_remaining", len(after)),
+		slog.Int("projects_reconciled", len(projects)),
+		slog.Duration("lease_ttl", cfg.leaseTTL),
+		slog.Duration("host_stale", cfg.hostStale))
+	return nil
+}
+
 // parseConfig parses argv into a config, applying env fallback per flag and
 // validating the required fields. Flag values win over env; env wins over the
 // built-in default.
@@ -301,6 +437,12 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		"independent -check: if >0, a fresh heartbeat whose tick never advances for this long is STALE (stuck)")
 	check := fs.Bool("check", envBoolOr("CONDUCTOR_CHECK", false),
 		"run the INDEPENDENT stall-detector over -heartbeat and exit (0=FRESH, non-zero=STALE/MISSING); does not start the daemon")
+	reconcileMode := fs.Bool("reconcile", envBoolOr("CONDUCTOR_RECONCILE", false),
+		"run the INDEPENDENT recovery job (ADR-0016): ONE pass of stale/dead-host lease reaping + git-trailer task reconcile over the shared -dsn store, then exit (0=ok, non-zero=error). Requires -dsn; does not start the daemon")
+	leaseTTL := fs.Duration("lease-ttl", envDurationOr("CONDUCTOR_LEASE_TTL", defaultLeaseTTL),
+		"independent -reconcile: lease age past which the TTL backstop reaps a stale lease (ADR-0016)")
+	hostStale := fs.Duration("host-stale", envDurationOr("CONDUCTOR_HOST_STALE", defaultHostStale),
+		"independent -reconcile: host-heartbeat age past which the owning host is treated DEAD and its lease reapable (ADR-0024, 2B-3)")
 	httpAddr := fs.String("http-addr", envOr("CONDUCTOR_HTTP_ADDR", ""),
 		"listen address for the OPTIONAL health HTTP server (/healthz /readyz /status), e.g. :8080; empty = disabled")
 	governance := fs.Bool("governance", envBoolOr("CONDUCTOR_GOVERNANCE", true),
@@ -322,6 +464,7 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		_, _ = fmt.Fprintln(stderr, "conductor — Faz-1a tick daemon")
 		_, _ = fmt.Fprintln(stderr, "\nusage: conductor -project <id> -root <dir> [-once] [-interval 30s] [-develop-cmd \"claude -p\"]")
 		_, _ = fmt.Fprintln(stderr, "       conductor -check -heartbeat <path>   # independent stall-detector (ADR-0016)")
+		_, _ = fmt.Fprintln(stderr, "       conductor -reconcile -dsn <postgres> # independent recovery job: reap stale leases + reconcile tasks (ADR-0016)")
 		fs.PrintDefaults()
 	}
 
@@ -344,6 +487,39 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 			heartbeatPath:     *heartbeat,
 			heartbeatStale:    *heartbeatStale,
 			heartbeatProgress: *heartbeatProgress,
+		}, nil
+	}
+
+	// -reconcile is the INDEPENDENT recovery job (ADR-0016): it reaps stale/dead-host
+	// leases and reconciles git-trailer→done across ALL hosts, so it needs the SHARED
+	// Postgres store, never a process-local memory store — a memory store would see no
+	// other host's leases and reap nothing. It must NOT build the daemon, so validate
+	// just its own input (a present -dsn, positive thresholds) and return early. The
+	// host id (for logging/derivation parity) is resolved like the daemon's.
+	if *reconcileMode {
+		if *dsn == "" {
+			return config{}, errors.New("-reconcile requires -dsn <postgres> (or set CONDUCTOR_DSN): reaping across hosts needs the shared central store, not an in-memory one")
+		}
+		if *leaseTTL <= 0 {
+			return config{}, fmt.Errorf("-lease-ttl must be positive (got %s)", *leaseTTL)
+		}
+		if *hostStale <= 0 {
+			return config{}, fmt.Errorf("-host-stale must be positive (got %s)", *hostStale)
+		}
+		host := *hostID
+		if host == "" {
+			if hn, err := os.Hostname(); err == nil {
+				host = hn
+			}
+		}
+		return config{
+			reconcile:  true,
+			dsn:        *dsn,
+			hostID:     host,
+			baseBranch: *baseBranch,
+			rootDir:    *rootDir,
+			leaseTTL:   *leaseTTL,
+			hostStale:  *hostStale,
 		}, nil
 	}
 

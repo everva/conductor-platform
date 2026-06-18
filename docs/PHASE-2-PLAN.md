@@ -241,3 +241,26 @@ Deterministik kanıt = kalite kapısı (LLM asla karar mercii); sahte-yeşil ASL
   engine.go + statestore imza + tools/builder DOKUNULMADI; yalnız ADDITIVE (yeni Reason + iki yeni Config alanı +
   Decision alanları + yeni test). Offline gate (build+test+vet+golangci v2.12.0) + e2e (E2E ./internal/conductor/) +
   `-race ./internal/governor/ ./internal/conductor/` YEŞİL; gofmt temiz; yeni dep yok; secret yok.
+- **Dalga B — 2B-5 (reconcile runner — BAĞIMSIZ recovery job, ADR-0016)** ✅ done. 2B-3 host-heartbeat `OwnerLive` +
+  Reconciler'ı KURDU ama üründe `reconcile.ReapLeases`'i koşturan HİÇBİR ŞEY YOKtu → ölü-host lease'i pratikte
+  serbest kalmıyordu. ADR-0016 (conductor kendi ölümünü kurtaramaz → reconciler AYRI bir job) gereği `conductor
+  -reconcile` MODU eklendi — daemon tick-loop'una GÖMÜLÜ goroutine DEĞİL, ayrı proses/CronJob. **Mod:** `-check` gibi
+  daemon wiring'inden ÖNCE short-circuit eder (parseConfig erken döner, engine/verify/loop hiç kurulmaz); `-dsn` ZORUNLU
+  (host'lar-arası reap merkezi paylaşılan PG ister; yoksa net hata, memory store kabul edilmez). Tek pas:
+  `ReapLeases(ctx,now)` (TTL backstop `-lease-ttl`/`CONDUCTOR_LEASE_TTL` default 30m + host-heartbeat OwnerLive
+  `-host-stale`/`CONDUCTOR_HOST_STALE` default 2m, 2B-3) + her proje için `ReconcileTasks` (git-trailer `[task:<id>]`→done,
+  ADR-0004/0010). **One-shot exit-kontratı:** başarıda 0, hatada non-0 (CronJob fail-loud). GitReader = yeni gerçek
+  `cloneGitReader` (cmd/conductor/gitreader.go): `git log` ile base-branch commit+trailer okur (LLM YOK, merger'ın git
+  çağrı desenini aynalar); clone erişilemezse trailer-reconcile temiz no-op (lease reaper sadece store okuduğu için tam
+  çalışır). `now` enjekte → deterministik; aksiyonlar loglanır (reaped lease / reconciled), secret ASLA loglanmaz (DSN env'den, redакted). **k8s:** `deploy/k8s/cronjob-reconcile.yaml` (P4-4 stallcheck desenini aynalar: non-root 65532,
+  readOnlyRootFilesystem, drop ALL caps, conductor-secret'tan DSN, her dakika, concurrencyPolicy Forbid, backoffLimit 0)
+  + kustomization.yaml'a eklendi. **Testler (deterministik):** parseConfig `-reconcile` parse + `-dsn` zorunlu (yoksa
+  hata) + `-lease-ttl`/`-host-stale` parse (flag+env+non-positive reddi); reconcileRun inner-fn (os.Exit DEĞİL) in-memory
+  store'da STALE-host lease (10dk-bayat heartbeat) REAPED + FRESH-host lease KEPT + `[task:T-merged]` trailer → task done;
+  run() `-reconcile` without `-dsn` → exit 2. **Gerçek docker-PG koşusu (spare port 55439):** binary migrate → stale+fresh
+  host/lease seed → `conductor -reconcile` → p-dead/h-dead lease REAPED, p-live/h-live KEPT, exit 0, log "reaped stale lease";
+  teardown. **kustomize/kubectl dry-run:** `kustomize build deploy/k8s/ | kubectl apply --dry-run=client -f -` →
+  `cronjob.batch/conductor-reconcile created (dry run)` (tüm 10 kaynak temiz). engine.go + statestore imza + tools/builder
+  DOKUNULMADI; yalnız ADDITIVE (yeni mod + flag'ler + cloneGitReader + iki yeni dosya + CronJob). Offline gate
+  (build+test+vet+golangci v2.12.0) + e2e (E2E ./internal/conductor/) + `-race ./cmd/conductor/` YEŞİL; gofmt temiz;
+  yeni dep yok; secret yok. **→ Dalga B (çok-host) TAMAM (2B-0..2B-5 hepsi done).**
