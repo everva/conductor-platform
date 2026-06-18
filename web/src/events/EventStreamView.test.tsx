@@ -141,6 +141,30 @@ describe("EventStreamView", () => {
     expect(within(row).getByLabelText(/intervention needed/i)).toBeInTheDocument();
   });
 
+  it("(c2) an intervention row exposes a contextual Resolve action (3B-3)", async () => {
+    const h = makeFakeHistory([
+      ev({ id: "i1", project: "p7", task: "t7", kind: "intervention-needed", phase: "review" }),
+      ev({ id: "n1", project: "p7", kind: "log" }),
+    ]);
+    const onInterventionAction = vi.fn();
+    render(
+      <EventStreamView
+        token="tkn"
+        makeHistory={() => h.loader}
+        onInterventionAction={onInterventionAction}
+      />,
+    );
+    await flush();
+
+    // Only the intervention row carries the Resolve affordance.
+    const buttons = screen.getAllByRole("button", { name: /^resolve$/i });
+    expect(buttons).toHaveLength(1);
+    await act(async () => {
+      buttons[0].click();
+    });
+    expect(onInterventionAction).toHaveBeenCalledWith("p7", "t7");
+  });
+
   it("(d) re-queries history with the new project filter and updates", async () => {
     const h = makeFakeHistory([ev({ id: "h1", project: "p1" })]);
     render(

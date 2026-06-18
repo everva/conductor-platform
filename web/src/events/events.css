@@ -130,6 +130,11 @@
   white-space: nowrap;
 }
 
+/* One-click "Resolve" affordance on an intervention row (3B-3). */
+.evt-act {
+  flex: 0 0 auto;
+}
+
 .evt-payload {
   flex: 1 1 auto;
   min-width: 0;

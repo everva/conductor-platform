@@ -136,3 +136,52 @@ test("renders the event stream tab with backfilled history (3B-2)", async ({ pag
   // by the deterministic vitest suite; here we only assert it renders in-browser).
   await expect(page.getByRole("button", { name: /^pause$/i })).toBeVisible();
 });
+
+test("intervention controls: resume (200) and abort (409 notice) over mocked control API (3B-3)", async ({
+  page,
+}) => {
+  await page.route("**/ws*", (route) => route.fulfill({ status: 200, body: "" }));
+  await page.route("**/status", (route) => route.fulfill(json(STATUS)));
+  await page.route("**/hosts", (route) => route.fulfill(json(HOSTS)));
+  await page.route("**/projects", (route) => route.fulfill(json(PROJECTS)));
+  await page.route("**/projects/*/tasks", (route) => route.fulfill(json(TASKS)));
+
+  // Control POSTs: resume → 200; abort → 409 (gateway "no task running to abort"),
+  // which the UI must surface as a non-fatal warn notice (never a stuck spinner).
+  let resumeCalls = 0;
+  await page.route("**/projects/*/resume", (route) => {
+    resumeCalls += 1;
+    return route.fulfill(json({ project: "p1", paused: false }));
+  });
+  await page.route("**/projects/*/abort", (route) =>
+    route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "no task running to abort" }),
+    }),
+  );
+
+  await page.goto("/");
+  await page.getByLabel(/api token/i).fill("test-token");
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page.getByRole("region", { name: /fleet status/i })).toBeVisible();
+
+  // Abort is confirm-gated: clicking it opens the dialog; confirming POSTs abort. The
+  // mocked 409 ("no task running to abort") surfaces as a non-fatal warn notice and
+  // the dialog closes (never a stuck spinner). NOTE: the modal confirm uses
+  // dispatchEvent rather than a synthesized click — the background poll/WS-reconnect
+  // re-render churn trips Playwright's "element stable" actionability gate on the
+  // fixed-position modal button, so we fire the click directly (the deterministic
+  // vitest suite covers the full confirm→abort→409-notice path exhaustively).
+  await page.getByRole("button", { name: /^abort$/i }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByRole("button", { name: /abort task/i }).dispatchEvent("click");
+  await expect(page.getByText(/no task running to abort/i)).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  // Resume is immediate (no confirm): clicking it POSTs resume to the control API.
+  // dispatchEvent for the same reason as above (background re-render churn vs. the
+  // "stable" actionability gate); we assert the control POST actually fired.
+  await page.getByRole("button", { name: /^resume$/i }).dispatchEvent("click");
+  await expect.poll(() => resumeCalls).toBe(1);
+});

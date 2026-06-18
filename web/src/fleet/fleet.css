@@ -222,6 +222,188 @@ table.fleet-table {
   background: #7f1d1d;
   color: #fca5a5;
 }
+.badge.awaiting {
+  background: #422006;
+  color: #fbbf24;
+}
+
+/* --- control buttons (3B-3) --- */
+.fleet-btn {
+  font-size: 0.74rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 0.3rem;
+  border: 1px solid #2a2f37;
+  background: transparent;
+  color: #e6e6e6;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.fleet-btn:hover:not(:disabled) {
+  background: #21252d;
+}
+.fleet-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.fleet-btn.primary {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #eff6ff;
+}
+.fleet-btn.primary:hover:not(:disabled) {
+  background: #2563eb;
+}
+.fleet-btn.danger {
+  background: #7f1d1d;
+  border-color: #7f1d1d;
+  color: #fecaca;
+}
+.fleet-btn.danger:hover:not(:disabled) {
+  background: #991b1b;
+}
+
+.fleet-actions {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.fleet-head-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.fleet-table tbody tr.awaiting {
+  background: #2a210d;
+}
+
+/* --- notices (toasts) --- */
+.fleet-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.fleet-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.85rem;
+  border-radius: 0.4rem;
+  font-size: 0.83rem;
+  border: 1px solid #2a2f37;
+}
+.fleet-notice.ok {
+  background: #052e2b;
+  border-color: #065f46;
+  color: #6ee7b7;
+}
+.fleet-notice.warn {
+  background: #2a210d;
+  border-color: #78350f;
+  color: #fcd34d;
+}
+.fleet-notice.error {
+  background: #2a1212;
+  border-color: #7f1d1d;
+  color: #fca5a5;
+}
+.fleet-notice-dismiss {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.2rem;
+}
+
+/* --- pending-intervention banner --- */
+.fleet-intervention {
+  border: 1px solid #7f1d1d;
+  border-left: 4px solid #f87171;
+  border-radius: 0.5rem;
+  background: #2a1212;
+  padding: 0.6rem 0.9rem;
+}
+.fleet-intervention-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+.fleet-intervention-mark {
+  color: #fca5a5;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.fleet-intervention-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.fleet-intervention-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.fleet-intervention-loc {
+  background: transparent;
+  border: none;
+  color: #fecaca;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.fleet-intervention-actions {
+  flex: 0 0 auto;
+}
+
+/* --- confirm dialog --- */
+.fleet-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.fleet-modal {
+  background: #1b1e24;
+  border: 1px solid #2a2f37;
+  border-radius: 0.6rem;
+  padding: 1.1rem 1.2rem;
+  max-width: 26rem;
+  width: calc(100% - 2rem);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+.fleet-modal-title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+.fleet-modal-body {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  line-height: 1.45;
+}
+.fleet-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+.fleet-modal-actions .fleet-btn {
+  font-size: 0.82rem;
+  padding: 0.35rem 0.8rem;
+}
 
 .hb {
   font-weight: 600;

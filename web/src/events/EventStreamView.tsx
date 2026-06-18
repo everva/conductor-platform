@@ -53,6 +53,11 @@ export interface EventStreamViewProps {
   projects?: string[];
   // onUnauthorized bubbles a 401 from the backfill so the app can sign out.
   onUnauthorized?: () => void;
+  // onInterventionAction, when supplied, turns each intervention-needed row into a
+  // one-click affordance: it hands the row's project up so the parent can focus it on
+  // the fleet view (where the confirm-gated Approve/Pause/Abort controls live). Keeps
+  // the stream decoupled from the control layer — it routes, it does not mutate.
+  onInterventionAction?: (projectId: string, taskId: string) => void;
   // makeHistory is injectable for tests (defaults to the real ApiClient in useEventFeed).
   makeHistory?: (token: string) => HistoryLoader;
   // historyLimit / bufferCap are exposed for tests; sensible defaults otherwise.
@@ -94,6 +99,7 @@ export function EventStreamView({
   token,
   projects,
   onUnauthorized,
+  onInterventionAction,
   makeHistory,
   historyLimit = 200,
   bufferCap = 1000,
@@ -267,6 +273,16 @@ export function EventStreamView({
                   <span className="evt-marker" aria-label="intervention needed">
                     ⚠ intervention
                   </span>
+                )}
+                {intervention && onInterventionAction && e.project && (
+                  <button
+                    type="button"
+                    className="fleet-btn evt-act"
+                    onClick={() => onInterventionAction(e.project, e.task)}
+                    title="Resolve this intervention on the fleet view"
+                  >
+                    Resolve
+                  </button>
                 )}
                 {preview && <span className="evt-payload mono muted">{preview}</span>}
               </div>
