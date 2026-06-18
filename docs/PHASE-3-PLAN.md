@@ -83,4 +83,13 @@ Gateway (3A) olduğu gibi reuse; web bileşenleri (3B) fork panellerine (webview
   Bağımsız doğrulama (Rule#9): frozen dokunulmadı + gate (build/vet/golangci-0/fresh-race) + **canlı cross-process**
   (conductorctl→docker-PG yazdı, conductor-api aynı DSN'den gerçek veri okudu) + auth(401/200) + empty-token-refuse
   + secret-leak=0, hepsi kanıtlandı.
-- Sıradaki: **3A-2** (Live events WebSocket `/ws` + additive event-history reader seam → `/events?project=&since=` REST).
+- ✅ **3A-2a — additive EventReader seam** (2026-06-18, commit `9100e73`): frozen `EventBus` DOKUNULMADAN yeni
+  `events.EventReader` arayüzü + `ListEvents(filter, since, limit)` — PostgresBus gerçek SQL (events tablosu,
+  idx_events_project_ts; parameterized) + MemoryBus bounded retained-history (additive `history`/`WithHistoryCap`).
+  Default/Max limit 200/1000; since-inclusive; earliest-limit (sayfalama için since-ilerlet). Bağımsız doğrulama
+  (Rule#9): frozen bus.go/event.go diff=∅, gate (build/vet/golangci-0/race) + **real-PG ListEvents** (6 alt-test:
+  proje/task/intervention filtre, since-cutoff, limit-earliest, closed) kendi koştum → PASS.
+- ✅ **Yan-bulgu düzeltme** (commit `8135d80`): `TestRunCheck_ExitCodes` time-bomb'ı — FRESH heartbeat sabit geçmiş
+  tarihte (12:00 UTC) damgalanıyordu, 13:00 UTC sonrası STALE'e dönüp gate'i kırıyordu. `time.Now()`'a çevrildi
+  (ürün runCheck doğruydu; salt test fixture hatası). Agent'ın "pre-existing+alakasız" raporu bağımsız doğrulandı.
+- Sıradaki: **3A-2b** (conductor-api `/ws` WebSocket live-push + `GET /events?project=&task=&since=&limit=` REST).
