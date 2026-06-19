@@ -13,7 +13,7 @@ const http: HttpTransportLike = {
 };
 
 describe("forkClientFactories", () => {
-  it("returns three zero-arg factories, each constructing a client over the SAME transport", () => {
+  it("returns four zero-arg factories, each constructing a client over the SAME transport", () => {
     // Records the config each construction received so we can assert the transport wiring.
     const seen: Array<{ transport: HttpTransportLike }> = [];
     class FakeApiClient {
@@ -24,7 +24,7 @@ describe("forkClientFactories", () => {
       }
     }
 
-    const { makeClient, makeControlClient, makeIntakeClient } = forkClientFactories(
+    const { makeClient, makeControlClient, makeIntakeClient, makeHistory } = forkClientFactories(
       FakeApiClient,
       http,
     );
@@ -32,13 +32,15 @@ describe("forkClientFactories", () => {
     const a = makeClient();
     const b = makeControlClient();
     const c = makeIntakeClient();
+    const d = makeHistory();
 
     // Each factory built a client...
     expect(a).toBeInstanceOf(FakeApiClient);
     expect(b).toBeInstanceOf(FakeApiClient);
     expect(c).toBeInstanceOf(FakeApiClient);
+    expect(d).toBeInstanceOf(FakeApiClient);
     // ...injected with the one shared transport (fork: token-free, host owns auth).
-    expect(seen).toHaveLength(3);
+    expect(seen).toHaveLength(4);
     for (const config of seen) {
       expect(config.transport).toBe(http);
     }

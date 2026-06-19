@@ -32,7 +32,10 @@ const { http, events } = createBridgeTransports(
 // Three zero-arg client factories over the one HTTP transport. Each ignores the (empty)
 // token — the host owns auth — so they're assignable to the dashboard's (token) => …
 // props. Built via the React-free helper so the wiring is itself unit-testable.
-const { makeClient, makeControlClient, makeIntakeClient } = forkClientFactories(ApiClient, http);
+const { makeClient, makeControlClient, makeIntakeClient, makeHistory } = forkClientFactories(
+  ApiClient,
+  http,
+);
 
 const root = document.getElementById("root");
 if (root === null) {
@@ -45,6 +48,7 @@ createRoot(root).render(
     makeClient={makeClient}
     makeControlClient={makeControlClient}
     makeIntakeClient={makeIntakeClient}
+    makeHistory={makeHistory}
     eventTransport={events}
     onUnauthorized={() => {
       // FORK MODE: the host owns auth, so the webview can't re-prompt. A 401 here means a

@@ -24,6 +24,7 @@ import { InterventionBanner } from "./InterventionBanner.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { NoticeStack } from "./NoticeStack.tsx";
 import { EventStreamView } from "../events/EventStreamView.tsx";
+import type { HistoryLoader } from "../events/useEventFeed.ts";
 import { IntakeChat } from "../intake/IntakeChat.tsx";
 import type { IntakeClient } from "../intake/IntakeChat.tsx";
 import { ApiClient } from "../api/client.ts";
@@ -41,6 +42,12 @@ export interface FleetDashboardProps {
   // makeIntakeClient is injectable for tests; defaults to the real ApiClient
   // (distill + intake). The intake tab uses ONLY these two endpoints.
   makeIntakeClient?: (token: string) => IntakeClient;
+  // makeHistory builds the event-history loader EventStreamView backfills from (REST
+  // /events). Injectable like the others; in FORK MODE it must be the bridge ApiClient so
+  // the backfill goes over the postMessage bridge — the webview CSP (connect-src 'none')
+  // blocks a direct fetch, so without this the Events tab shows "Could not reach the
+  // gateway". Web mode omits it → EventStreamView's default token ApiClient (unchanged).
+  makeHistory?: (token: string) => HistoryLoader;
   // eventTransport, when supplied, selects FORK MODE: the host (extension) is
   // already connected, owns auth, and injects this transport (a postMessage bridge)
   // for the live event stream. Its presence means "host is connected" so the
@@ -64,6 +71,7 @@ export function FleetDashboard({
   makeClient,
   makeControlClient,
   makeIntakeClient,
+  makeHistory,
   eventTransport,
 }: FleetDashboardProps) {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -193,6 +201,7 @@ export function FleetDashboard({
           projects={fleet.projects.map((p) => p.id)}
           onUnauthorized={onUnauthorized}
           onInterventionAction={focusProject}
+          {...(makeHistory ? { makeHistory } : {})}
           {...(eventTransport ? { eventTransport } : {})}
         />
       ) : (

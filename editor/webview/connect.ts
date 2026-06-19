@@ -33,7 +33,15 @@ export type TransportClientCtor<C> = new (config: { transport: HttpTransportLike
 export function forkClientFactories<C>(
   ApiClientCtor: TransportClientCtor<C>,
   http: HttpTransportLike,
-): { makeClient: () => C; makeControlClient: () => C; makeIntakeClient: () => C } {
+): {
+  makeClient: () => C;
+  makeControlClient: () => C;
+  makeIntakeClient: () => C;
+  makeHistory: () => C;
+} {
   const make = (): C => new ApiClientCtor({ transport: http });
-  return { makeClient: make, makeControlClient: make, makeIntakeClient: make };
+  // makeHistory is the SAME bridge client: EventStreamView backfills /events through it so
+  // the history fetch rides the postMessage bridge too (the webview CSP blocks a direct
+  // fetch). Without it the Events tab would error "Could not reach the gateway".
+  return { makeClient: make, makeControlClient: make, makeIntakeClient: make, makeHistory: make };
 }
