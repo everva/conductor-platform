@@ -265,5 +265,27 @@ dalga başlarında.
   konsol hatası (`env -u ELECTRON_RUN_AS_NODE` gerek). **SONUÇ: fork cockpit'in 3 sekmesi de (Fleet/Events/Intake)
   render olup gateway'e KÖPRÜDEN bağlanıyor.** KALAN (daemon/claude gerektirir; render+transport KANITLI): canlı event
   akışı + native diff'in pencerede açılması + intake distill — bir daemon gerçek task işleyince görülür.
-  **SIRADAKİ: 4D fork-repo (everva/conductor-editor) paketleme — Code-OSS fork + extension built-in + rebrand + CI/release
-  (AĞIR ALTYAPI); sonra 4E uçtan-uca.**
+- ✅ **4E UÇTAN-UCA (kullanıcı kararı: 4D'den ÖNCE) — editör GERÇEK otonom döngüyü gözlemliyor/kontrol ediyor**
+  (orchestrator KENDİ koştu + Rule#9 bağımsız doğruladı; canlı optiway/xirigo'ya DOKUNULMADI — throwaway repo + throwaway PG):
+  - ✅ **4E-1 real-claude FULL-LOOP** (`19c528c`, CI 3-job YEŞİL): yeni `internal/conductor/e2e_realclaude_test.go`
+    (`//go:build e2e && realclaude` + `CP_REAL_CLAUDE=1` skip-guard; e2e_test.go helper'larını REUSE — newProductRepo/
+    gitT/mustCreate*/recordingEmitter — + GitDiffer'lı yerel builder). RULE#9: `CP_REAL_CLAUDE=1 -tags "e2e realclaude"`
+    BEN koştum (28s) → GERÇEK `claude -p` greeting.go+test yazdı → bağımsız gate (go build/test) GEÇTİ → squash-merge
+    `[task:T-rc-green]` → task done → 4C-1 KindDiff (files=2, patch=518B) emit. Normal gate + CI'nın `-tags e2e`'si
+    ETKİLENMEZ (dual-tag dışlar). **Brain artık stub değil — otonom döngü gerçek LLM ile çalışıyor.**
+  - ✅ **4E-2 CANLI WIRE** (PRODÜKSİYON topolojisi: daemon + gateway aynı `-dsn` Postgres bus; FS holdout `store://`):
+    **G1 native diff** — yeni env-gated `editor/src/diffObserver.live.test.ts` GERÇEK DiffObserver + GERÇEK `ws`
+    connector'la canlı gateway'e bağlandı; daemon yeşil-gate KindDiff'i → PG NOTIFY → gateway `/ws` (LIVE) → `onDiff`
+    → token-free TaskDiff (greeting.go + gerçek patch; **token sızmaz**) — **PASSED**. **G2 live events** — authed
+    `GET /events?kind=diff` backfill gerçek diff'i döndürür (cockpit Events tab kaynağı). **G3 intake distill** —
+    `POST /projects/{id}/distill` GERÇEK claude ile konuşmayı önerilen senaryoya çevirdi (A-1/T1, ~8s). **G4
+    approve→merge** — T3 task governance ile HELD (`awaiting-approval`) → `POST /approve` (editörün kontrol yolu,
+    HTTP 200 `approved_task`) → daemon `outcome=approved-merged` (preserved verified branch'i RE-DEVELOP'SUZ merge) →
+    done. Editör live test GATE-SAFE (env yoksa skip; editor gate typecheck/lint/vitest/esbuild YEŞİL). Native-render-of-
+    real-content zaten katmanlı kanıtlı: unit (`renderDiffDocument` patch + content-provider real body) + electron smoke
+    (gerçek VS Code `conductor-diff` doc + `diff` dili). Runbook: `editor/README` "Live e2e check (4E)".
+  **→ 4E TAMAM. Editör GERÇEK uçtan-uca döngüyü (intake-distill → develop → verify → native-diff → approve → merge)
+  gözlemleyip kontrol ediyor; KALAN (önceki kayıttaki "daemon gerçek task işleyince görülür") artık KANITLANDI.**
+  **SIRADAKİ: 4D fork-repo paketleme — `everva/conductor-editor` private repo REZERVE edildi (kullanıcı onayı + platform
+  kararı alındı: macOS Apple Silicon önce). Code-OSS (MIT) fork + extension built-in bundle + rebrand + CI/release
+  (AĞIR ALTYAPI, çok-GB build, dışa-dönük). Dalgalar: 4D-0 fork+yerel-mac-build → 4D-1 göm → 4D-2 rebrand → 4D-3 CI/release.**

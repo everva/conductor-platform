@@ -95,6 +95,48 @@ item appears when the daemon emits a green-gate diff (run the tick daemon on the
 shared `-dsn`); click it (or run **"Conductor: Show Task Diff"**) to open the native read-only
 diff. The token lives only in SecretStorage + the gateway request/WS URL — never the webview.
 
+## Live e2e check (4E) — editor observes the REAL loop
+
+The checks above prove the cockpit + native diff in isolation. **4E** proves the editor
+observes the genuine autonomous loop end to end. Two opt-in, env-gated proofs (excluded from
+every gate, mirroring `CP_REAL_CLAUDE`):
+
+**Backend — real `claude -p` drives the full pipeline to a merge + a `KindDiff`** (Go, 4E-1):
+
+```sh
+# real subscription claude writes code, the independent gate verifies it, it merges, and the
+# bounded KindDiff is emitted — all REAL, only the LLM is no longer a stub:
+CP_REAL_CLAUDE=1 CP_CLAUDE_BIN="$(command -v claude)" \
+  go test -tags "e2e realclaude" -run RealClaude -v ./internal/conductor/
+```
+
+**Editor — the host DiffObserver receives a LIVE `KindDiff` over the real WS** (TS, 4E-2).
+Stand up the production topology (daemon + gateway sharing a Postgres bus), then run the
+env-gated live test against it:
+
+```sh
+make db-up                                                # Postgres on :5433 (shared bus)
+export DSN="postgres://conductor:conductor@localhost:5433/conductor?sslmode=disable"
+export CONDUCTOR_API_TOKEN="$(openssl rand -hex 24)"
+go run ./cmd/conductor-api -dsn "$DSN" -addr :8080 &      # gateway over the SHARED bus
+
+# a throwaway product repo + onboard + intake a task (any scheme-valid hidden_holdout_ref;
+# the daemon resolves store:// via -holdout-store) — see internal/conductor/e2e_test.go for
+# the repo/scenario/holdout shapes. Then, with the editor test already connected:
+CP_LIVE_GATEWAY=ws://localhost:8080 CP_LIVE_TOKEN="$CONDUCTOR_API_TOKEN" \
+  npx vitest run src/diffObserver.live.test.ts &          # connects, waits for a live diff
+go run ./cmd/conductor -project <id> -root <dir> -dsn "$DSN" \
+  -develop-cmd <performer> -holdout-store <dir> -once     # green gate → KindDiff on the bus
+```
+
+The live test resolves on the first `diff` frame and asserts it is a real, token-free diff
+(non-empty patch, the changed file present, the bearer token absent). The same running gateway
+also serves the cockpit's history backfill (`GET /events?kind=diff`), the intake-chat distill
+(`POST /projects/{id}/distill` → proposed scenarios via real claude), and the inline approve
+(`POST /projects/{id}/approve` → the daemon merges a held T3 task's preserved verified branch
+with no re-develop, `outcome=approved-merged`). The token rides only the `Authorization`
+header / WS `?token=` query — never the webview.
+
 ## Go carve-out
 
 `editor/go.mod` is a nested, **config-only** Go module (no Go source). It makes the
