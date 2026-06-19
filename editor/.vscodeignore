@@ -1,0 +1,25 @@
+# Files excluded from the packaged VSIX. Ship only the bundled extension (dist/),
+# the activity-bar icon (media/), the manifest, and the README. Everything else —
+# source, tests, the electron-smoke harness, configs, lockfile, node_modules — is
+# build/dev-only and must not ride along in the artifact.
+.vscode-test/**
+.vscode-test.*
+src/**
+test/**
+out-test/**
+node_modules/**
+
+**/*.ts
+**/*.map
+
+tsconfig.json
+tsconfig.test.json
+eslint.config.mjs
+vitest.config.ts
+esbuild.config.mjs
+go.mod
+.gitignore
+.vscodeignore
+package-lock.json
+
+**/.DS_Store

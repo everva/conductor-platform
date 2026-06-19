@@ -125,3 +125,44 @@ jobs:
 
       - name: E2E (Playwright)
         run: npm run e2e
+
+  # Editor extension (VS Code, Faz-4 DALGA 4B) deterministic gate — the headless,
+  # display-free analogue of the web gate: typecheck + lint + unit tests (vitest over
+  # a mocked vscode api) + esbuild bundle. The editor/ tree is an ISOLATED toolchain
+  # (its own editor/go.mod carves it out of the Go module), so this runs as a separate
+  # job. The @vscode/test-electron integration smoke is OPT-IN (CP_VSCODE_SMOKE=1) and
+  # deliberately NOT run here: electron needs a display/xvfb the headless self-hosted
+  # runner is not guaranteed to have. Run it as a local/admin task when a display is
+  # available rather than weakening this deterministic gate (mirrors the CP_REAL_CLAUDE
+  # opt-in smoke pattern used for the real-claude paths).
+  editor:
+    name: editor extension (tsc / eslint / vitest / esbuild)
+    runs-on: [self-hosted, Linux, X64]
+    defaults:
+      run:
+        working-directory: editor
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: editor/package-lock.json
+
+      - name: Install (clean, from lockfile)
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests (vitest)
+        run: npm run test
+
+      - name: Build (esbuild bundle)
+        run: npm run build

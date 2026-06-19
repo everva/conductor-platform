@@ -1,0 +1,30 @@
+{
+  // Separate compile for the OPT-IN @vscode/test-electron smoke harness. Unlike the
+  // main typecheck (tsconfig.json, noEmit — esbuild ships the bundle), this one EMITS
+  // plain CommonJS into out-test/ so `npm run test:vscode` can `node out-test/
+  // runVscodeSmoke.js`. It is intentionally NOT part of `npm run gate`: electron needs
+  // a display/xvfb and is not guaranteed on the headless self-hosted runner. The smoke
+  // test files import the real `vscode` module (resolved by the electron host at
+  // runtime, typed via @types/vscode), so they live OUTSIDE the vitest unit suite.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "skipLibCheck": true,
+
+    "esModuleInterop": true,
+    "rootDir": "test",
+    "outDir": "out-test",
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+
+    "types": ["node", "vscode"]
+  },
+  "include": ["test/**/*"]
+}

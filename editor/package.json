@@ -1,0 +1,62 @@
+{
+  "name": "conductor-editor",
+  "private": true,
+  "version": "0.0.0",
+  "publisher": "everva",
+  "displayName": "Conductor",
+  "description": "Conductor Platform — agent-fleet cockpit inside the editor (Faz-4).",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "conductor",
+          "title": "Conductor",
+          "icon": "media/conductor.svg"
+        }
+      ]
+    },
+    "views": {
+      "conductor": [
+        {
+          "id": "conductor.fleet",
+          "name": "Fleet",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "conductor.connect",
+        "title": "Conductor: Connect to Gateway",
+        "category": "Conductor"
+      }
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "build": "node esbuild.config.mjs",
+    "gate": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "compile:vscode-smoke": "tsc -p tsconfig.test.json",
+    "pretest:vscode": "npm run build && npm run compile:vscode-smoke",
+    "test:vscode": "node ./out-test/runVscodeSmoke.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.2",
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-electron": "^2.4.1",
+    "esbuild": "^0.24.2",
+    "eslint": "^9.17.0",
+    "globals": "^15.14.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.2",
+    "vitest": "^3.0.5"
+  }
+}
