@@ -48,6 +48,13 @@ const webviewOptions = {
   target: "es2022",
   jsx: "automatic",
   alias: { "@cockpit": cockpitEntry },
+  // The cockpit source lives under web/src, whose React imports would otherwise resolve
+  // by walking up from web/ — but the editor build is self-contained and web/node_modules
+  // is NOT installed in the editor CI job. nodePaths adds editor/node_modules as a
+  // resolution root so `react`/`react-dom`/`react/jsx-runtime` (imported by the shared
+  // web/src components) resolve to EDITOR's own React (ADR-0029: editor brings its React),
+  // independent of whether web/ is installed.
+  nodePaths: [path.resolve(__dirname, "node_modules")],
   loader: { ".css": "css" },
   define: {
     // React production build (drops dev warnings / checks).

@@ -34,7 +34,18 @@
     "baseUrl": ".",
     "paths": {
       // The shared cockpit barrel, consumed AS SOURCE from web/src (web/ untouched).
-      "@cockpit": ["../web/src/cockpit.ts"]
+      "@cockpit": ["../web/src/cockpit.ts"],
+      // web/src's React imports must resolve to EDITOR's own types, not web/node_modules
+      // (which the editor CI job does not install). For a noEmit TYPECHECK tsc only needs
+      // the DECLARATIONS, so map react/react-dom straight to editor's @types (mapping to
+      // node_modules/react instead fails TS7016 — react ships no own types, and `paths`
+      // bypasses the normal @types lookup). The runtime JS is resolved separately by
+      // esbuild's nodePaths. This makes the webview typecheck self-contained — it depends
+      // only on editor/node_modules (ADR-0029: editor brings its React).
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"],
+      "react-dom": ["./node_modules/@types/react-dom"],
+      "react-dom/*": ["./node_modules/@types/react-dom/*"]
     }
   },
   "include": ["webview/**/*.ts", "webview/**/*.tsx", "webview/types.d.ts"]
