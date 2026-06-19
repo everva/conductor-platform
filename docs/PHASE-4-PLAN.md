@@ -104,4 +104,13 @@ dalga başlarında.
   - **S-5** iOS/maestro CANLI: gerçek maestro + iOS-simulator kurulumu `org-macos-1`'de gerekiyor (infra); reçete+
     routing zaten hazır+test'li. Mac-host maestro provision edilince koşulur. Ertelendi (infra-bound).
 - **Sweep sonucu:** yüksek-değer/tractable maddeler (S-1/S-2/S-3/S-4) ✅ + yolda 4 latent bug (e2e-identity,
-  golangci-v7, setup-go-cache, advisor-env-leak) düzeltildi. CI self-hosted'da tam yeşil. **Sıradaki: Faz-4 → 4A-1.**
+  golangci-v7, setup-go-cache, advisor-env-leak) düzeltildi. CI self-hosted'da tam yeşil.
+- ✅ **4A-1 transport seam** (`cdd904a`): `ApiClient` arkasına `HttpTransport`/`FetchTransport`, `useEventStream`
+  arkasına `EventTransport`/`WebSocketTransport` (ADDITIVE — mevcut `new ApiClient({token})` + `useEventStream({token})`
+  yolları byte-for-byte aynı; mevcut client/useEventStream testleri DEĞİŞMEDEN geçti). **Auth artık transport'un
+  sorumluluğu** → injected-transport yolunda ApiClient + hook **token-agnostik** (ADR-0027: fork webview token tutmaz,
+  host forward'da auth ekler). Yeni seam testleri: token-agnostik delege + hata haritalama (ApiError/
+  DistillNoScenariosError) + event callbacks/close-on-unmount. Bağımsız doğrulama (Rule#9): yerel gate yeşil
+  (tsc -b + eslint + 84 vitest) + CI self-hosted'da TAM YEŞİL (Go job 50s + web job 1m18s, **Playwright hard-gate dahil**
+  — gerçek-tarayıcı default-transport davranış-eşitliği kanıtı). Yolda 2 gate-hatası yakalandı: exactOptionalPropertyTypes
+  (`req.contentType` guard) + kullanılmayan `_url` param. **Sıradaki: Faz-4 → 4A-2 (paylaşılabilir UI).**
