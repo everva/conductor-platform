@@ -11,11 +11,23 @@ export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
+  // The org self-hosted runner is shared/CPU-contended. Running the browser specs in
+  // PARALLEL workers (default = core count) makes the contexts starve each other under
+  // load, so a correct test blows the 30s timeout / "element not found" (the same specs
+  // pass locally + passed on earlier runs). Serialize to ONE worker on CI so each test
+  // gets the full CPU, and give generous retries + timeouts. Assertions are unchanged —
+  // this is reliability headroom, not a weakened gate (no fake-green). Local stays
+  // parallel + no retries for fast feedback.
+  workers: process.env.CI ? 1 : undefined,
+  retries: process.env.CI ? 2 : 0,
+  timeout: process.env.CI ? 60_000 : 30_000,
+  expect: { timeout: process.env.CI ? 15_000 : 5_000 },
   reporter: "list",
   use: {
     baseURL: `http://localhost:${PORT}`,
     trace: "on-first-retry",
+    actionTimeout: process.env.CI ? 15_000 : 0,
+    navigationTimeout: process.env.CI ? 30_000 : 0,
   },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
