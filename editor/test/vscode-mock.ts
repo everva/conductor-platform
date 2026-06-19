@@ -27,10 +27,17 @@ export interface Webview {
   options: { enableScripts?: boolean };
   html: string;
   readonly cspSource: string;
+  // 4B-2 bridge surface: the host posts messages to the webview and listens for messages
+  // from it. The fake records posts and lets a test fire a received message via the
+  // returned helper (see __makeWebviewView).
+  postMessage(message: unknown): Thenable<boolean>;
+  onDidReceiveMessage(listener: (message: unknown) => void): Disposable;
 }
 
 export interface WebviewView {
   readonly webview: Webview;
+  // The view fires onDidDispose when closed; the provider tears the bridge down here.
+  onDidDispose(listener: () => void): Disposable;
 }
 
 export interface WebviewViewProvider {
@@ -151,14 +158,45 @@ export function __reset(): void {
   configValues = {};
 }
 
-/** Builds a fresh fake WebviewView with a controllable cspSource. */
-export function __makeWebviewView(cspSource = "vscode-resource:"): WebviewView {
+/**
+ * Builds a fresh fake WebviewView with a controllable cspSource plus the 4B-2 bridge
+ * surface. `postMessage`/`onDidReceiveMessage`/`onDidDispose` are spies; the returned
+ * `__fire*` helpers let a test drive an inbound message / a dispose so the provider
+ * wiring can be exercised headlessly. Posts are recorded on `webview.postMessage.mock`.
+ */
+export function __makeWebviewView(cspSource = "vscode-resource:"): WebviewView & {
+  __fireMessage(message: unknown): void;
+  __fireDispose(): void;
+} {
+  const messageListeners: ((message: unknown) => void)[] = [];
+  const disposeListeners: (() => void)[] = [];
   const webview: Webview = {
     options: {},
     html: "",
     cspSource,
+    postMessage: vi.fn<(message: unknown) => Thenable<boolean>>().mockResolvedValue(true),
+    onDidReceiveMessage: vi.fn((listener: (message: unknown) => void) => {
+      messageListeners.push(listener);
+      return makeDisposable();
+    }),
   };
-  return { webview };
+  return {
+    webview,
+    onDidDispose: vi.fn((listener: () => void) => {
+      disposeListeners.push(listener);
+      return makeDisposable();
+    }),
+    __fireMessage(message: unknown) {
+      for (const l of messageListeners) {
+        l(message);
+      }
+    },
+    __fireDispose() {
+      for (const l of disposeListeners) {
+        l();
+      }
+    },
+  };
 }
 
 export default { commands, window, workspace };

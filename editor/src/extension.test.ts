@@ -199,11 +199,41 @@ describe("deactivate", () => {
 });
 
 describe("FleetViewProvider", () => {
-  it("disables scripts and renders the placeholder HTML on resolve", () => {
+  it("enables scripts and renders the placeholder HTML on resolve (bare, no bridge)", () => {
     const view = __makeWebviewView("vscode-resource:");
+    // Bare construction (no config) still works for the static-HTML path: scripts on
+    // (4B-3 React needs them), placeholder rendered, and NO bridge attached.
     new FleetViewProvider().resolveWebviewView(view as never);
-    expect(view.webview.options.enableScripts).toBe(false);
+    // 4B-2: scripts are now ENABLED (the React panels in 4B-3 need them). The bridge,
+    // not a scripts-off webview, is what keeps the token isolated.
+    expect(view.webview.options.enableScripts).toBe(true);
     expect(view.webview.html).toContain("Not connected");
+    // No config → no bridge → the host never subscribes to the webview's messages.
+    expect(view.webview.onDidReceiveMessage).not.toHaveBeenCalled();
+  });
+
+  it("attaches a bridge (via the injected factory) on resolve and disposes it on view-dispose", () => {
+    const view = __makeWebviewView("vscode-resource:");
+    const attach = vi.fn();
+    const dispose = vi.fn();
+    const bridgeFactory = vi.fn(() => ({ attach, dispose }));
+    const secrets = __makeSecretStorage();
+
+    new FleetViewProvider({
+      secrets,
+      gatewayUrl: "http://gw.test",
+      bridgeFactory,
+    }).resolveWebviewView(view as never);
+
+    // The factory was handed the webview and the bridge was attached.
+    expect(bridgeFactory).toHaveBeenCalledTimes(1);
+    expect(bridgeFactory).toHaveBeenCalledWith(view.webview);
+    expect(attach).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
+
+    // Closing the view tears the bridge down.
+    view.__fireDispose();
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 });
 

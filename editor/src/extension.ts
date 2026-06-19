@@ -18,8 +18,10 @@
 // narrow structural `VscodeApi` slice so vitest drives them with a mock — headlessly,
 // no electron, no display. The webview HTML is the pure `placeholderHtml`.
 import * as vscode from "vscode";
-import { makeGatewayProbe } from "./gateway";
+import { deriveWsUrl, makeGatewayProbe, normalizeBaseUrl, GATEWAY_TOKEN_KEY } from "./gateway";
 import { ConnectionManager, type ConnectionState } from "./connection";
+import { HostBridge, type WebviewLike } from "./bridge/hostBridge";
+import { wsConnector } from "./bridge/wsConnector";
 
 /** Command id for the gateway-connect action. */
 export const CONNECT_COMMAND = "conductor.connect";
@@ -58,11 +60,14 @@ export interface VscodeApi {
 }
 
 /**
- * Builds the placeholder webview HTML. Pure (no vscode runtime needed) so tests can
- * assert the CSP + copy directly. `cspSource` is the webview's `cspSource` at runtime;
- * for the placeholder we only allow our own nonce'd <style> and lock everything else to
- * 'none'. There is intentionally NO script yet — content/data arrive over the
- * postMessage bridge in 4B-2/4B-3.
+ * Builds the Fleet webview HTML. Pure (no vscode runtime needed) so tests can assert the
+ * CSP + copy directly. `cspSource` is the webview's `cspSource` at runtime. The CSP is
+ * strict: everything defaults to 'none'; only our own nonce'd <style>/<script> + images
+ * from `cspSource` are allowed, and `connect-src 'none'` forbids the webview from doing
+ * its OWN network — all data must arrive over the postMessage bridge (4B-2) from the
+ * authed host. For 4B-2 there is still NO live <script> (the React bundle is 4B-3), so
+ * the body stays a static "not connected" placeholder; the bridge is attached host-side
+ * regardless, ready for the panels.
  */
 export function placeholderHtml(cspSource: string): string {
   const nonce = makeNonce();
@@ -72,7 +77,7 @@ export function placeholderHtml(cspSource: string): string {
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'nonce-${nonce}' ${cspSource}; img-src ${cspSource};"
+      content="default-src 'none'; style-src 'nonce-${nonce}' ${cspSource}; img-src ${cspSource}; script-src 'nonce-${nonce}'; connect-src 'none';"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <style nonce="${nonce}">
@@ -96,15 +101,80 @@ export function placeholderHtml(cspSource: string): string {
 }
 
 /**
- * The placeholder Fleet view provider. For 4B-0/4B-1 it only enables scripts-off
- * webview options and renders the static "not connected" placeholder. The typed
- * postMessage transport (4A-1 fork impl) and the real cockpit panels (3B reuse) land
- * in 4B-2/4B-3.
+ * Builds a HostBridge over a resolved webview. Injectable so the FleetViewProvider tests
+ * can pass a fake (no real `ws`/fetch) and the production path uses the real wsConnector.
+ * The TokenProvider reads the bearer token from SecretStorage per request (the bridge
+ * never caches it); `baseUrl` is normalized + `wsBaseUrl` derived once here so the
+ * webview's path/filter only ever extends the host's own (authed) base.
+ */
+export type BridgeFactory = (webview: WebviewLike) => { attach(): void; dispose(): void };
+
+/** Configuration the FleetViewProvider needs to attach the bridge on resolve. */
+export interface FleetViewConfig {
+  readonly secrets: SecretStore;
+  readonly gatewayUrl: string;
+  /** Override the bridge factory in tests; defaults to the real HostBridge + wsConnector. */
+  readonly bridgeFactory?: BridgeFactory;
+}
+
+/** The slice of `SecretStore` (connection.ts) the bridge's TokenProvider reads. Declared
+ * locally to avoid widening this module's imports; `context.secrets` satisfies it. */
+interface SecretStore {
+  get(key: string): Thenable<string | undefined>;
+}
+
+/**
+ * Builds the real bridge factory: a HostBridge whose TokenProvider reads
+ * GATEWAY_TOKEN_KEY from SecretStorage, bound to the normalized REST base + its derived
+ * WS base, using the real `ws` connector. The token flows only into the host's fetch
+ * header / WS URL — never to the webview (see hostBridge.ts).
+ */
+export function makeBridgeFactory(secrets: SecretStore, gatewayUrl: string): BridgeFactory {
+  const baseUrl = normalizeBaseUrl(gatewayUrl);
+  const wsBaseUrl = deriveWsUrl(baseUrl);
+  return (webview) =>
+    new HostBridge({
+      webview,
+      baseUrl,
+      wsBaseUrl,
+      tokenProvider: { getToken: () => Promise.resolve(secrets.get(GATEWAY_TOKEN_KEY)) },
+      wsConnector,
+    });
+}
+
+/**
+ * The Fleet view provider. On resolve it (a) enables scripts (the React panels in 4B-3
+ * need them), (b) renders the strict-CSP placeholder (no live script yet — 4B-2 wires
+ * only the transport), and (c) constructs + attaches a HostBridge over the webview so the
+ * typed postMessage transport (the 4A-1 fork impl) is live. The bridge's dispose is
+ * registered on the view's onDidDispose so the WS handles + listener are torn down.
+ *
+ * `config` is optional ONLY so a bare `new FleetViewProvider()` still constructs (used by
+ * legacy unit tests of the static HTML); when absent, resolve renders the HTML but
+ * attaches no bridge. The production path always supplies a config with the real factory.
  */
 export class FleetViewProvider implements vscode.WebviewViewProvider {
+  readonly #config: FleetViewConfig | undefined;
+
+  constructor(config?: FleetViewConfig) {
+    this.#config = config;
+  }
+
   resolveWebviewView(webviewView: vscode.WebviewView): void {
-    webviewView.webview.options = { enableScripts: false };
+    webviewView.webview.options = { enableScripts: true };
     webviewView.webview.html = placeholderHtml(webviewView.webview.cspSource);
+
+    if (this.#config === undefined) {
+      return; // No config (bare construction in a legacy test): HTML only, no bridge.
+    }
+
+    const factory =
+      this.#config.bridgeFactory ??
+      makeBridgeFactory(this.#config.secrets, this.#config.gatewayUrl);
+    const bridge = factory(webviewView.webview);
+    bridge.attach();
+    // Tear the bridge down when the view goes away (closes WS handles + the listener).
+    webviewView.onDidDispose(() => bridge.dispose());
   }
 }
 
@@ -182,6 +252,7 @@ export function registerConductor(
   api: VscodeApi,
   manager: ConnectionManager,
   gatewayUrl: string,
+  fleetConfig?: FleetViewConfig,
 ): vscode.Disposable[] {
   const connect = api.commands.registerCommand(CONNECT_COMMAND, () => {
     void runConnect(api, manager, gatewayUrl);
@@ -189,7 +260,11 @@ export function registerConductor(
   const disconnect = api.commands.registerCommand(DISCONNECT_COMMAND, () => {
     void runDisconnect(api, manager);
   });
-  const fleetView = api.window.registerWebviewViewProvider(FLEET_VIEW_ID, new FleetViewProvider());
+  // The Fleet view attaches the host↔webview bridge on resolve. When a config is
+  // provided (the production path) the provider builds a real HostBridge; tests may omit
+  // it (static-HTML provider) or pass one with a fake bridge factory.
+  const provider = fleetConfig ? new FleetViewProvider(fleetConfig) : new FleetViewProvider();
+  const fleetView = api.window.registerWebviewViewProvider(FLEET_VIEW_ID, provider);
   return [connect, disconnect, fleetView];
 }
 
@@ -229,7 +304,12 @@ export function activate(context: vscode.ExtensionContext): void {
   statusBar.command = CONNECT_COMMAND;
   statusBar.show();
 
-  const disposables = registerConductor(vscode, manager, gatewayUrl);
+  // The Fleet view's bridge reads the token from SecretStorage (per request) and talks
+  // to the gateway at the configured URL; the token never reaches the webview.
+  const disposables = registerConductor(vscode, manager, gatewayUrl, {
+    secrets: context.secrets,
+    gatewayUrl,
+  });
   context.subscriptions.push(statusBar, ...disposables);
 
   // Silent restore: re-validate a stored token (if any) and mirror the result onto the
