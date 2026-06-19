@@ -326,8 +326,8 @@ func TestGitDiffer_Diff_RealRepo(t *testing.T) {
 	gitT(t, clone, "config", "user.email", "test@test")
 
 	// Base commit on develop: keep.txt (will be modified) and gone.txt (deleted).
-	writeFile(t, clone, "keep.txt", "line1\nline2\nline3\n")
-	writeFile(t, clone, "gone.txt", "remove me\n")
+	writeFileIn(t, clone, "keep.txt", "line1\nline2\nline3\n")
+	writeFileIn(t, clone, "gone.txt", "remove me\n")
 	gitT(t, clone, "add", ".")
 	gitT(t, clone, "commit", "-q", "-m", "base")
 
@@ -337,8 +337,8 @@ func TestGitDiffer_Diff_RealRepo(t *testing.T) {
 	wt := filepath.Join(t.TempDir(), "wt")
 	gitT(t, clone, "worktree", "add", "-q", wt, branch)
 	// add new.txt (A), modify keep.txt (M), delete gone.txt (D).
-	writeFile(t, wt, "new.txt", "alpha\nbeta\n")
-	writeFile(t, wt, "keep.txt", "line1\nCHANGED\nline3\nline4\n")
+	writeFileIn(t, wt, "new.txt", "alpha\nbeta\n")
+	writeFileIn(t, wt, "keep.txt", "line1\nCHANGED\nline3\nline4\n")
 	if err := os.Remove(filepath.Join(wt, "gone.txt")); err != nil {
 		t.Fatalf("remove gone.txt: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestGitDiffer_Diff_LargeChange_Truncates(t *testing.T) {
 	gitT(t, clone, "init", "-q", "-b", "develop")
 	gitT(t, clone, "config", "user.name", "test")
 	gitT(t, clone, "config", "user.email", "test@test")
-	writeFile(t, clone, "seed.txt", "seed\n")
+	writeFileIn(t, clone, "seed.txt", "seed\n")
 	gitT(t, clone, "add", ".")
 	gitT(t, clone, "commit", "-q", "-m", "base")
 
@@ -405,7 +405,7 @@ func TestGitDiffer_Diff_LargeChange_Truncates(t *testing.T) {
 		body += "this is a reasonably long content line to inflate the diff patch size\n"
 	}
 	for i := 0; i < 120; i++ {
-		writeFile(t, wt, "file"+itoa(i)+".txt", body)
+		writeFileIn(t, wt, "file"+itoa(i)+".txt", body)
 	}
 	gitT(t, wt, "add", "-A")
 	gitT(t, wt, "commit", "-q", "-m", "big change")
@@ -443,7 +443,7 @@ func TestGitDiffer_Diff_EmptyDiff(t *testing.T) {
 	gitT(t, clone, "init", "-q", "-b", "develop")
 	gitT(t, clone, "config", "user.name", "test")
 	gitT(t, clone, "config", "user.email", "test@test")
-	writeFile(t, clone, "f.txt", "x\n")
+	writeFileIn(t, clone, "f.txt", "x\n")
 	gitT(t, clone, "add", ".")
 	gitT(t, clone, "commit", "-q", "-m", "base")
 
@@ -472,7 +472,7 @@ func TestGitDiffer_Diff_MissingBase(t *testing.T) {
 	gitT(t, clone, "init", "-q", "-b", "develop")
 	gitT(t, clone, "config", "user.name", "test")
 	gitT(t, clone, "config", "user.email", "test@test")
-	writeFile(t, clone, "f.txt", "x\n")
+	writeFileIn(t, clone, "f.txt", "x\n")
 	gitT(t, clone, "add", ".")
 	gitT(t, clone, "commit", "-q", "-m", "base")
 
@@ -486,7 +486,7 @@ func TestGitDiffer_Diff_MissingBase(t *testing.T) {
 
 // --- small local helpers ----------------------------------------------------
 
-func writeFile(t *testing.T, dir, name, content string) {
+func writeFileIn(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", name, err)
