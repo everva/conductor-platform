@@ -12,8 +12,15 @@ export interface Disposable {
   dispose(): void;
 }
 
+export interface SecretStorageLike {
+  get(key: string): Thenable<string | undefined>;
+  store(key: string, value: string): Thenable<void>;
+  delete(key: string): Thenable<void>;
+}
+
 export interface ExtensionContext {
   subscriptions: Disposable[];
+  secrets: SecretStorageLike;
 }
 
 export interface Webview {
@@ -41,20 +48,107 @@ export const commands = {
     .mockImplementation(makeDisposable),
 };
 
+/** Minimal StatusBarItem surface the extension drives (text + show/hide/dispose). */
+export interface StatusBarItem {
+  text: string;
+  tooltip: string | undefined;
+  command: string | undefined;
+  show(): void;
+  hide(): void;
+  dispose(): void;
+}
+
 export const window = {
   showInformationMessage: vi
     .fn<(message: string) => Thenable<string | undefined>>()
     .mockResolvedValue(undefined),
+  showErrorMessage: vi
+    .fn<(message: string) => Thenable<string | undefined>>()
+    .mockResolvedValue(undefined),
+  // showInputBox returns undefined by default (user cancelled); tests override the
+  // resolved value to simulate a typed token. The token is a return value only —
+  // the mock never records it anywhere a leak-guard test would inspect.
+  showInputBox: vi
+    .fn<(options?: unknown) => Thenable<string | undefined>>()
+    .mockResolvedValue(undefined),
   registerWebviewViewProvider: vi
     .fn<(viewId: string, provider: WebviewViewProvider) => Disposable>()
     .mockImplementation(makeDisposable),
+  createStatusBarItem: vi
+    .fn<(...args: unknown[]) => StatusBarItem>()
+    .mockImplementation(makeStatusBarItem),
 };
+
+/** Config values the mocked workspace.getConfiguration().get() reads. Keyed by the
+ * full dotted id ("conductor.gatewayUrl") or the bare key ("gatewayUrl"). */
+let configValues: Record<string, unknown> = {};
+
+/** Sets the values the mocked configuration returns (call in a test before activate). */
+export function __setConfig(values: Record<string, unknown>): void {
+  configValues = values;
+}
+
+export const workspace = {
+  getConfiguration: vi.fn((section?: string) => ({
+    get<T>(key: string, dflt?: T): T | undefined {
+      const full = section ? `${section}.${key}` : key;
+      if (full in configValues) {
+        return configValues[full] as T;
+      }
+      if (key in configValues) {
+        return configValues[key] as T;
+      }
+      return dflt;
+    },
+  })),
+};
+
+/** Builds a fresh fake StatusBarItem with spy-able lifecycle methods. */
+function makeStatusBarItem(): StatusBarItem {
+  return {
+    text: "",
+    tooltip: undefined,
+    command: undefined,
+    show: vi.fn(),
+    hide: vi.fn(),
+    dispose: vi.fn(),
+  };
+}
+
+/** In-memory SecretStorage (structurally satisfies connection.ts's SecretStore and
+ * the slice of vscode.SecretStorage the host uses). Backed by a Map so a test can
+ * pre-seed a stored token and assert store/delete happened. */
+export function __makeSecretStorage(initial: Record<string, string> = {}): {
+  get: (key: string) => Thenable<string | undefined>;
+  store: (key: string, value: string) => Thenable<void>;
+  delete: (key: string) => Thenable<void>;
+  _map: Map<string, string>;
+} {
+  const map = new Map<string, string>(Object.entries(initial));
+  return {
+    get: (key) => Promise.resolve(map.get(key)),
+    store: (key, value) => {
+      map.set(key, value);
+      return Promise.resolve();
+    },
+    delete: (key) => {
+      map.delete(key);
+      return Promise.resolve();
+    },
+    _map: map,
+  };
+}
 
 /** Resets all recorded calls between tests (call in beforeEach). */
 export function __reset(): void {
   commands.registerCommand.mockClear();
   window.showInformationMessage.mockClear();
+  window.showErrorMessage.mockClear();
+  window.showInputBox.mockClear();
   window.registerWebviewViewProvider.mockClear();
+  window.createStatusBarItem.mockClear();
+  workspace.getConfiguration.mockClear();
+  configValues = {};
 }
 
 /** Builds a fresh fake WebviewView with a controllable cspSource. */
@@ -67,4 +161,4 @@ export function __makeWebviewView(cspSource = "vscode-resource:"): WebviewView {
   return { webview };
 }
 
-export default { commands, window };
+export default { commands, window, workspace };

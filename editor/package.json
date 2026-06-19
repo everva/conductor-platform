@@ -9,8 +9,20 @@
     "vscode": "^1.90.0"
   },
   "main": "./dist/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
+    "configuration": {
+      "title": "Conductor",
+      "properties": {
+        "conductor.gatewayUrl": {
+          "type": "string",
+          "default": "http://localhost:8080",
+          "description": "The conductor-api gateway base URL. The bearer token is NOT stored here — it lives in VS Code SecretStorage (set it via the \"Conductor: Connect to Gateway\" command)."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -33,6 +45,11 @@
       {
         "command": "conductor.connect",
         "title": "Conductor: Connect to Gateway",
+        "category": "Conductor"
+      },
+      {
+        "command": "conductor.disconnect",
+        "title": "Conductor: Disconnect",
         "category": "Conductor"
       }
     ]
