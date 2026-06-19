@@ -132,5 +132,18 @@ dalga başlarında.
   vitest+vscode-mock, esbuild cjs bundle). `@vscode/test-electron` smoke OPT-IN (`CP_VSCODE_SMOKE=1`, CI'da DEĞİL —
   headless runner'da display/xvfb garanti değil; CP_REAL_CLAUDE desenini aynalar). CI: yeni `editor` job (node-only,
   self-hosted, tsc/eslint/vitest/esbuild). Bağımsız doğrulama (Rule#9): yerel gate yeşil (tsc + eslint + **13 vitest**
-  + esbuild 3.9kb) + root go-carve-out doğrulandı. **Sıradaki: 4B-1 (bağlantı + auth: gateway URL config + token
-  SecretStorage + /readyz; token asla log/webview'e girmez).**
+  + esbuild 3.9kb) + root go-carve-out doğrulandı + CI'da `editor` job TAM YEŞİL.
+- ✅ **4B-1 bağlantı + auth** (`editor/`): gateway connect/disconnect/restore akışı + token **SecretStorage**'da.
+  `gateway.ts` (vscode-FREE, global fetch): `pingReadyz` (unauth `/readyz` — gateway ayakta mı), `validateToken`
+  (authed `/status`, Bearer → 200 valid / 401 unauthorized / diğer unreachable), `normalizeBaseUrl`/`deriveWsUrl`.
+  `connection.ts` `ConnectionManager` (injectable `SecretStore`+`GatewayProbe`): connect token'ı YALNIZ (readyz ok +
+  valid) ise saklar; restore politikası = geçici kesinti token'ı KORUR, kesin 401 token'ı SİLER; token instance'ta
+  cache'lenmez (kaynak = SecretStorage), getter YOK. `extension.ts`: `conductor.gatewayUrl` ayarı + connect/disconnect
+  komutları + status-bar state aynası + restore-on-activate. **Token disiplini (HARD): token YALNIZ SecretStorage +
+  host fetch Authorization header'ında; mesaj/log/webview'e ASLA girmez** — `connection.test.ts` token-leak guard
+  (sentinel token hiçbir state/result/mesajda görünmez) + grep ile doğrulandı. Bağımsız doğrulama (Rule#9): yerel gate
+  yeşil (tsc + eslint + **36 vitest**: connection 10 + gateway 9 + extension 17 + esbuild 11kb). Not: 2 modülü Agent
+  yazdı (529 overload'da kesildi), kalanı (extension wiring + 3 test dosyası + mock genişletme) orchestrator tamamladı;
+  3 strict-gate hatası yakalanıp düzeltildi (kullanılmayan `#token` field, DOM `RequestInfo` tipi, ölü `_gatewayUrl`
+  param). **Sıradaki: 4B-2 (webview host + postMessage köprü: host gateway client REST+WS → webview'e tipli transport,
+  4A-1 fork impl'i; webview CSP sıkı, veri yalnız host'tan, token webview'e GİRMEZ).**
