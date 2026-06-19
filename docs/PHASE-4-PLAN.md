@@ -208,5 +208,20 @@ dalga başlarında.
   ("Open Conductor" → `workbench.view.extension.conductor` reveal) + `$(bell)` status-bar sayacı. Notifier yaşam döngüsü
   mevcut `onStateChange`'e bağlı (connected→start, değilse→stop); restart'ta önceki handle kapatılır (review dersi: WS
   sızıntısı yok). Bağımsız doğrulama (Rule#9): yerel gate yeşil (host+webview tsc + eslint + **128 vitest** + iki bundle)
-  + notifier token-izolasyonu grep+test. **Sıradaki: 4C-1 (conductor bounded-KindDiff emit + editör native diff render,
-  ADR-0030) — daemon'a Faz-4'ün İLK additive Go dokunuşu; kullanıcı onayı beklenecek. Sonra 4D fork-repo + 4E.**
+  + notifier token-izolasyonu grep+test.
+- ✅ **4C-1a conductor bounded-KindDiff emit** (`15f6ae3` + e2e-tag fix `2d1ccb7`, ADR-0030 — **Faz-4'ün İLK additive Go
+  dokunuşu**, kullanıcı onayıyla): yeşil gate'ten SONRA (auto-merge VE held task'lar için, `runTask`'ta policy/merge
+  dalından ÖNCE, `PhaseReview`'de) conductor BOUNDED `KindDiff` emit eder. Yeni opsiyonel `Differ` seam (`Emitter` desenini
+  birebir aynalar; nil=no-op, geriye-uyumlu) + `GitDiffer` (üç-nokta `base...HEAD`, `git diff --numstat`+`--name-status`
+  birleşimi + capped patch; ÜÇLÜ sınır maxFiles=40 / maxPatchBytes=4096 / maxPayloadBytes=7000 toplam-bütçe guard'ı →
+  PG NOTIFY ~8KB garantisi) + yeni `events.DiffSummary` tipi (additive; `task` payload'a KONULMADI — envelope zaten taşıyor).
+  **FROZEN DOKUNULMADI** (engine.go + statestore + EventBus + Event envelope byte-untouched; `git diff` boş — kanıtlandı).
+  Bağımsız doğrulama (Rule#9): `build`/`vet`/`test -race -count=1` (4 tick-level + 4 gerçek-git GitDiffer + payload
+  round-trip; bağımsız koşturulup tanık olundu) + golangci 0 issue + **GERÇEK-PG cross-process** (`make db-up`,
+  `TestPostgresKindDiffRoundTrip` PASS — KindDiff DiffSummary payload'u gerçek PostgresBus JSON-column + LISTEN/NOTIFY
+  hop'undan ayrı bir `Subscribe`'a sağlam ulaştı; gateway→bridge→webview ile AYNI pipe). CI 3-job TAM YEŞİL. **Yolda
+  yakalandı:** CI `-tags e2e` adımı `writeFile` test-helper çakışmasını yakaladı (agent + ben `go test ./...` etiketsiz
+  koştuğumuz için kaçmıştı) → `writeFileIn`'e yeniden adlandırıldı; ARTIK her iki etiket modu (default + e2e) bağımsız
+  doğrulandı (ders: Go işinde Rule#9 = HER iki etiket modu). **Sıradaki: 4C-1b (editör host KindDiff'i native VS Code
+  diff'te render — notifier-desenli host-tarafı `?kind=diff` gözlemci → bounded unified patch salt-okunur `language:'diff'`
+  virtual doc'ta; gerçek side-by-side ADR-0030'un ertelenen full-diff endpoint'ini gerektirir). Sonra 4D fork-repo + 4E.**
