@@ -20,7 +20,13 @@ export default defineConfig({
       "/status": { target: apiTarget, changeOrigin: true },
       "/events": { target: apiTarget, changeOrigin: true },
       // /ws is the WebSocket event stream — needs ws:true to upgrade the connection.
-      "/ws": { target: apiTarget, changeOrigin: true, ws: true },
+      // changeOrigin is FALSE here (unlike the REST routes): the proxied handshake then
+      // keeps the browser's Host (localhost:5173), which matches the Origin the browser
+      // sends. The gateway's WS Accept is same-origin by default (cmd/conductor-api/
+      // events.go) and 403s a cross-origin handshake — exactly what changeOrigin:true
+      // causes by rewriting Host to the :8080 target while Origin stays :5173. Prod serves
+      // the app + API under one ingress origin, so this only affects the dev proxy.
+      "/ws": { target: apiTarget, changeOrigin: false, ws: true },
     },
   },
 });
