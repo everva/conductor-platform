@@ -315,6 +315,10 @@ dalga başlarında.
     (frozen-kontratlar / token-disiplini+supply-chain / genuineness) — 0 crit/high. Frozen kontratlar INTACT (additive,
     git-doğrulandı); token disiplini SOUND; testler GENUINE (sahte-yeşil yok). Düzeltildi: M1 vsce exact-pin + M2 zorunlu
     commit-pin (fork) + dürüstlük (G2/G3/G4 = manuel runbook doğrulaması, otomatik test DEĞİL — ledger+README'de etiketlendi).
-  - **KALAN (follow-up):** 4D-3 imzalı/notarize release (Apple Developer cert — kullanıcı girdisi gerekir; CI workflow
-    taslağı hazır, unsigned artifact) + rebrand-polish (CLI bin `code`→`conductor` derin-build-touch; app `.icns` ikonu —
-    tasarlanmış asset gerek). **→ FAZ-4 İŞLEVSEL OLARAK TAMAM (4A→4E + 4D-0/1/2); kalan yalnız imzalama+kozmetik cila.**
+  - ✅ **4D-2b rebrand TAMAMLANDI** (fork main `489c5ca`): CLI adı `bin/code`→`bin/conductor` (`patches/0002-cli-name.patch`,
+    gulpfile.vscode.ts 1-satır VSCodium-tarzı build patch) + **Conductor app ikonu** (`resources/conductor.icns`: hub-glyph
+    beyaz, indigo→violet gradyan, 16..1024 rsvg+iconutil; `prepare.sh` binary-asset overlay). REBUILD doğrulandı:
+    verify-app PASS (icon=`Conductor.icns` byte-eşit + CLI=`bin/conductor`) + `conductor --version`→1.122.1 + verify-runtime
+    PASS (built-in aktive). vsce@3.2.0 (M1 pin) kullanıldı. Rebrand artık TAM: ad/nameLong/bundle-id/data-folder/CLI/ikon.
+  - **KALAN (yalnız follow-up):** 4D-3 imzalı/notarize release (Apple Developer cert — **KULLANICI girdisi gerekir**; CI
+    workflow taslağı hazır, unsigned artifact üretir). **→ FAZ-4 TAMAM (4A→4E + 4D-0/1/2/2b); kalan yalnız imzalı dağıtım.**
