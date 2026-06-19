@@ -180,5 +180,21 @@ dalga başlarında.
   **74 vitest** + esbuild İKİ bundle: host 143kb + webview 351kb = React+3B-cockpit+CSS `web/src`'ten — cross-dir reuse
   build kanıtı) + web/ dokunulmadı + go build geçiyor + webviewHtml CSP testi + main.tsx/CSP incelemesi. CANLI render
   (extension yüklenir→gerçek gateway→canlı paneller) = opt-in/manuel kabul (ADR-0029; electron+gateway gerekir, headless
-  CI'da değil). **4B DALGASI (0..3) DETERMİNİSTİK TAMAM. Sıradaki: 4C (editör-native: 4C-0 diff-kaynağı kararı → native
-  diff / inline komutlar / bildirim).**
+  CI'da değil). **4B DALGASI (0..3) DETERMİNİSTİK TAMAM.**
+- ⚙️ **CI-fix + stabilize (4B-3 sonrası)**: (1) `3babf3f` editor webview React'i editor/node_modules'tan çözer (tsc
+  paths→@types + esbuild nodePaths; editor CI job'unda web/node_modules YOK → TS2307/TS2875'ti; CI koşulu yerelde
+  web/node_modules gizlenerek birebir tekrar üretilip doğrulandı). (2) `3e0fbb9` Playwright e2e contended-runner sertleştirme
+  (workers:1 CI + retries:2 + timeout 60s/expect 15s; paralel browser context'leri yükte birbirini açlığa düşürüyordu;
+  intake spec gerçekten 45s sürüyor → eski 30s default'u aşıyordu). CI 3-job TAM YEŞİL.
+- ✅ **4C-0 diff-kaynağı KARARI** (ADR-0030): gateway repo görmüyor + `KindDiff` rezerve-ama-emit-edilmiyor + diff
+  host-git-local. KARAR: **conductor** (frozen DEĞİL; lifecycle event'leri zaten emit eder) review/merge'de task-branch
+  diff'ini hesaplayıp **bounded `KindDiff`** (diff-stat + capped patch + truncated; PG NOTIFY ~8KB) emit eder → mevcut
+  bus→gateway→köprü→webview pipe reuse, yeni endpoint YOK, engine.go dokunulmaz. 4C-2/4C-3 bu karardan BAĞIMSIZ.
+- ✅ **4C-2 inline kontrol komutları** (`editor/src/controlClient.ts` + extension): `conductor.pause/resume/abort/approve`
+  komut paleti — host-tarafı authed control POST (token SecretStorage'dan, YALNIZ Authorization header'ında, hiçbir
+  ControlResult/mesaj/log'a girmez — leak-guard test'li). `ControlClient` (listProjects + 4 POST; no-token→not-connected,
+  2xx→ok, 401→unauthorized, 409→conflict, diğer→unreachable; projectId encodeURIComponent; approve {task_id} sadece
+  verilirse). `runControl`: proje quick-pick → abort/approve modal-confirm → action-specific token-free mesaj. Bağımsız
+  doğrulama (Rule#9): yerel gate yeşil (host+webview tsc + eslint + **105 vitest** + iki bundle) + controlClient güvenlik
+  incelemesi + web/ dokunulmadı. **Sıradaki: 4C-3 (intervention-needed → native bildirim + status-bar canlı durum) →
+  4C-1 (conductor bounded-KindDiff emit + editör native diff render, ADR-0030; daemon'a additive dokunur).**
