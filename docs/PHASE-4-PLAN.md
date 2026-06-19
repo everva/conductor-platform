@@ -196,5 +196,17 @@ dalga başlarında.
   2xx→ok, 401→unauthorized, 409→conflict, diğer→unreachable; projectId encodeURIComponent; approve {task_id} sadece
   verilirse). `runControl`: proje quick-pick → abort/approve modal-confirm → action-specific token-free mesaj. Bağımsız
   doğrulama (Rule#9): yerel gate yeşil (host+webview tsc + eslint + **105 vitest** + iki bundle) + controlClient güvenlik
-  incelemesi + web/ dokunulmadı. **Sıradaki: 4C-3 (intervention-needed → native bildirim + status-bar canlı durum) →
-  4C-1 (conductor bounded-KindDiff emit + editör native diff render, ADR-0030; daemon'a additive dokunur).**
+  incelemesi + web/ dokunulmadı.
+- ✅ **Faz-4 ADVERSARIAL REVIEW** (4 mercek + orchestrator, docs/REVIEW-FAZ4-FINDINGS.md): invariant'lar TEMİZ (0 Go-değişikliği
+  / web-editör-dokunmaz / events.gen-tek-kaynak / sahte-yeşil-yok / ADR-uyumu / CI-webview-gate). 0 crit/high. Düzeltildi:
+  **1 HIGH** hostBridge dup-id WS-handle-sızıntısı (close-on-overwrite + onClose delete-by-identity), **2 MED**
+  FleetViewProvider re-resolve-bridge-sızıntısı (predecessor dispose) & webviewTransport unsubscribe-thunk-atılıyordu
+  (dispose() + main.tsx seam reuse), **4 LOW** (attach re-entrancy, bayat yorum, makeNonce→node:crypto, eventTransport
+  stability dokümanı). 3 regresyon testi. 4 LOW gerekçeyle ERTELENDİ. (`4f9742d`)
+- ✅ **4C-3 intervention bildirim + status** (`editor/src/notifier.ts` + extension): host-tarafı bağımsız WS aboneliği
+  (`?kind=intervention-needed`, token YALNIZ URL'de — leak-guard'lı), intervention-needed → native `showWarningMessage`
+  ("Open Conductor" → `workbench.view.extension.conductor` reveal) + `$(bell)` status-bar sayacı. Notifier yaşam döngüsü
+  mevcut `onStateChange`'e bağlı (connected→start, değilse→stop); restart'ta önceki handle kapatılır (review dersi: WS
+  sızıntısı yok). Bağımsız doğrulama (Rule#9): yerel gate yeşil (host+webview tsc + eslint + **128 vitest** + iki bundle)
+  + notifier token-izolasyonu grep+test. **Sıradaki: 4C-1 (conductor bounded-KindDiff emit + editör native diff render,
+  ADR-0030) — daemon'a Faz-4'ün İLK additive Go dokunuşu; kullanıcı onayı beklenecek. Sonra 4D fork-repo + 4E.**
