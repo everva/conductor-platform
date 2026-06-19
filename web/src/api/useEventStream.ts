@@ -19,6 +19,74 @@ export interface EventStream {
   state: StreamState;
 }
 
+// EventSubscription is a live subscription handle; close() tears the stream down.
+export interface EventSubscription {
+  close(): void;
+}
+
+// EventTransport is the event seam. subscribe opens a stream for the filter and
+// drives the callbacks; the returned handle's close() ends it. Auth is the
+// transport's responsibility (web: token in the ws URL; fork: host-attached), so
+// the hook and components stay token-agnostic.
+export interface EventTransport {
+  subscribe(opts: {
+    filter?: EventQuery;
+    onOpen: () => void;
+    onEvent: (e: Event) => void;
+    onClose: () => void;
+  }): EventSubscription;
+}
+
+// WebSocketTransport is the WEB EventTransport: it owns the token, builds the /ws
+// URL with the token + filter query (the browser WS API can't set headers), and
+// opens a global WebSocket. The token is held in memory only and is NEVER logged.
+export class WebSocketTransport implements EventTransport {
+  private readonly wsBase: string | undefined;
+  private readonly token: string;
+
+  constructor(wsBase: string | undefined, token: string) {
+    this.wsBase = wsBase;
+    this.token = token;
+  }
+
+  subscribe(opts: {
+    filter?: EventQuery;
+    onOpen: () => void;
+    onEvent: (e: Event) => void;
+    onClose: () => void;
+  }): EventSubscription {
+    const url = wsUrl({ wsBase: this.wsBase, token: this.token, filter: opts.filter });
+    const ws = new WebSocket(url);
+
+    ws.onopen = () => opts.onOpen();
+
+    ws.onmessage = (ev: MessageEvent) => {
+      let parsed: Event;
+      try {
+        parsed = JSON.parse(String(ev.data)) as Event;
+      } catch {
+        // Ignore malformed frames rather than crashing the stream.
+        return;
+      }
+      opts.onEvent(parsed);
+    };
+
+    ws.onclose = () => opts.onClose();
+    ws.onerror = () => opts.onClose();
+
+    return {
+      close() {
+        // Detach handlers before closing so a late event can't update unmounted state.
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.close();
+      },
+    };
+  }
+}
+
 export interface UseEventStreamOptions {
   // wsBase is the WebSocket origin (e.g. ws://localhost:8080). Empty string =
   // derive from the current page origin (http→ws, https→wss).
@@ -31,6 +99,10 @@ export interface UseEventStreamOptions {
   // enabled gates the connection; when false no socket is opened (e.g. before
   // auth). Defaults to true.
   enabled?: boolean;
+  // transport overrides the default WebSocketTransport (e.g. the fork postMessage
+  // bridge). When set, the hook is token-agnostic and the transport owns auth +
+  // the wsBase; token/wsBase above are ignored.
+  transport?: EventTransport;
 }
 
 // wsUrl builds the full ws(s):// URL with the token + filter query. The token is
@@ -59,7 +131,7 @@ function deriveWsBase(): string {
 }
 
 export function useEventStream(opts: UseEventStreamOptions): EventStream {
-  const { wsBase, token, filter, maxEvents = 200, enabled = true } = opts;
+  const { wsBase, token, filter, maxEvents = 200, enabled = true, transport } = opts;
   const [events, setEvents] = useState<Event[]>([]);
   const [latest, setLatest] = useState<Event | null>(null);
   const [state, setState] = useState<StreamState>("closed");
@@ -76,42 +148,32 @@ export function useEventStream(opts: UseEventStreamOptions): EventStream {
       return;
     }
 
+    // The hook owns the transport-agnostic logic (state machine, capped buffer,
+    // latest); only the connect/teardown mechanism is delegated. The default web
+    // transport builds the same /ws URL + uses the global WebSocket; an injected
+    // transport owns its own auth + wsBase (token/wsBase here are ignored).
+    const active = transport ?? new WebSocketTransport(wsBase, token);
+
     setState("connecting");
-    const url = wsUrl({ wsBase, token, filter: JSON.parse(filterKey) as EventQuery });
-    const ws = new WebSocket(url);
+    const sub = active.subscribe({
+      filter: JSON.parse(filterKey) as EventQuery,
+      onOpen: () => setState("open"),
+      onEvent: (parsed: Event) => {
+        setLatest(parsed);
+        setEvents((prev) => {
+          const next = [...prev, parsed];
+          return next.length > maxRef.current
+            ? next.slice(next.length - maxRef.current)
+            : next;
+        });
+      },
+      onClose: () => setState("closed"),
+    });
 
-    ws.onopen = () => setState("open");
-
-    ws.onmessage = (ev: MessageEvent) => {
-      let parsed: Event;
-      try {
-        parsed = JSON.parse(String(ev.data)) as Event;
-      } catch {
-        // Ignore malformed frames rather than crashing the stream.
-        return;
-      }
-      setLatest(parsed);
-      setEvents((prev) => {
-        const next = [...prev, parsed];
-        return next.length > maxRef.current
-          ? next.slice(next.length - maxRef.current)
-          : next;
-      });
-    };
-
-    ws.onclose = () => setState("closed");
-    ws.onerror = () => setState("closed");
-
-    return () => {
-      // Detach handlers before closing so a late event can't update unmounted state.
-      ws.onopen = null;
-      ws.onmessage = null;
-      ws.onclose = null;
-      ws.onerror = null;
-      ws.close();
-    };
-    // filterKey captures the filter; wsBase/token/enabled are primitives.
-  }, [wsBase, token, filterKey, enabled]);
+    return () => sub.close();
+    // filterKey captures the filter; wsBase/token/enabled are primitives;
+    // transport identity re-runs the effect when an injected transport changes.
+  }, [wsBase, token, filterKey, enabled, transport]);
 
   return { events, latest, state };
 }

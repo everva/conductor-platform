@@ -50,19 +50,84 @@ export interface ClientConfig {
   token: string;
 }
 
+// HttpResponse is the raw HTTP result the transport returns: the body is already
+// read as text (the ApiClient owns JSON parsing / error mapping).
+export interface HttpResponse {
+  status: number;
+  ok: boolean;
+  body: string;
+}
+
+// HttpRequest is a single request the transport must perform. path is
+// gateway-relative (e.g. "/projects"); body (if any) is ALREADY serialized (a JSON
+// string or raw text), and contentType is the header to send when a body exists.
+export interface HttpRequest {
+  method: string;
+  path: string;
+  body?: string;
+  contentType?: string;
+}
+
+// HttpTransport is the REST seam. Auth is the transport's responsibility (web:
+// FetchTransport attaches Authorization from its own token; fork: the extension
+// host attaches auth when forwarding), so ApiClient stays auth-agnostic and the
+// fork webview never holds the token (ADR-0027).
+export interface HttpTransport {
+  send(req: HttpRequest): Promise<HttpResponse>;
+}
+
 // defaultBaseUrl reads the build-time API base, falling back to same-origin "".
 export function defaultBaseUrl(): string {
   return import.meta.env.VITE_API_BASE ?? "";
 }
 
-export class ApiClient {
+// FetchTransport is the WEB HttpTransport: it owns the bearer token and attaches
+// "Authorization: Bearer <token>" (plus Content-Type when a body is present) to a
+// global fetch against `${baseUrl}${path}`. baseUrl must already be
+// trailing-slash-stripped. The token is held in memory only and is NEVER logged.
+export class FetchTransport implements HttpTransport {
   private readonly baseUrl: string;
   private readonly token: string;
 
-  constructor(config: ClientConfig) {
-    // Strip a trailing slash so path joins are unambiguous.
-    this.baseUrl = (config.baseUrl ?? defaultBaseUrl()).replace(/\/$/, "");
-    this.token = config.token;
+  constructor(baseUrl: string, token: string) {
+    this.baseUrl = baseUrl;
+    this.token = token;
+  }
+
+  async send(req: HttpRequest): Promise<HttpResponse> {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.token}`,
+    };
+    const init: RequestInit = { method: req.method, headers };
+    if (req.body !== undefined) {
+      headers["Content-Type"] = req.contentType ?? "text/plain; charset=utf-8";
+      init.body = req.body;
+    }
+
+    const res = await fetch(`${this.baseUrl}${req.path}`, init);
+    return { status: res.status, ok: res.ok, body: await res.text() };
+  }
+}
+
+export class ApiClient {
+  private readonly transport: HttpTransport;
+
+  // Two accepted forms (additive — ClientConfig behavior is unchanged):
+  //   new ApiClient({ token })            → builds a web FetchTransport (holds token)
+  //   new ApiClient({ transport })        → injected transport (token-agnostic path)
+  constructor(config: ClientConfig | { transport: HttpTransport }) {
+    if ("transport" in config) {
+      // Injected transport (e.g. the fork postMessage bridge): the ApiClient stays
+      // auth-agnostic and never sees a token. The transport owns auth.
+      this.transport = config.transport;
+    } else {
+      // Web default: strip a trailing slash so path joins are unambiguous, then
+      // hand the base + token to the FetchTransport which owns the auth header.
+      this.transport = new FetchTransport(
+        (config.baseUrl ?? defaultBaseUrl()).replace(/\/$/, ""),
+        config.token,
+      );
+    }
   }
 
   // --- read endpoints (server.go) ---
@@ -162,54 +227,57 @@ export class ApiClient {
 
   // --- core request plumbing ---
 
-  // request issues a single authed call. A plain object body is JSON-encoded; a
-  // string body is sent verbatim with the given contentType (used for raw YAML
-  // intake). Non-2xx → ApiError(status, gateway {error} message).
+  // request issues a single call through the transport. A plain object body is
+  // JSON-encoded; a string body is sent verbatim with the given contentType (used
+  // for raw YAML intake). The transport owns auth + the network; this layer owns
+  // serialization, error mapping (non-2xx → ApiError), and JSON parsing.
   private async request<T>(
     method: string,
     path: string,
     body?: unknown,
     contentType?: string,
   ): Promise<T> {
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.token}`,
-    };
-
     let payload: string | undefined;
+    let ct: string | undefined;
     if (typeof body === "string") {
       payload = body;
-      headers["Content-Type"] = contentType ?? "text/plain; charset=utf-8";
+      ct = contentType ?? "text/plain; charset=utf-8";
     } else if (body !== undefined) {
       payload = JSON.stringify(body);
-      headers["Content-Type"] = "application/json";
+      ct = "application/json";
     }
 
-    const init: RequestInit = { method, headers };
+    // Build the request omitting optional keys when absent (exactOptionalPropertyTypes:
+    // never assign an explicit undefined to an optional prop). ct is always set when
+    // payload is, but the two vars don't narrow together, so guard ct explicitly.
+    const req: HttpRequest = { method, path };
     if (payload !== undefined) {
-      init.body = payload;
+      req.body = payload;
+      if (ct !== undefined) {
+        req.contentType = ct;
+      }
     }
 
-    const res = await fetch(`${this.baseUrl}${path}`, init);
+    const res = await this.transport.send(req);
 
     if (!res.ok) {
-      throw new ApiError(res.status, await errorMessage(res));
+      throw new ApiError(res.status, errorMessageFromBody(res.body, res.status));
     }
 
     // 204 / empty body → undefined; all gateway 2xx responses carry JSON.
-    const text = await res.text();
-    if (text.length === 0) {
+    if (res.body.length === 0) {
       return undefined as T;
     }
-    return JSON.parse(text) as T;
+    return JSON.parse(res.body) as T;
   }
 }
 
-// errorMessage extracts the gateway's {error: string} message from a failed
-// response, falling back to a generic status line. Never throws (a non-JSON body
-// is tolerated) and never includes the token.
-async function errorMessage(res: Response): Promise<string> {
+// errorMessageFromBody extracts the gateway's {error: string} message from a
+// failed response body, falling back to a generic status line. Never throws (a
+// non-JSON body is tolerated) and never includes the token.
+function errorMessageFromBody(body: string, status: number): string {
   try {
-    const data: unknown = await res.json();
+    const data: unknown = JSON.parse(body);
     if (
       data !== null &&
       typeof data === "object" &&
@@ -221,7 +289,7 @@ async function errorMessage(res: Response): Promise<string> {
   } catch {
     // non-JSON / empty body — fall through to the generic message.
   }
-  return `request failed with status ${res.status}`;
+  return `request failed with status ${status}`;
 }
 
 // eventQueryString builds the GET /events query string from an EventQuery,
