@@ -145,5 +145,23 @@ dalga başlarında.
   yeşil (tsc + eslint + **36 vitest**: connection 10 + gateway 9 + extension 17 + esbuild 11kb). Not: 2 modülü Agent
   yazdı (529 overload'da kesildi), kalanı (extension wiring + 3 test dosyası + mock genişletme) orchestrator tamamladı;
   3 strict-gate hatası yakalanıp düzeltildi (kullanılmayan `#token` field, DOM `RequestInfo` tipi, ölü `_gatewayUrl`
-  param). **Sıradaki: 4B-2 (webview host + postMessage köprü: host gateway client REST+WS → webview'e tipli transport,
-  4A-1 fork impl'i; webview CSP sıkı, veri yalnız host'tan, token webview'e GİRMEZ).**
+  param). **4B-2 TAMAM (aşağıda).**
+- ✅ **4B-2 webview host + postMessage köprü** (`editor/src/bridge/`): 4A-1 transport seam'inin FORK IMPL'i.
+  `protocol.ts` (tipli `WebviewRequest`/`HostMessage` discriminated union'lar + defansif `isWebviewRequest`/
+  `isHostMessage` guard'ları). `hostBridge.ts` `HostBridge` (token-sahibi proxy; injectable `WebviewLike`/
+  `TokenProvider`/`WsConnector`/`fetchImpl` seam'leri): webview YALNIZ method+path verir, host `baseUrl+path` birleştirir;
+  REST `Authorization: Bearer` + WS `?token=` host-tarafı eklenir. `webviewTransport.ts` (webview tarafı `HttpTransport`+
+  `EventTransport`, postMessage üstünden, 4A-1 ile YAPISAL eşleşir, web/ import YOK; monotonik id, pending/subscription
+  map). `wsConnector.ts` (ince `ws` adaptörü — VS Code Node host'ta global WebSocket yok). `extension.ts` FleetViewProvider
+  artık `enableScripts:true` + sıkı CSP (`script-src 'nonce'`, `connect-src 'none'` — webview KENDİ ağını yapamaz, veri
+  yalnız host köprüsünden) + HostBridge attach/dispose. **GÜVENLİK (HARD, test edildi):** (1) **SSRF path-guard** — path
+  tek `/` ile başlamazsa (`//evil`, `http://evil`, slash'sız) rest-error + fetch YOK (webview authed isteği başka origin'e
+  yönlendiremez); (2) **token izolasyonu** — token YALNIZ host fetch header'ı + WS URL'inde, webview'e gönderilen hiçbir
+  mesajda YOK (fetch-throw'da bile generic mesaj, ham hata/URL değil). `ws ^8.21.0` + `@types/ws` eklendi; esbuild ws'i
+  bundle eder (opsiyonel native dep'ler `bufferutil`/`utf-8-validate` external). Bağımsız doğrulama (Rule#9): yerel gate
+  yeşil (tsc + eslint + **68 vitest**: bridge protocol 6 / hostBridge 15 / webviewTransport 10 + önceki 37 + esbuild
+  142kb ws-bundled) + root go-carve-out hâlâ geçiyor + hostBridge güvenlik incelemesi. SSRF-guard testi + token-leak guard
+  testi (her postMessage argümanı toplanır, sentinel hiçbirinde yok — fetch-throw dahil). **Sıradaki: 4B-3 (cockpit
+  panelleri: webview React bundle = 3B bileşenleri 4A-2 barrel reuse, bridge transport'ları inject; gerçek gateway'e
+  bağlanıp canlı veri). NOT: 4B-3 webview build'i web/src/cockpit.ts'i tüketecek → fiziksel paylaşım (ADR-0028 ertelenen
+  workspace) kararı burada netleşir.**
