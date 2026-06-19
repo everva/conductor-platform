@@ -27,6 +27,7 @@ import { EventStreamView } from "../events/EventStreamView.tsx";
 import { IntakeChat } from "../intake/IntakeChat.tsx";
 import type { IntakeClient } from "../intake/IntakeChat.tsx";
 import { ApiClient } from "../api/client.ts";
+import type { EventTransport } from "../api/useEventStream.ts";
 import "./fleet.css";
 
 export interface FleetDashboardProps {
@@ -40,6 +41,16 @@ export interface FleetDashboardProps {
   // makeIntakeClient is injectable for tests; defaults to the real ApiClient
   // (distill + intake). The intake tab uses ONLY these two endpoints.
   makeIntakeClient?: (token: string) => IntakeClient;
+  // eventTransport, when supplied, selects FORK MODE: the host (extension) is
+  // already connected, owns auth, and injects this transport (a postMessage bridge)
+  // for the live event stream. Its presence means "host is connected" so the
+  // dashboard mounts token-free — it forwards the transport to useFleet +
+  // EventStreamView AND passes enabled: true so a token="" mount actually fetches.
+  // Absent → WEB MODE: default fetch/WS transports built from the token, readiness
+  // derived from token.length (today's behavior, byte-for-byte). The host pairs this
+  // with transport-backed make*Client factories (e.g. () => new ApiClient({ transport }),
+  // token ignored) so REST flows over the same bridge. See ADR-0027/0028.
+  eventTransport?: EventTransport;
 }
 
 // DashboardTab toggles the cockpit between the fleet overview and the full event
@@ -53,6 +64,7 @@ export function FleetDashboard({
   makeClient,
   makeControlClient,
   makeIntakeClient,
+  eventTransport,
 }: FleetDashboardProps) {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [tab, setTab] = useState<DashboardTab>("fleet");
@@ -67,6 +79,10 @@ export function FleetDashboard({
     token,
     ...(selectedProjectId ? { selectedProjectId } : {}),
     ...(makeClient ? { makeClient } : {}),
+    // Fork mode (eventTransport present): the host is connected, so enable a
+    // token-free mount and run the live stream over the injected transport. Web
+    // mode (absent): omit both — enabled defaults to token.length > 0 (unchanged).
+    ...(eventTransport ? { eventTransport, enabled: true } : {}),
   });
 
   const controls = useFleetControls({
@@ -177,6 +193,7 @@ export function FleetDashboard({
           projects={fleet.projects.map((p) => p.id)}
           onUnauthorized={onUnauthorized}
           onInterventionAction={focusProject}
+          {...(eventTransport ? { eventTransport } : {})}
         />
       ) : (
         <IntakeChat

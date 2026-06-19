@@ -16,6 +16,7 @@ import { useMemo, useState } from "react";
 import { KIND_INTERVENTION_NEEDED } from "../types/events.gen.ts";
 import type { Kind, Phase } from "../api/types.ts";
 import type { EventQuery } from "../api/types.ts";
+import type { EventTransport } from "../api/useEventStream.ts";
 import { useEventFeed } from "./useEventFeed.ts";
 import type { HistoryLoader } from "./useEventFeed.ts";
 import { absoluteTime, payloadPreview, shortTime } from "../fleet/format.ts";
@@ -63,6 +64,9 @@ export interface EventStreamViewProps {
   // historyLimit / bufferCap are exposed for tests; sensible defaults otherwise.
   historyLimit?: number;
   bufferCap?: number;
+  // eventTransport overrides the default WebSocketTransport for the live feed (the
+  // fork postMessage bridge). Forwarded to useEventFeed; the host owns auth.
+  eventTransport?: EventTransport;
 }
 
 // FilterState is the local form state. Empty strings mean "no filter" and are pruned
@@ -103,6 +107,7 @@ export function EventStreamView({
   makeHistory,
   historyLimit = 200,
   bufferCap = 1000,
+  eventTransport,
 }: EventStreamViewProps) {
   const [filter, setFilter] = useState<FilterState>(EMPTY_FILTER);
   const [paused, setPaused] = useState(false);
@@ -119,6 +124,9 @@ export function EventStreamView({
     historyLimit,
     bufferCap,
     ...(makeHistory ? { makeHistory } : {}),
+    // An injected eventTransport means the host (fork) is connected: forward it and
+    // enable a token-free mount. Absent → enabled defaults to token.length > 0 (web).
+    ...(eventTransport ? { eventTransport, enabled: true } : {}),
   });
 
   // Bubble a 401 to the app (same contract as the fleet dashboard).

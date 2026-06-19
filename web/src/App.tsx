@@ -5,7 +5,10 @@
 import { AuthProvider } from "./auth/AuthProvider.tsx";
 import { TokenGate } from "./auth/TokenGate.tsx";
 import { useAuth } from "./auth/context.ts";
-import { FleetDashboard } from "./fleet/FleetDashboard.tsx";
+// The web App is the first consumer THROUGH the shared cockpit barrel (ADR-0028);
+// the fork webview (4B) is the second. Auth/TokenGate stay imported directly from
+// ./auth — they are web-only bootstrap, intentionally NOT in the barrel.
+import { FleetDashboard } from "./cockpit.ts";
 
 export function App() {
   return (

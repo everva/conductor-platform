@@ -97,7 +97,10 @@ export interface UseEventStreamOptions {
   // bound. Defaults to 200.
   maxEvents?: number;
   // enabled gates the connection; when false no socket is opened (e.g. before
-  // auth). Defaults to true.
+  // auth). Defaults to `token.length > 0` so readiness is decoupled from auth: a
+  // host with an injected transport (the fork) can pass `enabled: true` to mount
+  // token-free, while the web default stays behavior-identical (empty token →
+  // disabled, non-empty token → enabled).
   enabled?: boolean;
   // transport overrides the default WebSocketTransport (e.g. the fork postMessage
   // bridge). When set, the hook is token-agnostic and the transport owns auth +
@@ -131,7 +134,12 @@ function deriveWsBase(): string {
 }
 
 export function useEventStream(opts: UseEventStreamOptions): EventStream {
-  const { wsBase, token, filter, maxEvents = 200, enabled = true, transport } = opts;
+  const { wsBase, token, filter, maxEvents = 200, transport } = opts;
+  // Readiness defaults to "has a token" but is overridable: an injected-transport
+  // host (the fork) owns auth and can enable a token-free mount. Resolving the
+  // default this way keeps every existing caller byte-for-byte (no enabled +
+  // empty token → false; non-empty token → true).
+  const enabled = opts.enabled ?? (token.length > 0);
   const [events, setEvents] = useState<Event[]>([]);
   const [latest, setLatest] = useState<Event | null>(null);
   const [state, setState] = useState<StreamState>("closed");
@@ -143,7 +151,7 @@ export function useEventStream(opts: UseEventStreamOptions): EventStream {
   maxRef.current = maxEvents;
 
   useEffect(() => {
-    if (!enabled || token.length === 0) {
+    if (!enabled) {
       setState("closed");
       return;
     }

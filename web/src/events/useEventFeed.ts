@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiClient, ApiError } from "../api/client.ts";
 import { useEventStream } from "../api/useEventStream.ts";
-import type { StreamState } from "../api/useEventStream.ts";
+import type { EventTransport, StreamState } from "../api/useEventStream.ts";
 import type { Event, EventQuery } from "../api/types.ts";
 
 // EventFeedError mirrors fleet's FleetError: a surfaced backfill failure with a 401
@@ -48,9 +48,14 @@ export interface UseEventFeedOptions {
   paused?: boolean;
   // makeHistory builds the history loader (default: real ApiClient). Injectable for tests.
   makeHistory?: (token: string) => HistoryLoader;
-  // makeStream is the live-stream source (default: useEventStream). Injectable for tests
-  // so the WebSocket need not be globally stubbed.
+  // enabled gates the backfill + live subscription. Defaults to `token.length > 0`
+  // so readiness is decoupled from auth: an injected-transport host (the fork) can
+  // pass `enabled: true` to run token-free. Behavior-identical for existing callers.
   enabled?: boolean;
+  // eventTransport overrides the default WebSocketTransport for the live event
+  // subscription (e.g. the fork postMessage bridge). When set, the stream is
+  // token-agnostic and the transport owns auth.
+  eventTransport?: EventTransport;
 }
 
 export interface EventFeed {
@@ -109,8 +114,11 @@ export function useEventFeed(opts: UseEventFeedOptions): EventFeed {
     bufferCap = 1000,
     paused = false,
     makeHistory,
-    enabled = true,
+    eventTransport,
   } = opts;
+  // Readiness defaults to "has a token" but is overridable (see UseEventFeedOptions):
+  // byte-for-byte for existing callers; a token-free fork mount passes enabled: true.
+  const enabled = opts.enabled ?? (token.length > 0);
 
   const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(false);
@@ -152,7 +160,7 @@ export function useEventFeed(opts: UseEventFeedOptions): EventFeed {
   // RESETS the buffer to the freshly-fetched window so a filter change doesn't leave
   // stale rows from the previous query mixed in.
   useEffect(() => {
-    if (!enabled || token.length === 0) {
+    if (!enabled) {
       setEvents([]);
       return;
     }
@@ -193,10 +201,13 @@ export function useEventFeed(opts: UseEventFeedOptions): EventFeed {
   }, [filterKey]);
   const stream = useEventStream({
     token,
-    enabled: enabled && token.length > 0,
+    // Resolved enabled already incorporates the token check via its default, so
+    // forward it directly (an injected eventTransport can run token-free).
+    enabled,
     // Match the buffer cap so the stream's own retention doesn't silently drop below it.
     maxEvents: bufferCap,
     ...(streamFilter ? { filter: streamFilter } : {}),
+    ...(eventTransport ? { transport: eventTransport } : {}),
   });
 
   // Fold the live stream buffer into the merged display buffer. We fold the WHOLE

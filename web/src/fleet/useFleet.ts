@@ -14,7 +14,7 @@ import { ApiClient, ApiError } from "../api/client.ts";
 import type { Host, Lease, Project, StatusSummary, Task } from "../api/types.ts";
 import { useEventStream } from "../api/useEventStream.ts";
 import type { Event, EventQuery, Kind } from "../api/types.ts";
-import type { StreamState } from "../api/useEventStream.ts";
+import type { EventTransport, StreamState } from "../api/useEventStream.ts";
 
 // FleetClient is the read surface useFleet consumes. ApiClient satisfies it; tests
 // pass a lightweight fake implementing exactly these methods.
@@ -61,8 +61,15 @@ export interface UseFleetOptions {
   refreshIntervalMs?: number;
   // selectedProjectId optionally narrows the WS subscription to one project.
   selectedProjectId?: string | undefined;
-  // enabled gates all activity (no token before auth). Defaults to true.
+  // enabled gates all activity (no token before auth). Defaults to `token.length >
+  // 0` so readiness is decoupled from auth: an injected-transport host (the fork)
+  // can pass `enabled: true` to run token-free. Behavior-identical for every
+  // existing caller (no enabled + empty token → off; non-empty token → on).
   enabled?: boolean;
+  // eventTransport overrides the default WebSocketTransport for the live event
+  // subscription (e.g. the fork postMessage bridge). When set, the stream is
+  // token-agnostic and the transport owns auth.
+  eventTransport?: EventTransport;
 }
 
 // Kinds that should trigger an out-of-band refresh the moment they arrive.
@@ -91,8 +98,12 @@ export function useFleet(opts: UseFleetOptions): FleetSnapshot {
     makeClient = (t) => new ApiClient({ token: t }),
     refreshIntervalMs = 5000,
     selectedProjectId,
-    enabled = true,
+    eventTransport,
   } = opts;
+  // Readiness defaults to "has a token" but is overridable (see UseFleetOptions):
+  // resolving it this way is byte-for-byte for existing callers and lets a
+  // token-free fork mount pass enabled: true.
+  const enabled = opts.enabled ?? (token.length > 0);
 
   const [status, setStatus] = useState<StatusSummary | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -115,7 +126,7 @@ export function useFleet(opts: UseFleetOptions): FleetSnapshot {
   }, []);
 
   const refresh = useCallback(async () => {
-    if (!enabled || token.length === 0) {
+    if (!enabled) {
       return;
     }
     if (mountedRef.current) {
@@ -151,11 +162,11 @@ export function useFleet(opts: UseFleetOptions): FleetSnapshot {
         setLoading(false);
       }
     }
-  }, [client, enabled, token]);
+  }, [client, enabled]);
 
   // Initial load + periodic poll. The interval is cleared on unmount / dep change.
   useEffect(() => {
-    if (!enabled || token.length === 0) {
+    if (!enabled) {
       return;
     }
     void refresh();
@@ -165,7 +176,7 @@ export function useFleet(opts: UseFleetOptions): FleetSnapshot {
     return () => {
       clearInterval(id);
     };
-  }, [refresh, refreshIntervalMs, enabled, token]);
+  }, [refresh, refreshIntervalMs, enabled]);
 
   // Live event subscription. A project filter narrows the stream when one is selected.
   const filter = useMemo<EventQuery | undefined>(
@@ -174,8 +185,11 @@ export function useFleet(opts: UseFleetOptions): FleetSnapshot {
   );
   const stream = useEventStream({
     token,
-    enabled: enabled && token.length > 0,
+    // Resolved enabled already incorporates the token check via its default, so
+    // forward it directly (an injected eventTransport can run token-free).
+    enabled,
     ...(filter ? { filter } : {}),
+    ...(eventTransport ? { transport: eventTransport } : {}),
   });
 
   // When a relevant event lands, stamp lastEventAt and nudge a refresh so the

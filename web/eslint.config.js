@@ -43,4 +43,25 @@ export default tseslint.config(
       globals: { ...globals.node },
     },
   },
+  {
+    // Boundary lock (ADR-0028): the shared cockpit UI surface (exposed via
+    // src/cockpit.ts and consumed by both the web App and the 4B fork webview) must
+    // stay web-bootstrap-agnostic. Forbid these modules from importing auth/session/
+    // main so the host can inject transport + token and the boundary can't rot. They
+    // already do NOT import these; this just freezes that.
+    files: [
+      "src/fleet/**/*.{ts,tsx}",
+      "src/events/**/*.{ts,tsx}",
+      "src/intake/**/*.{ts,tsx}",
+      "src/api/**/*.{ts,tsx}",
+    ],
+    rules: {
+      "no-restricted-imports": ["error", {
+        patterns: [{
+          group: ["**/auth/*", "**/auth/**", "**/main", "**/main.tsx"],
+          message: "Shared cockpit UI must stay web-bootstrap-agnostic (no auth/session/main) — the host injects transport + token. See ADR-0028.",
+        }],
+      }],
+    },
+  },
 );
