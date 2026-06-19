@@ -119,7 +119,7 @@ export class ConnectionManager {
     return { ok: true };
   }
 
-  /** Explicit disconnect: forget the token (delete the secret + clear the cache) and
+  /** Explicit disconnect: forget the token (delete the SecretStorage entry) and
    * go "disconnected". This is one of only two paths that clear the stored token (the
    * other being a definitive 401 during `restore`). */
   async disconnect(): Promise<void> {
@@ -130,7 +130,7 @@ export class ConnectionManager {
   /**
    * Silent restore-on-activate. Reads the stored token (if any) and re-validates it:
    *   - no stored token         → state "disconnected"
-   *   - validate "valid"        → cache it, state "connected"
+   *   - validate "valid"        → state "connected" (token stays in SecretStorage)
    *   - validate "unauthorized" → DELETE the stale token, state "disconnected"
    *   - validate "unreachable"  → KEEP the token (transient outage), state "disconnected"
    * Never throws, never logs/returns the token. See RESTORE POLICY in the file header.

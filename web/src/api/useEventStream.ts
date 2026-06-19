@@ -105,6 +105,9 @@ export interface UseEventStreamOptions {
   // transport overrides the default WebSocketTransport (e.g. the fork postMessage
   // bridge). When set, the hook is token-agnostic and the transport owns auth +
   // the wsBase; token/wsBase above are ignored.
+  // MUST be referentially STABLE across renders (e.g. built once at module scope, as the
+  // fork's bridge transport is): it is an effect dependency, so a fresh object each render
+  // would tear down + reopen the stream every render (a reconnect storm).
   transport?: EventTransport;
 }
 

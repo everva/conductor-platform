@@ -102,6 +102,32 @@ function makeBridge(opts: {
   return bridge;
 }
 
+describe("HostBridge — duplicate event-subscribe id (review FAZ-4 HIGH: WS handle leak)", () => {
+  it("closes the existing WS handle when the webview reuses an active id, and routes onClose by handle identity", async () => {
+    makeBridge({}); // sentinel token
+
+    webview.fire({ kind: "event-subscribe", id: "s1" });
+    await flush();
+    expect(ws.opened).toHaveLength(1);
+
+    // The webview reuses an ACTIVE id (untrusted input): the first socket must be CLOSED
+    // (no leak) before the second opens — without the fix the first handle was orphaned.
+    webview.fire({ kind: "event-subscribe", id: "s1" });
+    await flush();
+    expect(ws.opened).toHaveLength(2);
+    expect(ws.closes[0]).toHaveBeenCalledTimes(1); // first handle closed on overwrite
+    expect(ws.closes[1]).not.toHaveBeenCalled();
+
+    // The stale (first) socket closing LATE must NOT evict the new handle (delete-by-identity):
+    ws.opened[0].handlers.onClose();
+    await flush();
+    // …so unsubscribe still closes the CURRENT (second) handle.
+    webview.fire({ kind: "event-unsubscribe", id: "s1" });
+    await flush();
+    expect(ws.closes[1]).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("HostBridge — REST", () => {
   it("happy path: fetches baseUrl+path with Authorization: Bearer <token> and posts rest-response", async () => {
     const fetchImpl = vi

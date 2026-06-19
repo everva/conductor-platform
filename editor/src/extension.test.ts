@@ -480,6 +480,29 @@ describe("FleetViewProvider", () => {
     view.__fireDispose();
     expect(dispose).toHaveBeenCalledTimes(1);
   });
+
+  it("disposes the previous bridge when re-resolved (review FAZ-4 MED: re-resolve leak)", () => {
+    const disposes: ReturnType<typeof vi.fn>[] = [];
+    const attaches: ReturnType<typeof vi.fn>[] = [];
+    const bridgeFactory = vi.fn(() => {
+      const attach = vi.fn();
+      const dispose = vi.fn();
+      attaches.push(attach);
+      disposes.push(dispose);
+      return { attach, dispose };
+    });
+    const provider = new FleetViewProvider(makeFleetConfig({ bridgeFactory }));
+
+    provider.resolveWebviewView(__makeWebviewView() as never); // bridge 0
+    // Re-resolve WITHOUT firing the first view's onDidDispose (VS Code can re-resolve a
+    // hidden→revealed view): the provider must tear down the predecessor itself.
+    provider.resolveWebviewView(__makeWebviewView() as never); // bridge 1
+
+    expect(bridgeFactory).toHaveBeenCalledTimes(2);
+    expect(disposes[0]).toHaveBeenCalledTimes(1); // predecessor disposed on re-resolve (no leak)
+    expect(attaches[1]).toHaveBeenCalledTimes(1); // new bridge attached
+    expect(disposes[1]).not.toHaveBeenCalled();
+  });
 });
 
 describe("placeholderHtml", () => {

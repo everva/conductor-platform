@@ -133,7 +133,7 @@ interface ActiveSubscription {
 export function createBridgeTransports(
   poster: WebviewPoster,
   subscribe: SubscribeToMessages,
-): { http: HttpTransport; events: EventTransport } {
+): { http: HttpTransport; events: EventTransport; dispose(): void } {
   let counter = 0;
   const nextId = (): string => `b${++counter}`;
 
@@ -141,8 +141,9 @@ export function createBridgeTransports(
   const subs = new Map<string, ActiveSubscription>();
 
   // Single inbound router. Ignores anything that isn't a well-formed HostMessage so a
-  // foreign frame can't spoof a response/event into our maps.
-  subscribe((msg) => {
+  // foreign frame can't spoof a response/event into our maps. Keep the detach thunk so
+  // dispose() can remove the listener (honoring the SubscribeToMessages cleanup contract).
+  const unsubscribe = subscribe((msg) => {
     if (!isHostMessage(msg)) {
       return;
     }
@@ -189,7 +190,20 @@ export function createBridgeTransports(
     },
   };
 
-  return { http, events };
+  // Tears the transports down: detach the inbound listener, settle any in-flight REST so
+  // an awaiting caller can't hang forever, and drop all subscriptions. The production fork
+  // builds the transports once at module scope (webview lifetime) so this is rarely called,
+  // but it makes re-creation (HMR / a future re-mount / tests) leak-free.
+  const dispose = (): void => {
+    unsubscribe();
+    for (const p of pending.values()) {
+      p.reject(new Error("conductor bridge disposed"));
+    }
+    pending.clear();
+    subs.clear();
+  };
+
+  return { http, events, dispose };
 }
 
 /**

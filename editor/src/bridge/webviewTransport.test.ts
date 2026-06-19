@@ -51,6 +51,22 @@ function build(): ReturnType<typeof createBridgeTransports> {
   return createBridgeTransports(harness.poster, harness.subscribe);
 }
 
+describe("webviewTransport — dispose (review FAZ-4 MED: listener + pending cleanup)", () => {
+  it("detaches the inbound listener and rejects in-flight REST on dispose", async () => {
+    const { http, dispose } = build();
+    const p = http.send({ method: "GET", path: "/status" }); // pending b1
+
+    dispose();
+    await expect(p).rejects.toThrow(/disposed/);
+
+    // The inbound listener is detached: a late host reply for b1 is a quiet no-op (it must
+    // not reach the router — the careful subscribeToMessages unsubscribe is now honored).
+    expect(() =>
+      harness.fire({ kind: "rest-response", id: "b1", status: 200, ok: true, body: "{}" }),
+    ).not.toThrow();
+  });
+});
+
 describe("webviewTransport — http.send", () => {
   it("posts a rest-request (monotonic id) and resolves with the matching rest-response", async () => {
     const { http } = build();

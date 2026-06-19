@@ -21,6 +21,7 @@
 // narrow structural `VscodeApi` slice so vitest drives them with a mock — headlessly,
 // no electron, no display. The webview HTML is the pure `placeholderHtml`.
 import * as vscode from "vscode";
+import { randomBytes } from "node:crypto";
 import { deriveWsUrl, makeGatewayProbe, normalizeBaseUrl, GATEWAY_TOKEN_KEY } from "./gateway";
 import { ConnectionManager, type ConnectionState } from "./connection";
 import { HostBridge, type WebviewLike } from "./bridge/hostBridge";
@@ -231,6 +232,11 @@ export function makeBridgeFactory(secrets: SecretStore, gatewayUrl: string): Bri
  */
 export class FleetViewProvider implements vscode.WebviewViewProvider {
   readonly #config: FleetViewConfig | undefined;
+  // The bridge for the currently-resolved view. VS Code can call resolveWebviewView
+  // more than once on one provider (a hidden view is torn down and re-resolved on
+  // reveal when retainContextWhenHidden is off); dispose any predecessor on re-resolve
+  // so an old HostBridge (with its WS handles + message listener) can never leak.
+  #bridge: { dispose(): void } | undefined;
 
   constructor(config?: FleetViewConfig) {
     this.#config = config;
@@ -245,6 +251,11 @@ export class FleetViewProvider implements vscode.WebviewViewProvider {
       webviewView.webview.html = placeholderHtml(webviewView.webview.cspSource);
       return;
     }
+
+    // Re-resolve safety: tear down the bridge from a previous resolve before building a
+    // new one, so a re-resolve that didn't fire the prior view's onDidDispose can't leak.
+    this.#bridge?.dispose();
+    this.#bridge = undefined;
 
     const webview = webviewView.webview;
     const distRoot = vscode.Uri.joinPath(config.extensionUri, "dist", "webview");
@@ -264,9 +275,15 @@ export class FleetViewProvider implements vscode.WebviewViewProvider {
     const factory =
       config.bridgeFactory ?? makeBridgeFactory(config.secrets, config.gatewayUrl);
     const bridge = factory(webview);
+    this.#bridge = bridge;
     bridge.attach();
     // Tear the bridge down when the view goes away (closes WS handles + the listener).
-    webviewView.onDidDispose(() => bridge.dispose());
+    webviewView.onDidDispose(() => {
+      bridge.dispose();
+      if (this.#bridge === bridge) {
+        this.#bridge = undefined;
+      }
+    });
   }
 }
 
@@ -579,15 +596,18 @@ export function deactivate(): void {
 }
 
 /**
- * Generates a 32-char alphanumeric nonce for the webview CSP. Uses Math.random — this
- * is a per-render uniqueness token for CSP, NOT a security secret (no token/secret is
- * handled by this function; the bearer token lives in SecretStorage, see connection.ts).
+ * Generates a 32-char alphanumeric nonce for the webview CSP from a CRYPTO RNG
+ * (node:crypto randomBytes; the extension host is Node). A CSP nonce is a per-render
+ * uniqueness token, not a secret, but using a crypto source (vs Math.random) is strictly
+ * better hygiene and removes any predictability concern (review FAZ-4 finding). Kept
+ * alphanumeric (modulo over the 62-char alphabet — bias is irrelevant for a CSP nonce).
  */
 function makeNonce(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = randomBytes(32);
   let nonce = "";
   for (let i = 0; i < 32; i++) {
-    nonce += chars.charAt(Math.floor(Math.random() * chars.length));
+    nonce += chars.charAt(bytes[i] % chars.length);
   }
   return nonce;
 }

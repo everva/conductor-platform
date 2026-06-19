@@ -14,7 +14,7 @@
 // vscode api, builds the bridge transports, and renders. The pure factory wiring lives in
 // connect.ts (unit-testable without React).
 import { createRoot } from "react-dom/client";
-import { createBridgeTransports } from "../src/bridge/webviewTransport";
+import { createBridgeTransports, subscribeToMessages } from "../src/bridge/webviewTransport";
 import { forkClientFactories } from "./connect";
 import { FleetDashboard, ApiClient } from "@cockpit";
 
@@ -22,14 +22,11 @@ import { FleetDashboard, ApiClient } from "@cockpit";
 const vscodeApi = acquireVsCodeApi();
 
 // 4B-2 transports: post via the vscode api; subscribe to host→webview messages via the
-// window "message" event (the bridge forwards each event's `data` to the listener).
+// shared `subscribeToMessages` seam (the real window "message" wiring — one definition,
+// reused here instead of re-rolled, so the seam's removeEventListener isn't dead code).
 const { http, events } = createBridgeTransports(
   { postMessage: (m) => vscodeApi.postMessage(m) },
-  (listener) => {
-    const handler = (e: MessageEvent): void => listener(e.data);
-    window.addEventListener("message", handler);
-    return () => window.removeEventListener("message", handler);
-  },
+  subscribeToMessages,
 );
 
 // Three zero-arg client factories over the one HTTP transport. Each ignores the (empty)

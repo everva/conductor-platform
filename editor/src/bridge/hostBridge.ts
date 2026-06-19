@@ -145,8 +145,10 @@ export class HostBridge {
     this.#fetch = deps.fetchImpl ?? fetch;
   }
 
-  /** Registers the inbound-message listener. Idempotent-safe per instance (call once). */
+  /** Registers the inbound-message listener. Re-entrancy-safe: a second attach() disposes
+   * the prior listener first so it can't leak (the production caller attaches once). */
   attach(): void {
+    this.#listener?.dispose();
     this.#listener = this.#webview.onDidReceiveMessage((message) => {
       // postMessage delivers untrusted `unknown`; ignore anything that isn't a
       // well-formed WebviewRequest so a foreign/malformed frame can't drive I/O.
@@ -246,13 +248,24 @@ export class HostBridge {
     const sep = filterQs.length > 0 ? "&" : "?";
     const url = `${this.#wsBaseUrl}/ws${filterQs}${sep}token=${encodeURIComponent(token)}`;
 
+    // The id is webview-minted and host-TRUSTED only for routing — the webview is the
+    // untrusted boundary (see the SSRF/token guards). A misbehaving/compromised webview
+    // could reuse an active id; close the existing handle first so its socket can't leak.
+    const existing = this.#subscriptions.get(req.id);
+    if (existing !== undefined) {
+      existing.close();
+    }
+
     const handle = this.#wsConnector.open(url, {
       onOpen: () => this.#post({ kind: "event-open", id: req.id }),
       onMessage: (data) => this.#post({ kind: "event-message", id: req.id, data }),
       onClose: () => {
-        // Forget the handle once the socket closes (server-side / error close) so a
-        // later unsubscribe/dispose is a no-op for it.
-        this.#subscriptions.delete(req.id);
+        // Forget the handle once the socket closes (server-side / error close) so a later
+        // unsubscribe/dispose is a no-op for it. Delete by HANDLE IDENTITY: if this id was
+        // re-subscribed (a stale socket closing late), don't evict the newer handle.
+        if (this.#subscriptions.get(req.id) === handle) {
+          this.#subscriptions.delete(req.id);
+        }
         this.#post({ kind: "event-close", id: req.id });
       },
     });
