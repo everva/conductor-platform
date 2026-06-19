@@ -6,17 +6,22 @@
 .vscode-test.*
 src/**
 test/**
+webview/**
 out-test/**
 node_modules/**
 
 **/*.ts
+**/*.tsx
 **/*.map
+dist/webview/harness.html
 
 tsconfig.json
 tsconfig.test.json
+tsconfig.webview.json
 eslint.config.mjs
 vitest.config.ts
 esbuild.config.mjs
+esbuild.config.d.mts
 go.mod
 .gitignore
 .vscodeignore
