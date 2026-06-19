@@ -12,6 +12,7 @@ import {
   __reset,
   __makeWebviewView,
   __makeSecretStorage,
+  __makeExtensionUri,
   __setConfig,
   type Disposable,
   type ExtensionContext,
@@ -20,6 +21,7 @@ import {
   CONNECT_COMMAND,
   DISCONNECT_COMMAND,
   FLEET_VIEW_ID,
+  type FleetViewConfig,
   FleetViewProvider,
   activate,
   deactivate,
@@ -28,6 +30,7 @@ import {
   runConnect,
   runDisconnect,
   statusBarText,
+  webviewHtml,
 } from "./extension";
 import { ConnectionManager, type SecretStore } from "./connection";
 import { GATEWAY_TOKEN_KEY, type GatewayProbe, type TokenCheck } from "./gateway";
@@ -166,6 +169,7 @@ describe("activate", () => {
     const context = {
       subscriptions,
       secrets: __makeSecretStorage(),
+      extensionUri: __makeExtensionUri(),
     } as ExtensionContext;
 
     activate(context as never);
@@ -198,32 +202,46 @@ describe("deactivate", () => {
   });
 });
 
+// A FleetViewConfig for the provider tests. extensionUri is the mock's UriLike (the real
+// type is vscode.Uri; the headless mock is structurally compatible), so cast at the seam.
+function makeFleetConfig(over: Partial<FleetViewConfig> = {}): FleetViewConfig {
+  return {
+    secrets: __makeSecretStorage(),
+    gatewayUrl: "http://gw.test",
+    extensionUri: __makeExtensionUri() as unknown as FleetViewConfig["extensionUri"],
+    ...over,
+  };
+}
+
 describe("FleetViewProvider", () => {
-  it("enables scripts and renders the placeholder HTML on resolve (bare, no bridge)", () => {
+  it("enables scripts and renders the no-config placeholder HTML on resolve (bare, no bridge)", () => {
     const view = __makeWebviewView("vscode-resource:");
-    // Bare construction (no config) still works for the static-HTML path: scripts on
-    // (4B-3 React needs them), placeholder rendered, and NO bridge attached.
+    // Bare construction (no config) renders the static placeholder: scripts on, no bundle
+    // (no extensionUri to build asset URIs), and NO bridge attached.
     new FleetViewProvider().resolveWebviewView(view as never);
-    // 4B-2: scripts are now ENABLED (the React panels in 4B-3 need them). The bridge,
-    // not a scripts-off webview, is what keeps the token isolated.
     expect(view.webview.options.enableScripts).toBe(true);
     expect(view.webview.html).toContain("Not connected");
+    // The legacy placeholder carries no live <script> (no bundle on the no-config path).
+    expect(view.webview.html).not.toMatch(/<script/i);
     // No config → no bridge → the host never subscribes to the webview's messages.
     expect(view.webview.onDidReceiveMessage).not.toHaveBeenCalled();
   });
 
-  it("attaches a bridge (via the injected factory) on resolve and disposes it on view-dispose", () => {
+  it("loads the cockpit bundle, scopes localResourceRoots, attaches a bridge, and disposes on view-dispose", () => {
     const view = __makeWebviewView("vscode-resource:");
     const attach = vi.fn();
     const dispose = vi.fn();
     const bridgeFactory = vi.fn(() => ({ attach, dispose }));
-    const secrets = __makeSecretStorage();
 
-    new FleetViewProvider({
-      secrets,
-      gatewayUrl: "http://gw.test",
-      bridgeFactory,
-    }).resolveWebviewView(view as never);
+    new FleetViewProvider(makeFleetConfig({ bridgeFactory })).resolveWebviewView(view as never);
+
+    // 4B-3: scripts on + localResourceRoots scoped to dist/webview; the HTML nonce-loads
+    // the bundled cockpit script + CSS (asWebviewUri-mapped under dist/webview).
+    expect(view.webview.options.enableScripts).toBe(true);
+    expect(view.webview.options.localResourceRoots?.[0]?.path).toBe("/ext/dist/webview");
+    expect(view.webview.html).toContain('src="vscode-resource:/ext/dist/webview/main.js"');
+    expect(view.webview.html).toContain('href="vscode-resource:/ext/dist/webview/main.css"');
+    expect(view.webview.html).toContain('<div id="root"></div>');
 
     // The factory was handed the webview and the bridge was attached.
     expect(bridgeFactory).toHaveBeenCalledTimes(1);
@@ -276,5 +294,47 @@ describe("placeholderHtml", () => {
     expect(nonceA).toBeDefined();
     expect(nonceB).toBeDefined();
     expect(nonceA).not.toEqual(nonceB);
+  });
+});
+
+describe("webviewHtml", () => {
+  // A representative opts bundle (the runtime values resolveWebviewView passes).
+  const opts = {
+    cspSource: "vscode-resource:",
+    nonce: "ABCDEF0123456789ABCDEF0123456789",
+    scriptUri: "vscode-resource:/ext/dist/webview/main.js",
+    styleUri: "vscode-resource:/ext/dist/webview/main.css",
+  };
+
+  it("locks default-src and connect-src to 'none' (webview does NO direct network)", () => {
+    const html = webviewHtml(opts);
+    expect(html).toMatch(/Content-Security-Policy/);
+    expect(html).toContain("default-src 'none'");
+    // connect-src 'none' is the enforcement that all data flows over the host bridge.
+    expect(html).toContain("connect-src 'none'");
+  });
+
+  it("allows only a nonce'd script (script-src 'nonce-…', no 'unsafe-inline')", () => {
+    const html = webviewHtml(opts);
+    expect(html).toContain(`script-src 'nonce-${opts.nonce}'`);
+    expect(html).not.toContain("unsafe-inline");
+  });
+
+  it("references the bundle script + style URIs and a #root mount, with no inline script body", () => {
+    const html = webviewHtml(opts);
+    expect(html).toContain(`src="${opts.scriptUri}"`);
+    expect(html).toContain(`href="${opts.styleUri}"`);
+    expect(html).toContain('<div id="root"></div>');
+    // The ONLY <script> is the nonce'd external bundle — no inline JS between script tags.
+    expect(html).toMatch(new RegExp(`<script nonce="${opts.nonce}" src="[^"]+"></script>`));
+    expect(html).not.toMatch(/<script(?![^>]*\bsrc=)/i);
+  });
+
+  it("nonce-gates the stylesheet and threads cspSource into style/img/font directives", () => {
+    const html = webviewHtml(opts);
+    expect(html).toContain(`<link rel="stylesheet" nonce="${opts.nonce}"`);
+    expect(html).toContain(`style-src 'nonce-${opts.nonce}' vscode-resource:`);
+    expect(html).toContain("img-src vscode-resource: data:");
+    expect(html).toContain("font-src vscode-resource:");
   });
 });

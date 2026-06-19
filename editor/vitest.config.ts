@@ -16,7 +16,10 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    // Host src tests + the FORK-MODE webview wiring test (connect.ts is React-free and
+    // alias-free, so it runs headlessly here; the React render is verified by the webview
+    // typecheck + esbuild build per ADR-0029, NOT a vitest render).
+    include: ["src/**/*.test.ts", "webview/**/*.test.ts"],
     exclude: ["test/**", "node_modules/**", "dist/**", "out-test/**"],
   },
 });

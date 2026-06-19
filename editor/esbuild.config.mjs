@@ -1,16 +1,32 @@
-// esbuild bundler for the Conductor VS Code extension. Bundles the TS entry into a
-// single CommonJS file for the extension host. `vscode` is provided by the host at
-// runtime, so it is marked external (never bundled). The `ws` package (used by the 4B-2
-// WS connector) IS bundled, but its OPTIONAL native acceleration deps (bufferutil,
-// utf-8-validate) are marked external so the bundle builds cleanly without them — `ws`
-// require()s them in a try/catch and runs fine in pure JS when absent. Pass --watch for
-// incremental rebuilds during development (optional; the gate runs a one-shot build).
+// esbuild bundler for the Conductor VS Code extension. Builds TWO bundles:
+//
+//   1. HOST  (dist/extension.js)   — the extension-host program: CommonJS for Node. The
+//      `vscode` module is provided by the host at runtime → external (never bundled). The
+//      `ws` package (4B-2 WS connector) IS bundled, but its OPTIONAL native acceleration
+//      deps (bufferutil, utf-8-validate) are external so the bundle builds without them —
+//      `ws` require()s them in a try/catch and runs fine in pure JS when absent.
+//
+//   2. WEBVIEW (dist/webview/main.js + main.css) — the FORK cockpit React bundle (4B-3).
+//      A classic IIFE script the webview loads with a CSP nonce. It mounts the SHARED 3B
+//      cockpit (web/src/cockpit.ts) via the `@cockpit` alias, with React + the cockpit CSS
+//      BUNDLED IN. This is the cross-dir source reuse (ADR-0029): web/ is consumed as
+//      source through the alias and is never modified. The webview does NO direct network
+//      (host CSP `connect-src 'none'`); `import.meta.env.VITE_API_BASE` is `define`d away
+//      (the host bridge owns the base URL), and React builds in production mode.
+//
+// Pass --watch for incremental rebuilds of BOTH bundles (optional; the gate is one-shot).
 import * as esbuild from "esbuild";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const watch = process.argv.includes("--watch");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// The shared cockpit barrel, resolved AS SOURCE from web/src (web/ stays untouched).
+const cockpitEntry = path.resolve(__dirname, "../web/src/cockpit.ts");
 
 /** @type {import("esbuild").BuildOptions} */
-const options = {
+const hostOptions = {
   entryPoints: ["src/extension.ts"],
   outfile: "dist/extension.js",
   bundle: true,
@@ -22,11 +38,47 @@ const options = {
   logLevel: "info",
 };
 
+/** @type {import("esbuild").BuildOptions} */
+const webviewOptions = {
+  entryPoints: ["webview/main.tsx"],
+  outdir: "dist/webview",
+  bundle: true,
+  platform: "browser",
+  format: "iife",
+  target: "es2022",
+  jsx: "automatic",
+  alias: { "@cockpit": cockpitEntry },
+  loader: { ".css": "css" },
+  define: {
+    // React production build (drops dev warnings / checks).
+    "process.env.NODE_ENV": '"production"',
+    // The fork doesn't use the Vite build-time API base (the host bridge owns the base
+    // URL); keep the reference defined so the bundled web/src/api/client.ts builds.
+    "import.meta.env.VITE_API_BASE": "undefined",
+  },
+  sourcemap: true,
+  logLevel: "info",
+};
+
 if (watch) {
-  const ctx = await esbuild.context(options);
-  await ctx.watch();
-  console.log("[esbuild] watching for changes…");
+  const hostCtx = await esbuild.context(hostOptions);
+  const webviewCtx = await esbuild.context(webviewOptions);
+  await Promise.all([hostCtx.watch(), webviewCtx.watch()]);
+  console.log("[esbuild] watching for changes (host + webview)…");
 } else {
-  await esbuild.build(options);
-  console.log("[esbuild] build complete → dist/extension.js");
+  // Build both; report each output's size so the gate tail shows both bundles.
+  const [hostResult, webviewResult] = await Promise.all([
+    esbuild.build({ ...hostOptions, metafile: true }),
+    esbuild.build({ ...webviewOptions, metafile: true }),
+  ]);
+  logOutputs("host", hostResult);
+  logOutputs("webview", webviewResult);
+  console.log("[esbuild] build complete → dist/extension.js + dist/webview/main.js (+ main.css)");
+}
+
+/** Logs each emitted file + its byte size from a build's metafile. */
+function logOutputs(label, result) {
+  for (const [file, info] of Object.entries(result.metafile.outputs)) {
+    console.log(`[esbuild] ${label}: ${file} — ${info.bytes} bytes`);
+  }
 }

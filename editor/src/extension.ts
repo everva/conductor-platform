@@ -5,8 +5,11 @@
 // `conductor.connect` flow prompts for a token, validates it against the gateway, and
 // stores it in VS Code SecretStorage; `conductor.disconnect` forgets it; a status-bar
 // item mirrors the connection state; restore-on-activate re-validates a stored token.
-// The host↔webview postMessage bridge (4B-2) and the 3B cockpit panels (4B-3) are
-// still NOT here — the Fleet view stays a placeholder.
+// 4B-2 added the host↔webview postMessage bridge (the fork transport seam). 4B-3 loads
+// the SHARED 3B cockpit bundle into the Fleet view: the provider now serves a strict-CSP
+// HTML page that nonce-loads dist/webview/main.js (the React bundle built from
+// web/src/cockpit.ts via esbuild, ADR-0029) over that live bridge — the panels render
+// real data, token-free (auth host-side).
 //
 // TOKEN DISCIPLINE (HARD): the token is read via a password input, handed straight to
 // the ConnectionManager (SecretStorage + the gateway Authorization header), and is
@@ -59,15 +62,57 @@ export interface VscodeApi {
   };
 }
 
+/** The arguments the live-cockpit HTML builder needs, all already resolved by the caller
+ * (resolveWebviewView): the runtime `cspSource`, a fresh per-render `nonce`, and the
+ * `asWebviewUri`-mapped script + style URLs of the bundled cockpit. */
+export interface WebviewHtmlOptions {
+  readonly cspSource: string;
+  readonly nonce: string;
+  readonly scriptUri: string;
+  readonly styleUri: string;
+}
+
 /**
- * Builds the Fleet webview HTML. Pure (no vscode runtime needed) so tests can assert the
- * CSP + copy directly. `cspSource` is the webview's `cspSource` at runtime. The CSP is
- * strict: everything defaults to 'none'; only our own nonce'd <style>/<script> + images
- * from `cspSource` are allowed, and `connect-src 'none'` forbids the webview from doing
- * its OWN network — all data must arrive over the postMessage bridge (4B-2) from the
- * authed host. For 4B-2 there is still NO live <script> (the React bundle is 4B-3), so
- * the body stays a static "not connected" placeholder; the bridge is attached host-side
- * regardless, ready for the panels.
+ * Builds the Fleet view HTML that loads the SHARED cockpit bundle (4B-3). Pure (no vscode
+ * runtime) so a test asserts the CSP + that it references the script/style URIs. The CSP
+ * is strict: `default-src 'none'`; only our own nonce'd <script> runs and only nonce'd or
+ * `cspSource` styles apply; images from `cspSource`/data:, fonts from `cspSource`. Crucially
+ * `connect-src 'none'` forbids the webview from doing its OWN network — ALL data arrives
+ * over the postMessage bridge (4B-2) from the authed host, so the token never reaches the
+ * webview (ADR-0027/0029). There is NO inline script body and no 'unsafe-inline': the only
+ * script is the nonce'd bundle <script src=…>. The bundle mounts FleetDashboard in fork
+ * mode (token="", injected transports) — see webview/main.tsx.
+ */
+export function webviewHtml(opts: WebviewHtmlOptions): string {
+  const { cspSource, nonce, scriptUri, styleUri } = opts;
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}' ${cspSource}; img-src ${cspSource} data:; font-src ${cspSource}; connect-src 'none';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" nonce="${nonce}" href="${styleUri}" />
+    <title>Conductor</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script nonce="${nonce}" src="${scriptUri}"></script>
+  </body>
+</html>`;
+}
+
+/**
+ * Builds the no-config Fleet HTML. Pure (no vscode runtime needed) so tests can assert the
+ * CSP + copy directly. Reached ONLY on the legacy bare-construction path (a
+ * `new FleetViewProvider()` with no config + no extensionUri): without the extensionUri we
+ * can't build the bundle's resource URIs, so we render a minimal strict-CSP "not connected"
+ * page (no live script). The production path always supplies a config and serves
+ * `webviewHtml` (the live cockpit bundle). The CSP mirrors the live page minus the script
+ * directive: everything defaults to 'none', only our nonce'd <style> applies, and
+ * `connect-src 'none'` still forbids any webview-originated network.
  */
 export function placeholderHtml(cspSource: string): string {
   const nonce = makeNonce();
@@ -95,7 +140,7 @@ export function placeholderHtml(cspSource: string): string {
   </head>
   <body>
     <h3>Conductor</h3>
-    <p class="status">Not connected. Run "Conductor: Connect to Gateway" to connect; live panels arrive in 4B-3.</p>
+    <p class="status">Not connected. Run "Conductor: Connect to Gateway" to connect.</p>
   </body>
 </html>`;
 }
@@ -109,10 +154,13 @@ export function placeholderHtml(cspSource: string): string {
  */
 export type BridgeFactory = (webview: WebviewLike) => { attach(): void; dispose(): void };
 
-/** Configuration the FleetViewProvider needs to attach the bridge on resolve. */
+/** Configuration the FleetViewProvider needs to load the cockpit bundle + attach the
+ * bridge on resolve. `extensionUri` is the installed extension root (context.extensionUri)
+ * used to build the webview resource URIs of the bundled cockpit under dist/webview. */
 export interface FleetViewConfig {
   readonly secrets: SecretStore;
   readonly gatewayUrl: string;
+  readonly extensionUri: vscode.Uri;
   /** Override the bridge factory in tests; defaults to the real HostBridge + wsConnector. */
   readonly bridgeFactory?: BridgeFactory;
 }
@@ -143,15 +191,18 @@ export function makeBridgeFactory(secrets: SecretStore, gatewayUrl: string): Bri
 }
 
 /**
- * The Fleet view provider. On resolve it (a) enables scripts (the React panels in 4B-3
- * need them), (b) renders the strict-CSP placeholder (no live script yet — 4B-2 wires
- * only the transport), and (c) constructs + attaches a HostBridge over the webview so the
- * typed postMessage transport (the 4A-1 fork impl) is live. The bridge's dispose is
- * registered on the view's onDidDispose so the WS handles + listener are torn down.
+ * The Fleet view provider. With a config (the production path) resolve (a) enables scripts
+ * and scopes `localResourceRoots` to dist/webview so ONLY the bundle's assets load, (b)
+ * serves `webviewHtml` — a strict-CSP page that nonce-loads the shared cockpit bundle
+ * (4B-3) + its CSS via `asWebviewUri`, and (c) constructs + attaches a HostBridge over the
+ * webview so the typed postMessage transport (the 4A-1 fork impl) is live for the bundle's
+ * REST/WS. The bridge's dispose is registered on the view's onDidDispose so the WS handles
+ * + listener are torn down.
  *
  * `config` is optional ONLY so a bare `new FleetViewProvider()` still constructs (used by
- * legacy unit tests of the static HTML); when absent, resolve renders the HTML but
- * attaches no bridge. The production path always supplies a config with the real factory.
+ * legacy unit tests of the static HTML); when absent, resolve renders the no-config
+ * placeholder (scripts on, no bundle, no bridge — no extensionUri to build asset URIs).
+ * The production path always supplies a config with the real factory + extensionUri.
  */
 export class FleetViewProvider implements vscode.WebviewViewProvider {
   readonly #config: FleetViewConfig | undefined;
@@ -161,17 +212,33 @@ export class FleetViewProvider implements vscode.WebviewViewProvider {
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
-    webviewView.webview.options = { enableScripts: true };
-    webviewView.webview.html = placeholderHtml(webviewView.webview.cspSource);
-
-    if (this.#config === undefined) {
-      return; // No config (bare construction in a legacy test): HTML only, no bridge.
+    const config = this.#config;
+    if (config === undefined) {
+      // No config (bare construction in a legacy test): scripts on, placeholder HTML, no
+      // bundle (no extensionUri for asset URIs), no bridge.
+      webviewView.webview.options = { enableScripts: true };
+      webviewView.webview.html = placeholderHtml(webviewView.webview.cspSource);
+      return;
     }
 
+    const webview = webviewView.webview;
+    const distRoot = vscode.Uri.joinPath(config.extensionUri, "dist", "webview");
+    // Scope script/style loading to the bundle dir: the webview can't read arbitrary
+    // extension files, only dist/webview (paired with the strict CSP).
+    webview.options = { enableScripts: true, localResourceRoots: [distRoot] };
+
+    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "main.js")).toString();
+    const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "main.css")).toString();
+    webview.html = webviewHtml({
+      cspSource: webview.cspSource,
+      nonce: makeNonce(),
+      scriptUri,
+      styleUri,
+    });
+
     const factory =
-      this.#config.bridgeFactory ??
-      makeBridgeFactory(this.#config.secrets, this.#config.gatewayUrl);
-    const bridge = factory(webviewView.webview);
+      config.bridgeFactory ?? makeBridgeFactory(config.secrets, config.gatewayUrl);
+    const bridge = factory(webview);
     bridge.attach();
     // Tear the bridge down when the view goes away (closes WS handles + the listener).
     webviewView.onDidDispose(() => bridge.dispose());
@@ -305,10 +372,12 @@ export function activate(context: vscode.ExtensionContext): void {
   statusBar.show();
 
   // The Fleet view's bridge reads the token from SecretStorage (per request) and talks
-  // to the gateway at the configured URL; the token never reaches the webview.
+  // to the gateway at the configured URL; the token never reaches the webview. The
+  // extensionUri lets the provider build the cockpit bundle's webview resource URIs.
   const disposables = registerConductor(vscode, manager, gatewayUrl, {
     secrets: context.secrets,
     gatewayUrl,
+    extensionUri: context.extensionUri,
   });
   context.subscriptions.push(statusBar, ...disposables);
 

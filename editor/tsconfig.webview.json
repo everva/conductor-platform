@@ -1,0 +1,41 @@
+{
+  // Webview typecheck (Faz-4 DALGA 4B, 4B-3). SEPARATE from the host tsconfig.json (which
+  // is Node/CJS): the webview is a browser React bundle that imports the shared cockpit
+  // from web/src via the `@cockpit` alias. This config resolves that alias and follows its
+  // transitive web/src imports, proving the bridge transports are TYPE-COMPATIBLE with the
+  // 4A-1 HttpTransport/EventTransport contracts FleetDashboard expects (ADR-0029). Strict
+  // flags mirror the host tsconfig 1:1 so the cross-dir reuse is held to the same bar.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    // Bundler resolution so web/src's explicit `.ts`/`.tsx` extension imports resolve the
+    // same way esbuild (the actual bundler) resolves them.
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "skipLibCheck": true,
+
+    "esModuleInterop": true,
+    "noEmit": true,
+    // web/src imports its modules with explicit .ts/.tsx extensions (Vite/bundler style).
+    // Under moduleResolution:Bundler that's only permitted with this flag; safe here since
+    // we never emit (typecheck only) — esbuild does the real bundling.
+    "allowImportingTsExtensions": true,
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+
+    "types": ["react", "react-dom"],
+
+    "baseUrl": ".",
+    "paths": {
+      // The shared cockpit barrel, consumed AS SOURCE from web/src (web/ untouched).
+      "@cockpit": ["../web/src/cockpit.ts"]
+    }
+  },
+  "include": ["webview/**/*.ts", "webview/**/*.tsx", "webview/types.d.ts"]
+}

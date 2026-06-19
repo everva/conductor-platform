@@ -55,7 +55,7 @@
     ]
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.webview.json --noEmit",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "build": "node esbuild.config.mjs",
@@ -65,11 +65,15 @@
     "test:vscode": "node ./out-test/runVscodeSmoke.js"
   },
   "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "ws": "^8.21.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
     "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
     "@types/vscode": "^1.90.0",
     "@types/ws": "^8.18.1",
     "@vscode/test-electron": "^2.4.1",

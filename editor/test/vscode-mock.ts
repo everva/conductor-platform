@@ -21,12 +21,25 @@ export interface SecretStorageLike {
 export interface ExtensionContext {
   subscriptions: Disposable[];
   secrets: SecretStorageLike;
+  // The installed extension root; the FleetViewProvider (4B-3) joins it to build the
+  // cockpit bundle's webview resource URIs. A fake Uri suffices for the headless tests.
+  extensionUri: UriLike;
+}
+
+// Minimal structural stand-in for vscode.Uri: just enough for joinPath + asWebviewUri +
+// toString in the FleetViewProvider. The real Uri carries more; tests only need the path.
+export interface UriLike {
+  readonly path: string;
+  toString(): string;
 }
 
 export interface Webview {
-  options: { enableScripts?: boolean };
+  options: { enableScripts?: boolean; localResourceRoots?: readonly UriLike[] };
   html: string;
   readonly cspSource: string;
+  // 4B-3: maps an on-disk extension Uri to a webview-loadable URI. The fake returns a
+  // stable `vscode-resource:`-prefixed Uri so the HTML can be asserted deterministically.
+  asWebviewUri(uri: UriLike): UriLike;
   // 4B-2 bridge surface: the host posts messages to the webview and listens for messages
   // from it. The fake records posts and lets a test fire a received message via the
   // returned helper (see __makeWebviewView).
@@ -110,6 +123,25 @@ export const workspace = {
   })),
 };
 
+/** Builds a fake UriLike with a given path (toString() returns the path verbatim). */
+function makeUri(path: string): UriLike {
+  return { path, toString: () => path };
+}
+
+/** Minimal `vscode.Uri` surface the FleetViewProvider uses: `joinPath` appends path
+ * segments. Enough for the headless HTML/URI assertions; the real Uri is richer. */
+export const Uri = {
+  joinPath(base: UriLike, ...segments: string[]): UriLike {
+    const joined = [base.path, ...segments].join("/");
+    return makeUri(joined);
+  },
+};
+
+/** A fresh fake extension-root Uri for tests that build a FleetViewConfig. */
+export function __makeExtensionUri(path = "/ext"): UriLike {
+  return makeUri(path);
+}
+
 /** Builds a fresh fake StatusBarItem with spy-able lifecycle methods. */
 function makeStatusBarItem(): StatusBarItem {
   return {
@@ -174,6 +206,9 @@ export function __makeWebviewView(cspSource = "vscode-resource:"): WebviewView &
     options: {},
     html: "",
     cspSource,
+    // Map an on-disk Uri to a deterministic webview URI so the HTML is assertable:
+    // `${cspSource}${path}` (e.g. "vscode-resource:/ext/dist/webview/main.js").
+    asWebviewUri: vi.fn((uri: UriLike) => makeUri(`${cspSource}${uri.path}`)),
     postMessage: vi.fn<(message: unknown) => Thenable<boolean>>().mockResolvedValue(true),
     onDidReceiveMessage: vi.fn((listener: (message: unknown) => void) => {
       messageListeners.push(listener);
@@ -199,4 +234,4 @@ export function __makeWebviewView(cspSource = "vscode-resource:"): WebviewView &
   };
 }
 
-export default { commands, window, workspace };
+export default { commands, window, workspace, Uri };
