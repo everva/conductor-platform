@@ -25,12 +25,25 @@ import { deriveWsUrl, makeGatewayProbe, normalizeBaseUrl, GATEWAY_TOKEN_KEY } fr
 import { ConnectionManager, type ConnectionState } from "./connection";
 import { HostBridge, type WebviewLike } from "./bridge/hostBridge";
 import { wsConnector } from "./bridge/wsConnector";
+import { ControlClient, ControlListError, type ControlAction } from "./controlClient";
 
 /** Command id for the gateway-connect action. */
 export const CONNECT_COMMAND = "conductor.connect";
 
 /** Command id for the gateway-disconnect action. */
 export const DISCONNECT_COMMAND = "conductor.disconnect";
+
+/** Command id for the pause-project control action (4C-2). */
+export const PAUSE_COMMAND = "conductor.pause";
+
+/** Command id for the resume-project control action (4C-2). */
+export const RESUME_COMMAND = "conductor.resume";
+
+/** Command id for the abort-running-task control action (4C-2). */
+export const ABORT_COMMAND = "conductor.abort";
+
+/** Command id for the approve-awaiting-task control action (4C-2). */
+export const APPROVE_COMMAND = "conductor.approve";
 
 /** View id of the placeholder Fleet webview view (contributed in package.json). */
 export const FLEET_VIEW_ID = "conductor.fleet";
@@ -55,6 +68,18 @@ export interface VscodeApi {
     showInformationMessage(message: string): Thenable<string | undefined>;
     showErrorMessage(message: string): Thenable<string | undefined>;
     showInputBox(options?: vscode.InputBoxOptions): Thenable<string | undefined>;
+    // 4C-2: the control commands let the user pick a project and confirm destructive
+    // actions. Narrow signatures (the items the handlers actually pass) so the flows stay
+    // assertable against the headless mock.
+    showQuickPick(
+      items: readonly string[],
+      options?: vscode.QuickPickOptions,
+    ): Thenable<string | undefined>;
+    showWarningMessage(
+      message: string,
+      options: vscode.MessageOptions,
+      item: string,
+    ): Thenable<string | undefined>;
     registerWebviewViewProvider(
       viewId: string,
       provider: vscode.WebviewViewProvider,
@@ -309,6 +334,136 @@ export async function runDisconnect(api: VscodeApi, manager: ConnectionManager):
   await api.window.showInformationMessage("Disconnected.");
 }
 
+/** The narrow control surface `runControl` drives — the slice of ControlClient it uses.
+ * Declared as an interface so the unit tests pass a fake (no real fetch/token) while the
+ * production path injects a real ControlClient. None of these carry the token out. */
+export interface Control {
+  listProjects(): Promise<{ id: string }[]>;
+  pause(projectId: string): Promise<ControlResult>;
+  resume(projectId: string): Promise<ControlResult>;
+  abort(projectId: string): Promise<ControlResult>;
+  approve(projectId: string, taskId?: string): Promise<ControlResult>;
+}
+
+/** Re-exported from controlClient so callers/tests reference one shape. */
+export type ControlResult = Awaited<ReturnType<ControlClient["pause"]>>;
+
+/** Human label for a control action, used in confirm prompts + result messages (e.g.
+ * "Abort"). Pure; carries no token. */
+function actionLabel(action: ControlAction): string {
+  switch (action) {
+    case "pause":
+      return "Pause";
+    case "resume":
+      return "Resume";
+    case "abort":
+      return "Abort";
+    case "approve":
+      return "Approve";
+  }
+}
+
+/** Whether an action needs an explicit modal confirm before firing. abort (cancels a
+ * running task) and approve (a decisive human gate) are confirm-gated; pause/resume are
+ * cheap + idempotent, so they fire directly. */
+function needsConfirm(action: ControlAction): boolean {
+  return action === "abort" || action === "approve";
+}
+
+/**
+ * The inline-control flow (4C-2) for `conductor.pause`/`resume`/`abort`/`approve`. Lists
+ * projects (authed, host-side), lets the user pick one, confirms destructive/decisive
+ * actions (abort/approve) via a modal, fires the authed control POST, and surfaces a
+ * token-FREE, action-specific result message. The token lives only in the ControlClient's
+ * Authorization header — it never reaches a message here. Cancelling the pick (or the
+ * confirm) is a quiet no-op. Reuses the existing control API; independent of the 4C-0
+ * diff source (ADR-0030).
+ */
+export async function runControl(
+  api: VscodeApi,
+  control: Control,
+  action: ControlAction,
+): Promise<void> {
+  const label = actionLabel(action);
+
+  let projects: { id: string }[];
+  try {
+    projects = await control.listProjects();
+  } catch (err) {
+    // listProjects failed before any action — branch on the closed reason (no token in
+    // the message). "not-connected"/"unauthorized" guide the user to Connect; anything
+    // else is an unreachable gateway.
+    if (err instanceof ControlListError && err.reason === "not-connected") {
+      await api.window.showErrorMessage("Connect to the gateway first.");
+    } else if (err instanceof ControlListError && err.reason === "unauthorized") {
+      await api.window.showErrorMessage("The gateway rejected the stored token. Reconnect.");
+    } else {
+      await api.window.showErrorMessage("Could not reach the gateway.");
+    }
+    return;
+  }
+
+  if (projects.length === 0) {
+    await api.window.showInformationMessage("No projects.");
+    return;
+  }
+
+  const pick = await api.window.showQuickPick(
+    projects.map((p) => p.id),
+    { placeHolder: "Select a project" },
+  );
+  if (pick === undefined) {
+    return; // cancelled — quiet no-op.
+  }
+
+  if (needsConfirm(action)) {
+    const choice = await api.window.showWarningMessage(
+      `${label} ${pick}?`,
+      { modal: true },
+      "Yes",
+    );
+    if (choice !== "Yes") {
+      return; // declined / dismissed — quiet no-op.
+    }
+  }
+
+  const result = await control[action](pick);
+  if (result.ok) {
+    await api.window.showInformationMessage(`${label} requested for ${pick}.`);
+    return;
+  }
+  switch (result.reason) {
+    case "conflict":
+      await api.window.showWarningMessage(conflictMessage(action), {}, "OK");
+      return;
+    case "unauthorized":
+      await api.window.showErrorMessage("The gateway rejected the stored token. Reconnect.");
+      return;
+    case "not-connected":
+      await api.window.showErrorMessage("Connect to the gateway first.");
+      return;
+    case "unreachable":
+      await api.window.showErrorMessage("Could not reach the gateway.");
+      return;
+  }
+}
+
+/** Action-specific guidance for a 409 conflict from the gateway. abort: nothing is
+ * running; approve: no SINGLE task is awaiting (zero or multiple). pause/resume are
+ * idempotent and never 409, but the union is total so they get a generic fallback.
+ * Carries no token. */
+function conflictMessage(action: ControlAction): string {
+  switch (action) {
+    case "abort":
+      return "No task is running to abort.";
+    case "approve":
+      return "No single task is awaiting approval (none or multiple).";
+    case "pause":
+    case "resume":
+      return "The gateway could not apply that action.";
+  }
+}
+
 /**
  * Wires the extension's contributions onto the given (real or mocked) vscode API and
  * returns the created disposables. Kept separate from `activate` so unit tests can call
@@ -319,6 +474,7 @@ export function registerConductor(
   api: VscodeApi,
   manager: ConnectionManager,
   gatewayUrl: string,
+  control: Control,
   fleetConfig?: FleetViewConfig,
 ): vscode.Disposable[] {
   const connect = api.commands.registerCommand(CONNECT_COMMAND, () => {
@@ -327,12 +483,35 @@ export function registerConductor(
   const disconnect = api.commands.registerCommand(DISCONNECT_COMMAND, () => {
     void runDisconnect(api, manager);
   });
+  // 4C-2 inline control commands: each prompts for a project + (for abort/approve)
+  // confirms, then fires the authed control POST host-side. The token stays in the
+  // ControlClient's Authorization header — never in a message.
+  const controlDisposables = (["pause", "resume", "abort", "approve"] as const).map((action) =>
+    api.commands.registerCommand(controlCommandId(action), () => {
+      void runControl(api, control, action);
+    }),
+  );
   // The Fleet view attaches the host↔webview bridge on resolve. When a config is
   // provided (the production path) the provider builds a real HostBridge; tests may omit
   // it (static-HTML provider) or pass one with a fake bridge factory.
   const provider = fleetConfig ? new FleetViewProvider(fleetConfig) : new FleetViewProvider();
   const fleetView = api.window.registerWebviewViewProvider(FLEET_VIEW_ID, provider);
-  return [connect, disconnect, fleetView];
+  return [connect, disconnect, ...controlDisposables, fleetView];
+}
+
+/** Maps a control action to its contributed command id (kept in lockstep with the
+ * package.json `contributes.commands` entries). */
+function controlCommandId(action: ControlAction): string {
+  switch (action) {
+    case "pause":
+      return PAUSE_COMMAND;
+    case "resume":
+      return RESUME_COMMAND;
+    case "abort":
+      return ABORT_COMMAND;
+    case "approve":
+      return APPROVE_COMMAND;
+  }
 }
 
 /**
@@ -371,10 +550,18 @@ export function activate(context: vscode.ExtensionContext): void {
   statusBar.command = CONNECT_COMMAND;
   statusBar.show();
 
+  // 4C-2: the inline control commands' host-side authed client. Its TokenProvider reads
+  // the bearer token from SecretStorage per request (never caches it); the normalized
+  // gateway base URL matches the connect flow. The token rides only in the client's
+  // Authorization header — it never reaches a message or a webview.
+  const control = new ControlClient(normalizeBaseUrl(gatewayUrl), {
+    getToken: () => Promise.resolve(context.secrets.get(GATEWAY_TOKEN_KEY)),
+  });
+
   // The Fleet view's bridge reads the token from SecretStorage (per request) and talks
   // to the gateway at the configured URL; the token never reaches the webview. The
   // extensionUri lets the provider build the cockpit bundle's webview resource URIs.
-  const disposables = registerConductor(vscode, manager, gatewayUrl, {
+  const disposables = registerConductor(vscode, manager, gatewayUrl, control, {
     secrets: context.secrets,
     gatewayUrl,
     extensionUri: context.extensionUri,

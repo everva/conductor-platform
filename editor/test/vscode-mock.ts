@@ -91,6 +91,16 @@ export const window = {
   showInputBox: vi
     .fn<(options?: unknown) => Thenable<string | undefined>>()
     .mockResolvedValue(undefined),
+  // 4C-2 control commands: showQuickPick resolves a picked string (default undefined =
+  // user cancelled); tests override the resolved value to simulate a selected project.
+  showQuickPick: vi
+    .fn<(items: readonly string[], options?: unknown) => Thenable<string | undefined>>()
+    .mockResolvedValue(undefined),
+  // showWarningMessage resolves the chosen item (default undefined = dismissed); tests
+  // override it to "Yes" to confirm a destructive action. No token ever flows here.
+  showWarningMessage: vi
+    .fn<(message: string, options?: unknown, ...items: string[]) => Thenable<string | undefined>>()
+    .mockResolvedValue(undefined),
   registerWebviewViewProvider: vi
     .fn<(viewId: string, provider: WebviewViewProvider) => Disposable>()
     .mockImplementation(makeDisposable),
@@ -184,6 +194,8 @@ export function __reset(): void {
   window.showInformationMessage.mockClear();
   window.showErrorMessage.mockClear();
   window.showInputBox.mockClear();
+  window.showQuickPick.mockClear();
+  window.showWarningMessage.mockClear();
   window.registerWebviewViewProvider.mockClear();
   window.createStatusBarItem.mockClear();
   workspace.getConfiguration.mockClear();

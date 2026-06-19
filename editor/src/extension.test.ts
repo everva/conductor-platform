@@ -18,9 +18,15 @@ import {
   type ExtensionContext,
 } from "../test/vscode-mock";
 import {
+  ABORT_COMMAND,
+  APPROVE_COMMAND,
   CONNECT_COMMAND,
   DISCONNECT_COMMAND,
   FLEET_VIEW_ID,
+  PAUSE_COMMAND,
+  RESUME_COMMAND,
+  type Control,
+  type ControlResult,
   type FleetViewConfig,
   FleetViewProvider,
   activate,
@@ -28,11 +34,13 @@ import {
   placeholderHtml,
   registerConductor,
   runConnect,
+  runControl,
   runDisconnect,
   statusBarText,
   webviewHtml,
 } from "./extension";
 import { ConnectionManager, type SecretStore } from "./connection";
+import { ControlListError } from "./controlClient";
 import { GATEWAY_TOKEN_KEY, type GatewayProbe, type TokenCheck } from "./gateway";
 
 beforeEach(() => {
@@ -65,14 +73,50 @@ function makeManager(opts: {
   return { manager: new ConnectionManager({ secrets, gateway }), map };
 }
 
-describe("registerConductor", () => {
-  it("registers the connect + disconnect commands and the fleet view provider", () => {
-    const { manager } = makeManager({});
-    const disposables = registerConductor({ commands, window }, manager, "http://gw.test");
+// A fake Control (the slice of ControlClient runControl uses). `listProjects` resolves a
+// fixed list (or rejects when `listError` is set); each action records its calls and
+// resolves a fixed ControlResult. No token ever flows through it.
+function makeControl(opts: {
+  projects?: { id: string }[];
+  listError?: ControlListError;
+  result?: ControlResult;
+} = {}): Control & {
+  pause: ReturnType<typeof vi.fn>;
+  resume: ReturnType<typeof vi.fn>;
+  abort: ReturnType<typeof vi.fn>;
+  approve: ReturnType<typeof vi.fn>;
+} {
+  const result: ControlResult = opts.result ?? { ok: true, body: {} };
+  const listProjects = vi.fn(() =>
+    opts.listError ? Promise.reject(opts.listError) : Promise.resolve(opts.projects ?? [{ id: "p1" }]),
+  );
+  return {
+    listProjects,
+    pause: vi.fn(() => Promise.resolve(result)),
+    resume: vi.fn(() => Promise.resolve(result)),
+    abort: vi.fn(() => Promise.resolve(result)),
+    approve: vi.fn(() => Promise.resolve(result)),
+  };
+}
 
-    expect(disposables).toHaveLength(3);
+describe("registerConductor", () => {
+  it("registers connect + disconnect + the 4 control commands and the fleet view provider", () => {
+    const { manager } = makeManager({});
+    const disposables = registerConductor(
+      { commands, window },
+      manager,
+      "http://gw.test",
+      makeControl(),
+    );
+
+    // connect + disconnect + pause + resume + abort + approve + fleet view = 7.
+    expect(disposables).toHaveLength(7);
     expect(commands.registerCommand).toHaveBeenCalledWith(CONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(DISCONNECT_COMMAND, expect.any(Function));
+    expect(commands.registerCommand).toHaveBeenCalledWith(PAUSE_COMMAND, expect.any(Function));
+    expect(commands.registerCommand).toHaveBeenCalledWith(RESUME_COMMAND, expect.any(Function));
+    expect(commands.registerCommand).toHaveBeenCalledWith(ABORT_COMMAND, expect.any(Function));
+    expect(commands.registerCommand).toHaveBeenCalledWith(APPROVE_COMMAND, expect.any(Function));
     expect(window.registerWebviewViewProvider).toHaveBeenCalledWith(
       FLEET_VIEW_ID,
       expect.any(FleetViewProvider),
@@ -153,6 +197,186 @@ describe("runDisconnect", () => {
   });
 });
 
+describe("runControl", () => {
+  // Asserts NO recorded vscode message (info/warn/error) contains the given needle.
+  function expectNoMessageContains(needle: string): void {
+    const all = [
+      ...window.showInformationMessage.mock.calls,
+      ...window.showWarningMessage.mock.calls,
+      ...window.showErrorMessage.mock.calls,
+    ];
+    for (const call of all) {
+      expect(String(call[0] ?? "")).not.toContain(needle);
+    }
+  }
+
+  it("pause: picks a project then calls control.pause and reports — NO confirm prompt", async () => {
+    window.showQuickPick.mockResolvedValueOnce("p1");
+    const control = makeControl({ projects: [{ id: "p1" }, { id: "p2" }] });
+
+    await runControl({ commands, window }, control, "pause");
+
+    expect(window.showQuickPick).toHaveBeenCalledWith(["p1", "p2"], expect.any(Object));
+    expect(control.pause).toHaveBeenCalledWith("p1");
+    expect(window.showWarningMessage).not.toHaveBeenCalled(); // pause is not confirm-gated.
+    expect(window.showInformationMessage).toHaveBeenCalledWith("Pause requested for p1.");
+  });
+
+  it("resume: happy path calls control.resume with no confirm", async () => {
+    window.showQuickPick.mockResolvedValueOnce("p1");
+    const control = makeControl();
+
+    await runControl({ commands, window }, control, "resume");
+
+    expect(control.resume).toHaveBeenCalledWith("p1");
+    expect(window.showWarningMessage).not.toHaveBeenCalled();
+    expect(window.showInformationMessage).toHaveBeenCalledWith("Resume requested for p1.");
+  });
+
+  it("abort: is confirm-gated — 'Yes' fires the action", async () => {
+    window.showQuickPick.mockResolvedValueOnce("p1");
+    window.showWarningMessage.mockResolvedValueOnce("Yes");
+    const control = makeControl();
+
+    await runControl({ commands, window }, control, "abort");
+
+    expect(window.showWarningMessage).toHaveBeenCalledWith(
+      "Abort p1?",
+      expect.objectContaining({ modal: true }),
+      "Yes",
+    );
+    expect(control.abort).toHaveBeenCalledWith("p1");
+    expect(window.showInformationMessage).toHaveBeenCalledWith("Abort requested for p1.");
+  });
+
+  it("approve: is confirm-gated — cancelling the confirm does NOT fire the action", async () => {
+    window.showQuickPick.mockResolvedValueOnce("p1");
+    window.showWarningMessage.mockResolvedValueOnce(undefined); // dismissed.
+    const control = makeControl();
+
+    await runControl({ commands, window }, control, "approve");
+
+    expect(window.showWarningMessage).toHaveBeenCalledTimes(1);
+    expect(control.approve).not.toHaveBeenCalled();
+    expect(window.showInformationMessage).not.toHaveBeenCalled();
+  });
+
+  it("abort: a 'conflict' result surfaces the abort-specific warning", async () => {
+    window.showQuickPick.mockResolvedValueOnce("p1");
+    window.showWarningMessage.mockResolvedValueOnce("Yes"); // confirm
+    const control = makeControl({ result: { ok: false, reason: "conflict", status: 409 } });
+
+    await runControl({ commands, window }, control, "abort");
+
+    expect(control.abort).toHaveBeenCalledWith("p1");
+    // The confirm warning + the conflict warning were both shown; assert the conflict copy.
+    const warnings = window.showWarningMessage.mock.calls.map((c) => String(c[0]));
+    expect(warnings).toContain("No task is running to abort.");
+  });
+
+  it("approve: a 'conflict' result surfaces the approve-specific warning", async () => {
+    window.showQuickPick.mockResolvedValueOnce("p1");
+    window.showWarningMessage.mockResolvedValueOnce("Yes");
+    const control = makeControl({ result: { ok: false, reason: "conflict", status: 409 } });
+
+    await runControl({ commands, window }, control, "approve");
+
+    const warnings = window.showWarningMessage.mock.calls.map((c) => String(c[0]));
+    expect(warnings).toContain("No single task is awaiting approval (none or multiple).");
+  });
+
+  it("pause: cancelling the quick-pick is a quiet no-op (no action, no message)", async () => {
+    window.showQuickPick.mockResolvedValueOnce(undefined);
+    const control = makeControl();
+
+    await runControl({ commands, window }, control, "pause");
+
+    expect(control.pause).not.toHaveBeenCalled();
+    expect(window.showInformationMessage).not.toHaveBeenCalled();
+    expect(window.showWarningMessage).not.toHaveBeenCalled();
+    expect(window.showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it("shows an info message and does nothing else when there are no projects", async () => {
+    const control = makeControl({ projects: [] });
+
+    await runControl({ commands, window }, control, "pause");
+
+    expect(window.showInformationMessage).toHaveBeenCalledWith("No projects.");
+    expect(window.showQuickPick).not.toHaveBeenCalled();
+    expect(control.pause).not.toHaveBeenCalled();
+  });
+
+  it("guides to Connect (no token in the message) when listProjects is not-connected", async () => {
+    const control = makeControl({ listError: new ControlListError("not-connected", 0) });
+
+    await runControl({ commands, window }, control, "pause");
+
+    expect(window.showErrorMessage).toHaveBeenCalledWith("Connect to the gateway first.");
+    expect(window.showQuickPick).not.toHaveBeenCalled();
+  });
+
+  it("guides to reconnect when listProjects is unauthorized", async () => {
+    const control = makeControl({ listError: new ControlListError("unauthorized", 401) });
+
+    await runControl({ commands, window }, control, "resume");
+
+    expect(window.showErrorMessage).toHaveBeenCalledWith(
+      "The gateway rejected the stored token. Reconnect.",
+    );
+  });
+
+  it("reports an unreachable gateway when listProjects is unreachable", async () => {
+    const control = makeControl({ listError: new ControlListError("unreachable", 0) });
+
+    await runControl({ commands, window }, control, "pause");
+
+    expect(window.showErrorMessage).toHaveBeenCalledWith("Could not reach the gateway.");
+  });
+
+  it("maps an 'unauthorized' action result to a reconnect error", async () => {
+    window.showQuickPick.mockResolvedValueOnce("p1");
+    const control = makeControl({ result: { ok: false, reason: "unauthorized", status: 401 } });
+
+    await runControl({ commands, window }, control, "resume");
+
+    expect(window.showErrorMessage).toHaveBeenCalledWith(
+      "The gateway rejected the stored token. Reconnect.",
+    );
+  });
+
+  it("maps an 'unreachable' action result to a gateway error", async () => {
+    window.showQuickPick.mockResolvedValueOnce("p1");
+    const control = makeControl({ result: { ok: false, reason: "unreachable", status: 0 } });
+
+    await runControl({ commands, window }, control, "pause");
+
+    expect(window.showErrorMessage).toHaveBeenCalledWith("Could not reach the gateway.");
+  });
+
+  it("never puts a token in any control message (leak guard across paths)", async () => {
+    const TOKEN = "tok-MUST-NOT-LEAK";
+    // Happy path.
+    window.showQuickPick.mockResolvedValueOnce("p1");
+    await runControl({ commands, window }, makeControl(), "pause");
+    // Conflict path (confirm + conflict warning).
+    window.showQuickPick.mockResolvedValueOnce("p1");
+    window.showWarningMessage.mockResolvedValueOnce("Yes");
+    await runControl(
+      { commands, window },
+      makeControl({ result: { ok: false, reason: "conflict", status: 409 } }),
+      "abort",
+    );
+    // Auth-failure paths.
+    await runControl(
+      { commands, window },
+      makeControl({ listError: new ControlListError("unauthorized", 401) }),
+      "pause",
+    );
+    expectNoMessageContains(TOKEN);
+  });
+});
+
 describe("statusBarText", () => {
   it("renders a distinct label per connection state", () => {
     expect(statusBarText("connected")).toContain("connected");
@@ -191,8 +415,11 @@ describe("activate", () => {
       FLEET_VIEW_ID,
       expect.any(FleetViewProvider),
     );
-    // status bar + connect + disconnect + fleet view = 4 disposables.
-    expect(subscriptions).toHaveLength(4);
+    // 4C-2 also registers the pause/resume/abort/approve commands.
+    expect(commands.registerCommand).toHaveBeenCalledWith(PAUSE_COMMAND, expect.any(Function));
+    expect(commands.registerCommand).toHaveBeenCalledWith(APPROVE_COMMAND, expect.any(Function));
+    // status bar + connect + disconnect + pause + resume + abort + approve + fleet view = 8.
+    expect(subscriptions).toHaveLength(8);
   });
 });
 

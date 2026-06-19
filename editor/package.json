@@ -51,6 +51,26 @@
         "command": "conductor.disconnect",
         "title": "Conductor: Disconnect",
         "category": "Conductor"
+      },
+      {
+        "command": "conductor.pause",
+        "title": "Conductor: Pause Project",
+        "category": "Conductor"
+      },
+      {
+        "command": "conductor.resume",
+        "title": "Conductor: Resume Project",
+        "category": "Conductor"
+      },
+      {
+        "command": "conductor.abort",
+        "title": "Conductor: Abort Running Task",
+        "category": "Conductor"
+      },
+      {
+        "command": "conductor.approve",
+        "title": "Conductor: Approve Awaiting Task",
+        "category": "Conductor"
       }
     ]
   },
