@@ -245,7 +245,25 @@ dalga başlarında.
   reddediyordu (`bad option: --no-sandbox`, exit 9) → `env -u ELECTRON_RUN_AS_NODE` (README'ye not) + eslint `.vscode-test`
   (258MB indirilen VS Code) ignore (smoke sonrası yerel gate OOM'unu önler). (2) **Gateway backend GERÇEK koşuldu**:
   `/readyz` 200, authed `/status` 200, token'sız `/status` 401, onboard `POST /projects`→201 + `GET /projects` editör Fleet
-  panelinin render edeceği veriyi döndürür. KALAN (insan-gözü): webview cockpit'in canlı boyaması + canlı diff'in pencerede
-  açılması = `editor/README` "Live cockpit check" runbook'u (test edilmiş komutlar + F5 Extension Dev Host adımları).
+  panelinin render edeceği veriyi döndürür.
+- ✅ **Faz-4 CANLI COCKPIT DOĞRULAMA + 4 GERÇEK BUG** (orchestrator **Playwright ile KENDİ koştu** — kullanıcı kuralı:
+  testi BEN yaparım, kullanıcıya ettirmem): forked-editör webview'i gerçek tarayıcı + VS Code'da sürülünce 4 gerçek bug
+  çıktı, hepsi düzeltildi + Playwright/gerçek-koşumla doğrulandı. **(1) REST fırtınası** (`2b884ef`): `useFleet` default
+  `makeClient` inline-arrow → her render yeni client → poll effect sonsuz döngü → `ERR_INSUFFICIENT_RESOURCES`/flicker;
+  fix = module-scope default + regresyon testi. 3B-1'den latent; hızlı yerel gateway açığa çıkardı (uzak-PG maskelemişti).
+  **(2) WS 403** (`46fb068`): Vite dev-proxy `/ws` `changeOrigin:true` Host'u :8080 yapıp Origin :5173 bırakıyordu →
+  gateway same-origin WS Accept reddediyordu; fix = `/ws` `changeOrigin:false` (DEV-only; prod ingress same-origin).
+  **(3) BOŞ fork webview** (`0f44cc7` fix + `53159ec` CI-guard): webview bundle'ı İKİ React kopyası içeriyordu (ADR-0029
+  nodePaths yalnız FALLBACK; web/node_modules kuruluyken web/src'in react'i oraya, editör editor/node_modules'a → 2 kopya
+  → null hooks dispatcher → blank panel); fix = esbuild **`alias`** react/react-dom tek-kopya; guard = metafile single-React
+  testi (editor CI). Gate kaçırmıştı (build başarılı + mount mock'lu); CI no-web/ olduğu için ŞANSLICA dedupe oluyordu →
+  yalnız YEREL build bozuktu (extension onu yükler). **(4) Events-tab backfill köprülenmemiş** (`38cb944`):
+  `EventStreamView`'in REST `/events` backfill'i fork'ta direct ApiClient'a düşüyordu (CSP `connect-src none` blokluyor) →
+  "Could not reach the gateway"; fix = `makeHistory` factory'sini FleetDashboard→EventStreamView'e thread'le (fork bridge
+  ApiClient verir). **Doğrulama deseni (DURABLE):** gerçek dist bundle'ı Playwright + stubbed `acquireVsCodeApi`
+  (hostFetch Node-side → canlı gateway) ile yükle → #root mount + 3 proje + PAY-1 + Events `/events` köprü-backfill + 0
+  konsol hatası (`env -u ELECTRON_RUN_AS_NODE` gerek). **SONUÇ: fork cockpit'in 3 sekmesi de (Fleet/Events/Intake)
+  render olup gateway'e KÖPRÜDEN bağlanıyor.** KALAN (daemon/claude gerektirir; render+transport KANITLI): canlı event
+  akışı + native diff'in pencerede açılması + intake distill — bir daemon gerçek task işleyince görülür.
   **SIRADAKİ: 4D fork-repo (everva/conductor-editor) paketleme — Code-OSS fork + extension built-in + rebrand + CI/release
   (AĞIR ALTYAPI); sonra 4E uçtan-uca.**
