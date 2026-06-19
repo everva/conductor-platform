@@ -882,7 +882,11 @@ func newDaemon(cfg config, logger *slog.Logger) (*Daemon, error) {
 		HostID:      cfg.hostID,
 		Governor:    gov,
 		Emitter:     emitter,
-		Policy:      policy,
+		// Diff-on-green (ADR-0030, 4C-1): on a passed independent gate the conductor
+		// emits a BOUNDED KindDiff onto the same Emitter bus (memory or PG) so the
+		// editor can render the branch-vs-base diff in a native view.
+		Differ: conductor.NewGitDiffer(),
+		Policy: policy,
 		// Control reverse-channel pause-gate (ADR-0011 §4, P3-3): read the durable
 		// pause off the SAME store conductorctl writes it to, so `conductorctl pause`
 		// in a separate process makes this daemon's next tick a clean no-op.

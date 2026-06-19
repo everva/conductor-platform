@@ -184,6 +184,20 @@ type Emitter interface {
 	Publish(ctx context.Context, ev events.Event) error
 }
 
+// Differ is the OPTIONAL diff-source seam (ADR-0030, 4C-1): AFTER the independent
+// verify gate PASSES (and BEFORE the policy/merge branch), the tick consults it to
+// compute a BOUNDED diff of the task's verified branch vs the project base, which
+// it then emits as a KindDiff event on the Emitter so the editor can render the
+// change in a native diff view (reusing the existing event pipe; no new endpoint).
+// It is narrowed to Diff so a fake can drive the tick; conductor.GitDiffer is the
+// real implementation. The field is OPTIONAL on Deps — a nil Differ means NO diff
+// is computed or emitted (backward compatible), so existing wiring and tests are
+// unaffected. A diff error NEVER fails the tick (observability only): the caller
+// swallows + logs it, exactly like the Emitter seam.
+type Differ interface {
+	Diff(ctx context.Context, project statestore.Project, ws engine.Workspace) (events.DiffSummary, error)
+}
+
 // Policy is the OPTIONAL governance seam (ADR-0003, N-10): AFTER the independent
 // verify gate PASSES, the tick consults it to decide whether the task's risk tier
 // permits an automatic merge or requires a HUMAN approval first. It is narrowed to
@@ -294,6 +308,7 @@ type Conductor struct {
 	hostID   string
 	governor Admitter
 	emitter  Emitter
+	differ   Differ
 	policy   Policy
 	pauser   Pauser
 	aborter  Aborter
@@ -345,6 +360,13 @@ type Deps struct {
 	// no events are emitted, keeping construction backward compatible — callers
 	// opt in by injecting an events.EventBus.
 	Emitter Emitter
+	// Differ is the OPTIONAL diff-source seam (ADR-0030, 4C-1). When set (together
+	// with an Emitter), the tick computes a BOUNDED branch-vs-base diff after a green
+	// verify gate and emits it as a KindDiff event so the editor can render it. A nil
+	// Differ means no diff is computed/emitted, keeping construction backward
+	// compatible — callers opt in by injecting a conductor.GitDiffer. A diff error
+	// never fails the tick (observability only).
+	Differ Differ
 	// Policy is the OPTIONAL governance merge policy (ADR-0003, N-10). When set,
 	// the tick consults it after a green verify gate and HOLDS high-tier tasks for
 	// a human instead of auto-merging. A nil Policy means auto-merge-all (the
@@ -434,6 +456,7 @@ func New(d Deps) (*Conductor, error) {
 		hostID:       hostID,
 		governor:     d.Governor,
 		emitter:      d.Emitter,
+		differ:       d.Differ,
 		policy:       d.Policy,
 		pauser:       d.Pauser,
 		aborter:      d.Aborter,
@@ -466,6 +489,30 @@ func (c *Conductor) emit(ctx context.Context, task statestore.Task, phase events
 		Kind:    kind,
 		Payload: payload,
 	})
+}
+
+// emitDiff computes the task's BOUNDED branch-vs-base diff and emits it as a
+// KindDiff event at PhaseReview (ADR-0030, 4C-1), so the editor can render the
+// change. It is called ONCE, right after the independent verify gate passes and
+// BEFORE the policy/merge branch, so it covers both auto-merged and
+// held-for-approval tasks. It is a no-op unless BOTH a Differ and an Emitter are
+// injected (a diff with no bus to carry it is pointless).
+//
+// CRITICAL: like emit, this is observability-only — a diff error MUST NEVER fail
+// or alter the tick outcome. A failed diff computation is swallowed + logged and
+// no KindDiff is emitted; the tick proceeds to merge/hold exactly as it would
+// without a Differ.
+func (c *Conductor) emitDiff(ctx context.Context, project statestore.Project, task statestore.Task, ws engine.Workspace) {
+	if c.differ == nil || c.emitter == nil {
+		return
+	}
+	summary, err := c.differ.Diff(ctx, project, ws)
+	if err != nil {
+		slog.Warn("conductor: diff computation failed; skipping KindDiff (observability only)",
+			slog.String("project", task.ProjectID), slog.String("task", task.ID), slog.String("error", err.Error()))
+		return
+	}
+	c.emit(ctx, task, events.PhaseReview, events.KindDiff, summary.Payload())
 }
 
 // Tick runs ONE fresh-context tick for the project (ADR-0001 sıralılık):
@@ -639,6 +686,14 @@ func (c *Conductor) runTask(ctx context.Context, project statestore.Project, tas
 	if review.Result != reviewPass {
 		return c.handleChangesRequested(ctx, task, verdict, review)
 	}
+
+	// Diff-on-green (ADR-0030, 4C-1): the INDEPENDENT gate has PASSED. Compute a
+	// BOUNDED branch-vs-base diff and emit it as a KindDiff event for the editor to
+	// render. This single call sits BEFORE the policy/merge branch so it covers BOTH
+	// auto-merged AND held-for-approval tasks (both pass this green-gate point), so a
+	// human reviewing a held task gets the diff. It is observability-only: a diff
+	// error never fails or alters the tick (emitDiff swallows + logs).
+	c.emitDiff(ctx, project, task, ws)
 
 	// Risk-layered merge policy (ADR-0003, N-10): a green gate is necessary but not
 	// always sufficient. When a policy is injected and the task's tier requires a
