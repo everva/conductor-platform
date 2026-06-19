@@ -47,13 +47,22 @@ const webviewOptions = {
   format: "iife",
   target: "es2022",
   jsx: "automatic",
-  alias: { "@cockpit": cockpitEntry },
-  // The cockpit source lives under web/src, whose React imports would otherwise resolve
-  // by walking up from web/ — but the editor build is self-contained and web/node_modules
-  // is NOT installed in the editor CI job. nodePaths adds editor/node_modules as a
-  // resolution root so `react`/`react-dom`/`react/jsx-runtime` (imported by the shared
-  // web/src components) resolve to EDITOR's own React (ADR-0029: editor brings its React),
-  // independent of whether web/ is installed.
+  // @cockpit = the shared barrel as source. react / react-dom are ALIASED to the editor's
+  // OWN copy so the bundle contains EXACTLY ONE React — the crux of ADR-0029 (editor brings
+  // its React). The shared web/src components import "react"; WITHOUT this alias those
+  // imports resolve by normal node resolution to web/node_modules whenever web/ is installed
+  // (local dev), while the editor's own imports resolve to editor/node_modules → TWO React
+  // copies → a dead hooks dispatcher ("Cannot read properties of null (reading 'useState')")
+  // and a BLANK webview. esbuild `alias` matches "react" + its subpaths (react/jsx-runtime)
+  // and "react-dom" + subpaths (react-dom/client), forcing one copy regardless of whether
+  // web/ is installed. (nodePaths below is kept as a resolution root for the no-web/ CI job,
+  // but it is only a FALLBACK — it did NOT dedupe when web/node_modules existed, which is why
+  // a locally-built bundle was broken.)
+  alias: {
+    "@cockpit": cockpitEntry,
+    react: path.resolve(__dirname, "node_modules/react"),
+    "react-dom": path.resolve(__dirname, "node_modules/react-dom"),
+  },
   nodePaths: [path.resolve(__dirname, "node_modules")],
   loader: { ".css": "css" },
   define: {
