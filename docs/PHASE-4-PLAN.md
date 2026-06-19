@@ -123,4 +123,14 @@ dalga başlarında.
   `src/{fleet,events,intake,api}` ⊥ `auth`/`main`; negatif-test edildi). Fiziksel workspace paketi ERTELENDİ (4B,
   `editor/` gelince). Bağımsız doğrulama (Rule#9): yerel gate yeşil (tsc -b + eslint + **86 vitest**, +1 dosya
   `cockpit.test.tsx` = token'sız fork-mount kanıtı: injected REST+EventTransport, gerçek socket YOK), mevcut 84 test
-  DEĞİŞMEDEN geçti. **4A DALGASI TAMAM. Sıradaki: Faz-4 → 4B (VS Code extension, `editor/`).**
+  DEĞİŞMEDEN geçti. **4A DALGASI TAMAM.**
+- ✅ **4B-0 extension iskele** (`editor/`): yeni izole araç zinciri — VS Code extension iskeleti. `editor/go.mod`
+  carve-out (root `go build ./...` editor/'a inmez, doğrulandı), extension manifest (activity-bar "Conductor" view
+  container + `conductor.fleet` webview view + `conductor.connect` komut iskeleti), thin `activate`→testable
+  `registerConductor(VscodeApi)`, pure `placeholderHtml` (sıkı CSP `default-src 'none'`, nonce'lu style, script YOK),
+  `FleetViewProvider` (enableScripts:false placeholder). Araç zinciri `web/`'i aynalar (strict TS, flat eslint,
+  vitest+vscode-mock, esbuild cjs bundle). `@vscode/test-electron` smoke OPT-IN (`CP_VSCODE_SMOKE=1`, CI'da DEĞİL —
+  headless runner'da display/xvfb garanti değil; CP_REAL_CLAUDE desenini aynalar). CI: yeni `editor` job (node-only,
+  self-hosted, tsc/eslint/vitest/esbuild). Bağımsız doğrulama (Rule#9): yerel gate yeşil (tsc + eslint + **13 vitest**
+  + esbuild 3.9kb) + root go-carve-out doğrulandı. **Sıradaki: 4B-1 (bağlantı + auth: gateway URL config + token
+  SecretStorage + /readyz; token asla log/webview'e girmez).**
