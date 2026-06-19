@@ -26,7 +26,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const cockpitEntry = path.resolve(__dirname, "../web/src/cockpit.ts");
 
 /** @type {import("esbuild").BuildOptions} */
-const hostOptions = {
+export const hostOptions = {
   entryPoints: ["src/extension.ts"],
   outfile: "dist/extension.js",
   bundle: true,
@@ -39,7 +39,7 @@ const hostOptions = {
 };
 
 /** @type {import("esbuild").BuildOptions} */
-const webviewOptions = {
+export const webviewOptions = {
   entryPoints: ["webview/main.tsx"],
   outdir: "dist/webview",
   bundle: true,
@@ -76,12 +76,18 @@ const webviewOptions = {
   logLevel: "info",
 };
 
-if (watch) {
+// Run the build only when invoked directly (`node esbuild.config.mjs`), NOT when imported
+// — the webview-bundle test reuses webviewOptions, and importing must have NO side effects.
+const isMain =
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMain && watch) {
   const hostCtx = await esbuild.context(hostOptions);
   const webviewCtx = await esbuild.context(webviewOptions);
   await Promise.all([hostCtx.watch(), webviewCtx.watch()]);
   console.log("[esbuild] watching for changes (host + webview)…");
-} else {
+} else if (isMain) {
   // Build both; report each output's size so the gate tail shows both bundles.
   const [hostResult, webviewResult] = await Promise.all([
     esbuild.build({ ...hostOptions, metafile: true }),
