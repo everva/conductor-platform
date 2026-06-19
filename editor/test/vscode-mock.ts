@@ -66,6 +66,12 @@ export const commands = {
   registerCommand: vi
     .fn<(command: string, callback: (...args: unknown[]) => unknown) => Disposable>()
     .mockImplementation(makeDisposable),
+  // 4C-3: the intervention notification's "Open Conductor" action reveals the activity-bar
+  // container by running the built-in `workbench.view.extension.conductor` command. Resolves
+  // undefined by default; tests assert it was called with the reveal command id.
+  executeCommand: vi
+    .fn<(command: string) => Thenable<unknown>>()
+    .mockResolvedValue(undefined),
 };
 
 /** Minimal StatusBarItem surface the extension drives (text + show/hide/dispose). */
@@ -97,7 +103,9 @@ export const window = {
     .fn<(items: readonly string[], options?: unknown) => Thenable<string | undefined>>()
     .mockResolvedValue(undefined),
   // showWarningMessage resolves the chosen item (default undefined = dismissed); tests
-  // override it to "Yes" to confirm a destructive action. No token ever flows here.
+  // override it to "Yes" to confirm a destructive 4C-2 action, or to "Open Conductor" for
+  // the 4C-3 intervention toast (which calls it as `(message, "Open Conductor")` — no
+  // options object). The variadic signature accepts both forms. No token ever flows here.
   showWarningMessage: vi
     .fn<(message: string, options?: unknown, ...items: string[]) => Thenable<string | undefined>>()
     .mockResolvedValue(undefined),
@@ -191,6 +199,7 @@ export function __makeSecretStorage(initial: Record<string, string> = {}): {
 /** Resets all recorded calls between tests (call in beforeEach). */
 export function __reset(): void {
   commands.registerCommand.mockClear();
+  commands.executeCommand.mockClear();
   window.showInformationMessage.mockClear();
   window.showErrorMessage.mockClear();
   window.showInputBox.mockClear();

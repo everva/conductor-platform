@@ -23,14 +23,19 @@ import {
   CONNECT_COMMAND,
   DISCONNECT_COMMAND,
   FLEET_VIEW_ID,
+  OPEN_CONDUCTOR_ACTION,
   PAUSE_COMMAND,
+  REVEAL_CONTAINER_COMMAND,
   RESUME_COMMAND,
   type Control,
   type ControlResult,
   type FleetViewConfig,
+  type InterventionStatusBar,
   FleetViewProvider,
   activate,
   deactivate,
+  handleIntervention,
+  interventionStatusText,
   placeholderHtml,
   registerConductor,
   runConnect,
@@ -39,6 +44,7 @@ import {
   statusBarText,
   webviewHtml,
 } from "./extension";
+import type { Intervention } from "./notifier";
 import { ConnectionManager, type SecretStore } from "./connection";
 import { ControlListError } from "./controlClient";
 import { GATEWAY_TOKEN_KEY, type GatewayProbe, type TokenCheck } from "./gateway";
@@ -386,6 +392,86 @@ describe("statusBarText", () => {
   });
 });
 
+describe("interventionStatusText", () => {
+  it("renders nothing for a zero count (the caller hides the item)", () => {
+    expect(interventionStatusText(0)).toBe("");
+    expect(interventionStatusText(-1)).toBe("");
+  });
+
+  it("renders a singular label for exactly one", () => {
+    const text = interventionStatusText(1);
+    expect(text).toContain("1");
+    expect(text).toContain("intervention");
+    expect(text).not.toContain("interventions"); // singular, not plural.
+  });
+
+  it("renders a plural label for N > 1", () => {
+    const text = interventionStatusText(3);
+    expect(text).toContain("3");
+    expect(text).toContain("interventions");
+  });
+});
+
+describe("handleIntervention", () => {
+  // A minimal intervention status-bar item: records the text + spies show/hide. Satisfies
+  // the InterventionStatusBar slice handleIntervention updates.
+  function makeBar(): InterventionStatusBar & { show: ReturnType<typeof vi.fn>; hide: ReturnType<typeof vi.fn> } {
+    return { text: "", show: vi.fn(), hide: vi.fn() };
+  }
+
+  const intervention: Intervention = { project: "alpha", task: "t-1", reason: "tests are red" };
+
+  it("shows a warning toast naming project/task/reason + an Open Conductor action, and sets the status text", async () => {
+    const bar = makeBar();
+
+    await handleIntervention({ commands, window }, bar, 2, intervention);
+
+    expect(window.showWarningMessage).toHaveBeenCalledWith(
+      "Intervention needed — alpha/t-1: tests are red",
+      OPEN_CONDUCTOR_ACTION,
+    );
+    // The status bar reflects the count and is shown.
+    expect(bar.text).toBe(interventionStatusText(2));
+    expect(bar.text).toContain("2");
+    expect(bar.show).toHaveBeenCalledTimes(1);
+  });
+
+  it("reveals the activity-bar container when the user picks Open Conductor", async () => {
+    window.showWarningMessage.mockResolvedValueOnce(OPEN_CONDUCTOR_ACTION);
+    const bar = makeBar();
+
+    await handleIntervention({ commands, window }, bar, 1, intervention);
+
+    expect(commands.executeCommand).toHaveBeenCalledWith(REVEAL_CONTAINER_COMMAND);
+    expect(REVEAL_CONTAINER_COMMAND).toBe("workbench.view.extension.conductor");
+  });
+
+  it("does NOT reveal anything when the toast is dismissed", async () => {
+    window.showWarningMessage.mockResolvedValueOnce(undefined); // dismissed.
+    const bar = makeBar();
+
+    await handleIntervention({ commands, window }, bar, 1, intervention);
+
+    expect(commands.executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("never puts the token in the toast or the status text (token-free input → token-free output)", async () => {
+    // The notifier guarantees `intervention` carries no token; assert handleIntervention
+    // does not somehow synthesize/echo one. Use a sentinel that must not appear anywhere.
+    const TOKEN = "tok-MUST-NOT-LEAK";
+    const bar = makeBar();
+
+    await handleIntervention({ commands, window }, bar, 1, intervention);
+
+    const toast = String(window.showWarningMessage.mock.calls[0]?.[0] ?? "");
+    expect(toast).not.toContain(TOKEN);
+    expect(bar.text).not.toContain(TOKEN);
+    // And the toast says exactly what we expect (reason included, nothing extra leaked).
+    expect(toast).toContain("alpha/t-1");
+    expect(toast).toContain("tests are red");
+  });
+});
+
 describe("activate", () => {
   it("creates a status bar, registers commands + view, and pushes all disposables", async () => {
     __setConfig({ "conductor.gatewayUrl": "http://localhost:8080" });
@@ -401,7 +487,8 @@ describe("activate", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(window.createStatusBarItem).toHaveBeenCalledTimes(1);
+    // 4C-3 adds a SECOND status-bar item (the intervention count), so two are created.
+    expect(window.createStatusBarItem).toHaveBeenCalledTimes(2);
     const statusBar = window.createStatusBarItem.mock.results[0]?.value as {
       text: string;
       show: () => void;
@@ -418,8 +505,9 @@ describe("activate", () => {
     // 4C-2 also registers the pause/resume/abort/approve commands.
     expect(commands.registerCommand).toHaveBeenCalledWith(PAUSE_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(APPROVE_COMMAND, expect.any(Function));
-    // status bar + connect + disconnect + pause + resume + abort + approve + fleet view = 8.
-    expect(subscriptions).toHaveLength(8);
+    // connection bar + intervention bar (4C-3) + notifier-dispose (4C-3) + connect +
+    // disconnect + pause + resume + abort + approve + fleet view = 10.
+    expect(subscriptions).toHaveLength(10);
   });
 });
 

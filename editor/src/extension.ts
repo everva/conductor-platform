@@ -27,6 +27,7 @@ import { ConnectionManager, type ConnectionState } from "./connection";
 import { HostBridge, type WebviewLike } from "./bridge/hostBridge";
 import { wsConnector } from "./bridge/wsConnector";
 import { ControlClient, ControlListError, type ControlAction } from "./controlClient";
+import { InterventionNotifier, type Intervention } from "./notifier";
 
 /** Command id for the gateway-connect action. */
 export const CONNECT_COMMAND = "conductor.connect";
@@ -49,6 +50,18 @@ export const APPROVE_COMMAND = "conductor.approve";
 /** View id of the placeholder Fleet webview view (contributed in package.json). */
 export const FLEET_VIEW_ID = "conductor.fleet";
 
+/** Activity-bar view CONTAINER id (package.json `viewsContainers.activitybar`). The 4C-3
+ * notification's "Open Conductor" action reveals it via
+ * `workbench.view.extension.<containerId>`. */
+export const VIEW_CONTAINER_ID = "conductor";
+
+/** The built-in VS Code command that reveals an activity-bar view container, suffixed with
+ * the container id. Picking "Open Conductor" on an intervention toast runs this (4C-3). */
+export const REVEAL_CONTAINER_COMMAND = `workbench.view.extension.${VIEW_CONTAINER_ID}`;
+
+/** The action label on the intervention notification; picking it reveals the view (4C-3). */
+export const OPEN_CONDUCTOR_ACTION = "Open Conductor";
+
 /** Settings key (under the "conductor" section) holding the gateway base URL. */
 export const GATEWAY_URL_SETTING = "gatewayUrl";
 
@@ -64,6 +77,10 @@ export const DEFAULT_GATEWAY_URL = "http://localhost:8080";
 export interface VscodeApi {
   readonly commands: {
     registerCommand(command: string, callback: (...args: unknown[]) => unknown): vscode.Disposable;
+    // 4C-3: the intervention notification's "Open Conductor" action reveals the activity-bar
+    // container via the built-in `workbench.view.extension.conductor` command. Narrow
+    // signature (the handler passes only the command id) so the flow stays assertable.
+    executeCommand(command: string): Thenable<unknown>;
   };
   readonly window: {
     showInformationMessage(message: string): Thenable<string | undefined>;
@@ -71,7 +88,9 @@ export interface VscodeApi {
     showInputBox(options?: vscode.InputBoxOptions): Thenable<string | undefined>;
     // 4C-2: the control commands let the user pick a project and confirm destructive
     // actions. Narrow signatures (the items the handlers actually pass) so the flows stay
-    // assertable against the headless mock.
+    // assertable against the headless mock. The two showWarningMessage overloads cover the
+    // confirm-modal form (4C-2: options + item) and the 4C-3 intervention toast (message +
+    // action label, no options object) — both resolve the chosen item.
     showQuickPick(
       items: readonly string[],
       options?: vscode.QuickPickOptions,
@@ -81,6 +100,7 @@ export interface VscodeApi {
       options: vscode.MessageOptions,
       item: string,
     ): Thenable<string | undefined>;
+    showWarningMessage(message: string, item: string): Thenable<string | undefined>;
     registerWebviewViewProvider(
       viewId: string,
       provider: vscode.WebviewViewProvider,
@@ -301,6 +321,59 @@ export function statusBarText(state: ConnectionState): string {
       return "$(error) Conductor: error";
     case "disconnected":
       return "$(debug-disconnect) Conductor: disconnected";
+  }
+}
+
+/**
+ * Renders the dedicated intervention status-bar label for a pending count (4C-3). Pure so a
+ * test asserts the 0/1/N renderings. Returns "" for 0 (the caller hides the item then);
+ * singular/plural for ≥1. Carries no token — only the count. Distinct codicon ($(bell))
+ * from the connection item so the two reads don't collide.
+ */
+export function interventionStatusText(count: number): string {
+  if (count <= 0) {
+    return "";
+  }
+  const noun = count === 1 ? "intervention" : "interventions";
+  return `$(bell) Conductor: ${count} ${noun}`;
+}
+
+/** The slice of the intervention status-bar item `handleIntervention` updates: set its
+ * text + show/hide it. The mock's StatusBarItem (and the real vscode.StatusBarItem) satisfy
+ * it. Declared narrowly so the helper stays assertable. */
+export interface InterventionStatusBar {
+  text: string;
+  show(): void;
+  hide(): void;
+}
+
+/**
+ * The testable core of the intervention handler (4C-3): given the new pending COUNT and the
+ * distilled (token-free) intervention, (1) update + show the dedicated status-bar item, and
+ * (2) show a warning toast naming `project/task: reason` with an "Open Conductor" action;
+ * if the user picks it, reveal the activity-bar container. Pure of the count bookkeeping
+ * (the caller owns the counter) so a test drives it with a fixed count + a mock api.
+ *
+ * TOKEN NOTE: `intervention` carries only project/task/reason (the notifier guarantees no
+ * token in it), and neither the toast nor the status text echoes anything else — so no
+ * token can reach a vscode message here.
+ */
+export async function handleIntervention(
+  api: VscodeApi,
+  statusBar: InterventionStatusBar,
+  count: number,
+  intervention: Intervention,
+): Promise<void> {
+  statusBar.text = interventionStatusText(count);
+  statusBar.show();
+
+  const { project, task, reason } = intervention;
+  const choice = await api.window.showWarningMessage(
+    `Intervention needed — ${project}/${task}: ${reason}`,
+    OPEN_CONDUCTOR_ACTION,
+  );
+  if (choice === OPEN_CONDUCTOR_ACTION) {
+    await api.commands.executeCommand(REVEAL_CONTAINER_COMMAND);
   }
 }
 
@@ -556,11 +629,43 @@ export function activate(context: vscode.ExtensionContext): void {
   const gatewayUrl = readGatewayUrl();
 
   const statusBar = vscode.window.createStatusBarItem();
+
+  // 4C-3: a SEPARATE status-bar item for pending interventions ($(bell) Conductor: N
+  // intervention(s)), shown only when the count > 0. The connection item above keeps
+  // showing the link state; this one is the at-a-glance intervention read. Starts hidden.
+  const interventionBar = vscode.window.createStatusBarItem();
+  interventionBar.command = REVEAL_CONTAINER_COMMAND;
+  let pendingInterventions = 0;
+
+  // 4C-3: the host's OWN intervention-filtered WS subscription. The 4B-2 HostBridge only
+  // forwards events to the webview while it's OPEN; this fires native notifications even
+  // when the Conductor view is closed. TokenProvider reads SecretStorage per start (never
+  // cached); wsBaseUrl is the ws-derived normalized base; the token rides only in the WS
+  // URL — never in onIntervention (which carries project/task/reason) or a message.
+  const notifier = new InterventionNotifier({
+    wsBaseUrl: deriveWsUrl(normalizeBaseUrl(gatewayUrl)),
+    tokenProvider: { getToken: () => Promise.resolve(context.secrets.get(GATEWAY_TOKEN_KEY)) },
+    wsConnector,
+    onIntervention: (intervention) => {
+      pendingInterventions += 1;
+      void handleIntervention(vscode, interventionBar, pendingInterventions, intervention);
+    },
+  });
+
   const manager = new ConnectionManager({
     secrets: context.secrets,
     gateway: makeGatewayProbe(gatewayUrl),
     onStateChange: (state) => {
       statusBar.text = statusBarText(state);
+      // 4C-3: tie the host intervention subscription to the link state — open it on
+      // "connected", tear it down otherwise. Extends the SAME onStateChange the status bar
+      // uses (no second manager). start() is fire-and-forget (reads the token, never
+      // throws/logs it); stop() is idempotent.
+      if (state === "connected") {
+        void notifier.start();
+      } else {
+        notifier.stop();
+      }
     },
   });
   statusBar.text = statusBarText(manager.state);
@@ -583,7 +688,14 @@ export function activate(context: vscode.ExtensionContext): void {
     gatewayUrl,
     extensionUri: context.extensionUri,
   });
-  context.subscriptions.push(statusBar, ...disposables);
+  // Push the intervention status-bar item + a dispose-wrapper that stops the notifier's WS
+  // subscription on deactivate (so the host socket is torn down with the extension).
+  context.subscriptions.push(
+    statusBar,
+    interventionBar,
+    { dispose: () => notifier.stop() },
+    ...disposables,
+  );
 
   // Silent restore: re-validate a stored token (if any) and mirror the result onto the
   // status bar via onStateChange. Fire-and-forget; never throws, never logs the token.
