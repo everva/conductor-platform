@@ -9,6 +9,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   commands,
   window,
+  workspace,
+  languages,
+  Uri,
   __reset,
   __makeWebviewView,
   __makeSecretStorage,
@@ -22,29 +25,65 @@ import {
   APPROVE_COMMAND,
   CONNECT_COMMAND,
   DISCONNECT_COMMAND,
+  DIFF_SCHEME,
+  DIFF_STORE_CAP,
+  DIFF_EVICTED_PLACEHOLDER,
   FLEET_VIEW_ID,
   OPEN_CONDUCTOR_ACTION,
   PAUSE_COMMAND,
   REVEAL_CONTAINER_COMMAND,
   RESUME_COMMAND,
+  SHOW_DIFF_COMMAND,
   type Control,
   type ControlResult,
   type FleetViewConfig,
   type InterventionStatusBar,
+  DiffStore,
   FleetViewProvider,
   activate,
   deactivate,
+  diffStatusText,
+  handleDiff,
   handleIntervention,
   interventionStatusText,
+  makeDiffContentProvider,
   placeholderHtml,
   registerConductor,
+  renderDiffDocument,
   runConnect,
   runControl,
   runDisconnect,
+  runShowDiff,
   statusBarText,
   webviewHtml,
 } from "./extension";
 import type { Intervention } from "./notifier";
+import type { TaskDiff } from "./diffObserver";
+
+// The slice of the vscode API the diff flows use, assembled from the mock. Cast at the
+// seam because the headless mock is structurally (not nominally) the real `vscode` types.
+// Typed as the intersection so it satisfies both runShowDiff (DiffVscodeApi) and
+// registerConductor (VscodeApi & DiffVscodeApi).
+const diffApi = { commands, window, workspace, languages, Uri } as unknown as Parameters<
+  typeof registerConductor
+>[0];
+
+// A representative token-free TaskDiff (the shape DiffObserver distills + hands to handleDiff).
+function makeTaskDiff(over: Partial<TaskDiff> = {}): TaskDiff {
+  return {
+    project: "alpha",
+    task: "t-1",
+    branch: "task/t-1",
+    base: "main",
+    files: [
+      { path: "src/a.ts", status: "M", additions: 3, deletions: 1 },
+      { path: "src/b.ts", status: "A", additions: 10, deletions: 0 },
+    ],
+    patch: "diff --git a/src/a.ts b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n",
+    truncated: false,
+    ...over,
+  };
+}
 import { ConnectionManager, type SecretStore } from "./connection";
 import { ControlListError } from "./controlClient";
 import { GATEWAY_TOKEN_KEY, type GatewayProbe, type TokenCheck } from "./gateway";
@@ -106,23 +145,31 @@ function makeControl(opts: {
 }
 
 describe("registerConductor", () => {
-  it("registers connect + disconnect + the 4 control commands and the fleet view provider", () => {
+  it("registers connect + disconnect + the 4 control commands + the diff scheme/command + the fleet view provider", () => {
     const { manager } = makeManager({});
     const disposables = registerConductor(
-      { commands, window },
+      diffApi,
       manager,
       "http://gw.test",
       makeControl(),
+      new DiffStore(),
     );
 
-    // connect + disconnect + pause + resume + abort + approve + fleet view = 7.
-    expect(disposables).toHaveLength(7);
+    // connect + disconnect + pause + resume + abort + approve + diff-provider + show-diff +
+    // fleet view = 9.
+    expect(disposables).toHaveLength(9);
     expect(commands.registerCommand).toHaveBeenCalledWith(CONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(DISCONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(PAUSE_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(RESUME_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(ABORT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(APPROVE_COMMAND, expect.any(Function));
+    // 4C-1b: the diff scheme content provider + the show-diff command.
+    expect(workspace.registerTextDocumentContentProvider).toHaveBeenCalledWith(
+      DIFF_SCHEME,
+      expect.any(Object),
+    );
+    expect(commands.registerCommand).toHaveBeenCalledWith(SHOW_DIFF_COMMAND, expect.any(Function));
     expect(window.registerWebviewViewProvider).toHaveBeenCalledWith(
       FLEET_VIEW_ID,
       expect.any(FleetViewProvider),
@@ -472,6 +519,235 @@ describe("handleIntervention", () => {
   });
 });
 
+describe("diffStatusText", () => {
+  it("renders nothing for a zero/negative count (the caller hides the item)", () => {
+    expect(diffStatusText(0)).toBe("");
+    expect(diffStatusText(-1)).toBe("");
+  });
+
+  it("renders a singular label for exactly one", () => {
+    const text = diffStatusText(1);
+    expect(text).toContain("1");
+    expect(text).toContain("diff");
+    expect(text).not.toContain("diffs"); // singular, not plural.
+  });
+
+  it("renders a plural label for N > 1", () => {
+    const text = diffStatusText(4);
+    expect(text).toContain("4");
+    expect(text).toContain("diffs");
+  });
+
+  it("uses a distinct codicon from the connection/intervention items", () => {
+    expect(diffStatusText(2)).toContain("$(git-compare)");
+  });
+});
+
+describe("renderDiffDocument", () => {
+  it("includes a header with project/task, base...branch, file count, and the per-file stats + patch", () => {
+    const body = renderDiffDocument(makeTaskDiff());
+
+    // Human header: project/task + the base...branch range + a file count.
+    expect(body).toContain("alpha/t-1");
+    expect(body).toContain("main...task/t-1");
+    expect(body).toContain("2 files");
+    // One stat line per file: "<status>  <path>  +adds -dels".
+    expect(body).toContain("src/a.ts");
+    expect(body).toContain("+3 -1");
+    expect(body).toContain("src/b.ts");
+    expect(body).toContain("+10 -0");
+    // The unified patch is appended after a blank separator line.
+    expect(body).toContain("diff --git a/src/a.ts b/src/a.ts");
+    expect(body).toMatch(/\n\ndiff --git/); // blank line before the patch.
+  });
+
+  it("says 'truncated' in the header only when the diff was capped", () => {
+    expect(renderDiffDocument(makeTaskDiff({ truncated: false }))).not.toContain("truncated");
+    expect(renderDiffDocument(makeTaskDiff({ truncated: true }))).toContain("truncated");
+  });
+
+  it("uses a singular 'file' for a single-file diff", () => {
+    const body = renderDiffDocument(
+      makeTaskDiff({ files: [{ path: "only.ts", status: "M", additions: 1, deletions: 0 }] }),
+    );
+    expect(body).toContain("1 file");
+    expect(body).not.toContain("1 files");
+  });
+
+  it("renders an empty-file/empty-patch diff without throwing", () => {
+    const body = renderDiffDocument(makeTaskDiff({ files: [], patch: "" }));
+    expect(body).toContain("0 files");
+    expect(typeof body).toBe("string");
+  });
+});
+
+describe("DiffStore + content provider", () => {
+  it("mints a unique .diff URI per add and serves the rendered content for it", () => {
+    const store = new DiffStore();
+    const provider = makeDiffContentProvider(store);
+
+    const uri = store.add(makeTaskDiff());
+
+    // The URI uses the conductor-diff scheme and ends in .diff (so VS Code applies the diff language).
+    expect(uri.startsWith(`${DIFF_SCHEME}:`)).toBe(true);
+    expect(uri.endsWith(".diff")).toBe(true);
+    // The provider returns the stored content (the rendered document) for the known URI.
+    const content = provider.provideTextDocumentContent(Uri.parse(uri) as never);
+    expect(content).toContain("main...task/t-1");
+    expect(content).toBe(renderDiffDocument(makeTaskDiff()));
+  });
+
+  it("returns the placeholder for an unknown/evicted URI", () => {
+    const store = new DiffStore();
+    const provider = makeDiffContentProvider(store);
+
+    const content = provider.provideTextDocumentContent(
+      Uri.parse(`${DIFF_SCHEME}:/never/added/9.diff`) as never,
+    );
+    expect(content).toBe(DIFF_EVICTED_PLACEHOLDER);
+  });
+
+  it("mints distinct URIs for repeated diffs of the same task (no stale-document collision)", () => {
+    const store = new DiffStore();
+    const a = store.add(makeTaskDiff());
+    const b = store.add(makeTaskDiff());
+    expect(a).not.toBe(b);
+  });
+
+  it("evicts the oldest past the cap (bounded) and the evicted URI yields the placeholder", () => {
+    const store = new DiffStore();
+    const provider = makeDiffContentProvider(store);
+
+    const first = store.add(makeTaskDiff({ task: "t-0" }));
+    // Add exactly CAP more so the first is evicted (size stays at the cap).
+    for (let i = 1; i <= DIFF_STORE_CAP; i++) {
+      store.add(makeTaskDiff({ task: `t-${i}` }));
+    }
+
+    expect(store.size).toBe(DIFF_STORE_CAP);
+    // The first (oldest) entry was evicted → placeholder.
+    expect(provider.provideTextDocumentContent(Uri.parse(first) as never)).toBe(
+      DIFF_EVICTED_PLACEHOLDER,
+    );
+  });
+
+  it("lists recents newest-first", () => {
+    const store = new DiffStore();
+    store.add(makeTaskDiff({ task: "old" }));
+    store.add(makeTaskDiff({ task: "new" }));
+    const recents = store.recents();
+    expect(recents[0]?.task).toBe("new");
+    expect(recents[1]?.task).toBe("old");
+  });
+});
+
+describe("handleDiff", () => {
+  // A minimal status-bar item: records the text + spies show/hide (the InterventionStatusBar
+  // slice handleDiff updates — reused for the diff bar).
+  function makeBar(): InterventionStatusBar & {
+    show: ReturnType<typeof vi.fn>;
+    hide: ReturnType<typeof vi.fn>;
+  } {
+    return { text: "", show: vi.fn(), hide: vi.fn() };
+  }
+
+  it("stores the diff and sets+shows the status-bar count (NO toast)", () => {
+    const store = new DiffStore();
+    const bar = makeBar();
+
+    handleDiff(store, bar, makeTaskDiff());
+
+    expect(store.size).toBe(1);
+    expect(bar.text).toBe(diffStatusText(1));
+    expect(bar.text).toContain("1");
+    expect(bar.show).toHaveBeenCalledTimes(1);
+    // QUIET: handleDiff must not toast (the status bar is the signal).
+    expect(window.showInformationMessage).not.toHaveBeenCalled();
+    expect(window.showWarningMessage).not.toHaveBeenCalled();
+  });
+
+  it("bumps the count as more diffs arrive", () => {
+    const store = new DiffStore();
+    const bar = makeBar();
+
+    handleDiff(store, bar, makeTaskDiff({ task: "t-1" }));
+    handleDiff(store, bar, makeTaskDiff({ task: "t-2" }));
+
+    expect(store.size).toBe(2);
+    expect(bar.text).toContain("2");
+  });
+
+  it("never lets a token reach the store content or the status text (token-free in → out)", () => {
+    const TOKEN = "tok-MUST-NOT-LEAK";
+    const store = new DiffStore();
+    const bar = makeBar();
+
+    const uri = store.add(makeTaskDiff());
+    handleDiff(store, bar, makeTaskDiff());
+
+    expect(store.content(uri)).not.toContain(TOKEN);
+    expect(bar.text).not.toContain(TOKEN);
+  });
+});
+
+describe("runShowDiff", () => {
+  it("shows an info message when there are no diffs yet", async () => {
+    await runShowDiff(diffApi, new DiffStore());
+
+    expect(window.showInformationMessage).toHaveBeenCalledWith("No task diffs yet.");
+    expect(workspace.openTextDocument).not.toHaveBeenCalled();
+  });
+
+  it("opens the single diff directly (no quick-pick) in a conductor-diff document", async () => {
+    const store = new DiffStore();
+    const uri = store.add(makeTaskDiff());
+
+    await runShowDiff(diffApi, store);
+
+    expect(window.showQuickPick).not.toHaveBeenCalled();
+    // The conductor-diff URI was opened + shown (as a preview) + given the diff language.
+    expect(workspace.openTextDocument).toHaveBeenCalledTimes(1);
+    const opened = workspace.openTextDocument.mock.calls[0]?.[0] as { path: string };
+    expect(opened.path).toBe(uri);
+    expect(window.showTextDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ uri: expect.objectContaining({ path: uri }) }),
+      expect.objectContaining({ preview: true }),
+    );
+    expect(languages.setTextDocumentLanguage).toHaveBeenCalledWith(expect.any(Object), "diff");
+  });
+
+  it("opens the MOST-RECENT diff when one is picked from the quick-pick (>1 diffs)", async () => {
+    const store = new DiffStore();
+    store.add(makeTaskDiff({ task: "older" }));
+    const newestUri = store.add(makeTaskDiff({ task: "newer" }));
+    // The newest is listed first; the label is "<task> (<n> files)".
+    window.showQuickPick.mockResolvedValueOnce("newer (2 files)");
+
+    await runShowDiff(diffApi, store);
+
+    // The quick-pick offered both, newest first.
+    expect(window.showQuickPick).toHaveBeenCalledTimes(1);
+    const labels = window.showQuickPick.mock.calls[0]?.[0] as string[];
+    expect(labels[0]).toContain("newer");
+    expect(labels[1]).toContain("older");
+    // The picked (newest) URI was opened.
+    const opened = workspace.openTextDocument.mock.calls[0]?.[0] as { path: string };
+    expect(opened.path).toBe(newestUri);
+  });
+
+  it("is a quiet no-op when the quick-pick is cancelled (>1 diffs)", async () => {
+    const store = new DiffStore();
+    store.add(makeTaskDiff({ task: "a" }));
+    store.add(makeTaskDiff({ task: "b" }));
+    window.showQuickPick.mockResolvedValueOnce(undefined); // cancelled.
+
+    await runShowDiff(diffApi, store);
+
+    expect(workspace.openTextDocument).not.toHaveBeenCalled();
+    expect(window.showTextDocument).not.toHaveBeenCalled();
+  });
+});
+
 describe("activate", () => {
   it("creates a status bar, registers commands + view, and pushes all disposables", async () => {
     __setConfig({ "conductor.gatewayUrl": "http://localhost:8080" });
@@ -487,8 +763,9 @@ describe("activate", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    // 4C-3 adds a SECOND status-bar item (the intervention count), so two are created.
-    expect(window.createStatusBarItem).toHaveBeenCalledTimes(2);
+    // 4C-3 adds the intervention status-bar item; 4C-1b adds the diff one — so three are
+    // created (connection + intervention + diff).
+    expect(window.createStatusBarItem).toHaveBeenCalledTimes(3);
     const statusBar = window.createStatusBarItem.mock.results[0]?.value as {
       text: string;
       show: () => void;
@@ -505,9 +782,16 @@ describe("activate", () => {
     // 4C-2 also registers the pause/resume/abort/approve commands.
     expect(commands.registerCommand).toHaveBeenCalledWith(PAUSE_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(APPROVE_COMMAND, expect.any(Function));
-    // connection bar + intervention bar (4C-3) + notifier-dispose (4C-3) + connect +
-    // disconnect + pause + resume + abort + approve + fleet view = 10.
-    expect(subscriptions).toHaveLength(10);
+    // 4C-1b registers the diff scheme content provider + the show-diff command.
+    expect(workspace.registerTextDocumentContentProvider).toHaveBeenCalledWith(
+      DIFF_SCHEME,
+      expect.any(Object),
+    );
+    expect(commands.registerCommand).toHaveBeenCalledWith(SHOW_DIFF_COMMAND, expect.any(Function));
+    // connection bar + intervention bar (4C-3) + diff bar (4C-1b) + notifier-dispose (4C-3) +
+    // diff-observer-dispose (4C-1b) + connect + disconnect + pause + resume + abort + approve +
+    // diff-provider (4C-1b) + show-diff (4C-1b) + fleet view = 14.
+    expect(subscriptions).toHaveLength(14);
   });
 });
 

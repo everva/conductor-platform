@@ -71,6 +71,11 @@
         "command": "conductor.approve",
         "title": "Conductor: Approve Awaiting Task",
         "category": "Conductor"
+      },
+      {
+        "command": "conductor.showDiff",
+        "title": "Conductor: Show Task Diff",
+        "category": "Conductor"
       }
     ]
   },

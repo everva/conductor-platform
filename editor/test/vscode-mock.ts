@@ -115,6 +115,35 @@ export const window = {
   createStatusBarItem: vi
     .fn<(...args: unknown[]) => StatusBarItem>()
     .mockImplementation(makeStatusBarItem),
+  // 4C-1b: opening a rendered diff document. Resolves a fake TextEditor by default; tests
+  // assert it was called with the opened document + preview options. No token flows here.
+  showTextDocument: vi
+    .fn<(document: TextDocumentLike, options?: unknown) => Thenable<TextEditorLike>>()
+    .mockImplementation((document) => Promise.resolve({ document })),
+};
+
+/** Minimal structural stand-in for vscode.TextDocument: the diff flow only reads `uri`
+ * (to assert which diff was opened) + passes the doc through to showTextDocument /
+ * setTextDocumentLanguage. The content provider supplies the body the real host would. */
+export interface TextDocumentLike {
+  readonly uri: UriLike;
+}
+
+/** Minimal structural stand-in for vscode.TextEditor: the diff flow ignores the returned
+ * editor (it just awaits it), so it only needs to carry the document. */
+export interface TextEditorLike {
+  readonly document: TextDocumentLike;
+}
+
+/** 4C-1b: the read-only diff render. `registerTextDocumentContentProvider` records the
+ * scheme + provider (a test can call provideTextDocumentContent directly);
+ * `openTextDocument(uri)` resolves a fake document carrying that uri so the flow can be
+ * asserted (the real host would fill it from the provider). */
+export const languages = {
+  // The diff flow calls this to force the `diff` language; resolves the doc unchanged.
+  setTextDocumentLanguage: vi
+    .fn<(document: TextDocumentLike, languageId: string) => Thenable<TextDocumentLike>>()
+    .mockImplementation((document) => Promise.resolve(document)),
 };
 
 /** Config values the mocked workspace.getConfiguration().get() reads. Keyed by the
@@ -124,6 +153,12 @@ let configValues: Record<string, unknown> = {};
 /** Sets the values the mocked configuration returns (call in a test before activate). */
 export function __setConfig(values: Record<string, unknown>): void {
   configValues = values;
+}
+
+/** Minimal structural stand-in for vscode.TextDocumentContentProvider (4C-1b): the diff
+ * render registers one of these and the host calls provideTextDocumentContent(uri). */
+export interface TextDocumentContentProviderLike {
+  provideTextDocumentContent(uri: UriLike): string | undefined | null;
 }
 
 export const workspace = {
@@ -139,6 +174,15 @@ export const workspace = {
       return dflt;
     },
   })),
+  // 4C-1b: records the scheme + provider so a test can drive provideTextDocumentContent.
+  registerTextDocumentContentProvider: vi
+    .fn<(scheme: string, provider: TextDocumentContentProviderLike) => Disposable>()
+    .mockImplementation(makeDisposable),
+  // 4C-1b: resolves a fake document carrying the requested uri so the diff flow can assert
+  // WHICH diff URI was opened (the real host fills the body from the registered provider).
+  openTextDocument: vi
+    .fn<(uri: UriLike) => Thenable<TextDocumentLike>>()
+    .mockImplementation((uri) => Promise.resolve({ uri })),
 };
 
 /** Builds a fake UriLike with a given path (toString() returns the path verbatim). */
@@ -152,6 +196,12 @@ export const Uri = {
   joinPath(base: UriLike, ...segments: string[]): UriLike {
     const joined = [base.path, ...segments].join("/");
     return makeUri(joined);
+  },
+  // 4C-1b: parse a `conductor-diff:` URI string. The fake keeps the full string verbatim as
+  // both `path` and toString() so the diff store's string key round-trips (the store keys on
+  // toString()); a real Uri would split scheme/path, but the diff flow only needs the key.
+  parse(value: string): UriLike {
+    return makeUri(value);
   },
 };
 
@@ -207,7 +257,11 @@ export function __reset(): void {
   window.showWarningMessage.mockClear();
   window.registerWebviewViewProvider.mockClear();
   window.createStatusBarItem.mockClear();
+  window.showTextDocument.mockClear();
   workspace.getConfiguration.mockClear();
+  workspace.registerTextDocumentContentProvider.mockClear();
+  workspace.openTextDocument.mockClear();
+  languages.setTextDocumentLanguage.mockClear();
   configValues = {};
 }
 
@@ -255,4 +309,4 @@ export function __makeWebviewView(cspSource = "vscode-resource:"): WebviewView &
   };
 }
 
-export default { commands, window, workspace, Uri };
+export default { commands, window, workspace, languages, Uri };

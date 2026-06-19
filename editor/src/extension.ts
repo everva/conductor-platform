@@ -28,6 +28,7 @@ import { HostBridge, type WebviewLike } from "./bridge/hostBridge";
 import { wsConnector } from "./bridge/wsConnector";
 import { ControlClient, ControlListError, type ControlAction } from "./controlClient";
 import { InterventionNotifier, type Intervention } from "./notifier";
+import { DiffObserver, type TaskDiff } from "./diffObserver";
 
 /** Command id for the gateway-connect action. */
 export const CONNECT_COMMAND = "conductor.connect";
@@ -46,6 +47,14 @@ export const ABORT_COMMAND = "conductor.abort";
 
 /** Command id for the approve-awaiting-task control action (4C-2). */
 export const APPROVE_COMMAND = "conductor.approve";
+
+/** Command id for the show-task-diff action (4C-1b). Opens the most-recent task diff (or a
+ * quick-pick when several are pending) in a native read-only diff document. */
+export const SHOW_DIFF_COMMAND = "conductor.showDiff";
+
+/** Custom URI scheme for the read-only diff virtual documents (4C-1b). Registered with a
+ * TextDocumentContentProvider; the diff body is served from a bounded in-memory store. */
+export const DIFF_SCHEME = "conductor-diff";
 
 /** View id of the placeholder Fleet webview view (contributed in package.json). */
 export const FLEET_VIEW_ID = "conductor.fleet";
@@ -106,6 +115,74 @@ export interface VscodeApi {
       provider: vscode.WebviewViewProvider,
     ): vscode.Disposable;
   };
+}
+
+/**
+ * The ADDITIONAL narrow vscode surface the 4C-1b native-diff flow uses, kept SEPARATE from
+ * {@link VscodeApi} so the connect/control/intervention flows (which only need commands +
+ * window) stay assertable against `{ commands, window }` and don't have to supply these.
+ * `registerConductor`/`activate` pass the real `vscode`, which satisfies both. Uses minimal
+ * structural types (DiffUri/DiffDocument/DiffContentProvider) so BOTH the real vscode and the
+ * headless mock satisfy it; the returns the flow ignores are typed `unknown`. NONE of these
+ * carry a token (the diff render is token-free — see the diff section below).
+ */
+export interface DiffVscodeApi {
+  readonly commands: {
+    registerCommand(command: string, callback: (...args: unknown[]) => unknown): vscode.Disposable;
+  };
+  readonly window: {
+    showInformationMessage(message: string): Thenable<string | undefined>;
+    showQuickPick(
+      items: readonly string[],
+      options?: vscode.QuickPickOptions,
+    ): Thenable<string | undefined>;
+    // Open the rendered diff document. preview:true so diffs don't pile up tabs. The return
+    // is ignored (the flow only awaits it) → `unknown`, keeping the real vscode (TextEditor)
+    // and the headless mock structurally assignable.
+    showTextDocument(
+      document: DiffDocument,
+      options?: vscode.TextDocumentShowOptions,
+    ): Thenable<unknown>;
+  };
+  // The read-only virtual document: register the scheme's content provider + open a diff URI
+  // (the provider fills it). Minimal structural types so both the real vscode + the mock fit.
+  readonly workspace: {
+    registerTextDocumentContentProvider(
+      scheme: string,
+      provider: DiffContentProvider,
+    ): vscode.Disposable;
+    openTextDocument(uri: DiffUri): Thenable<DiffDocument>;
+  };
+  // A `.diff`-suffixed URI already gets the `diff` language; this is the explicit belt-and-
+  // braces call so highlighting is deterministic. The return is ignored.
+  readonly languages: {
+    setTextDocumentLanguage(document: DiffDocument, languageId: string): Thenable<unknown>;
+  };
+  // Build the per-diff `conductor-diff:` URI. Only `parse` is needed.
+  readonly Uri: {
+    parse(value: string): DiffUri;
+  };
+}
+
+/** Minimal structural URI the diff flow needs: just `toString()` (the store keys on the
+ * string form). The real `vscode.Uri` and the headless mock's UriLike both satisfy it. */
+export interface DiffUri {
+  toString(): string;
+}
+
+/** Minimal structural document the diff flow needs: just its `uri` (to assert WHICH diff was
+ * opened; the body is supplied by the content provider). Real `vscode.TextDocument` (uri:
+ * Uri) and the headless mock's `{ uri }` both satisfy it. */
+export interface DiffDocument {
+  readonly uri: DiffUri;
+}
+
+/** Minimal structural content provider for the `conductor-diff` scheme: the host calls
+ * `provideTextDocumentContent(uri)` to fill the virtual document. Real
+ * `vscode.TextDocumentContentProvider` (whose method takes an optional extra
+ * CancellationToken) is assignable here, as is {@link makeDiffContentProvider}'s return. */
+export interface DiffContentProvider {
+  provideTextDocumentContent(uri: DiffUri): string | undefined | null;
 }
 
 /** The arguments the live-cockpit HTML builder needs, all already resolved by the caller
@@ -377,6 +454,212 @@ export async function handleIntervention(
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────
+// 4C-1b — native diff render (ADR-0030): the conductor emits a bounded KindDiff at the green
+// gate; the host renders it in a NATIVE VS Code diff view. The render is a READ-ONLY VIRTUAL
+// DOCUMENT: each diff gets a unique, stable `conductor-diff:` URI whose path ends in `.diff`
+// (so VS Code auto-applies the `diff` language for highlighting), and the immutable body is
+// served by a TextDocumentContentProvider from a small bounded store. Content is immutable
+// per URI → no EventEmitter/onDidChange is needed. Mirrors the 4C-3 quiet bell pattern: the
+// signal is a SEPARATE status-bar item, not a per-diff toast (interventions already toast —
+// avoid double-noise; auto-surfacing held-task diffs is a possible later enhancement).
+// ─────────────────────────────────────────────────────────────────────────────────────
+
+/** Max diffs the bounded store retains (oldest evicted past this). Keeps the green-gate
+ * stream from growing memory without bound; ~20 recent diffs is plenty for review. */
+export const DIFF_STORE_CAP = 20;
+
+/**
+ * Renders the dedicated diff status-bar label for the count of retained diffs (4C-1b). Pure
+ * so a test asserts the 0/1/N renderings. Returns "" for 0 (the caller hides the item then);
+ * singular/plural for ≥1. Carries no token — only the count. Distinct codicon ($(git-compare))
+ * from the connection ($(plug)) and intervention ($(bell)) items so the three reads don't
+ * collide.
+ */
+export function diffStatusText(count: number): string {
+  if (count <= 0) {
+    return "";
+  }
+  const noun = count === 1 ? "diff" : "diffs";
+  return `$(git-compare) Conductor: ${count} ${noun}`;
+}
+
+/**
+ * Builds the read-only diff document body for a {@link TaskDiff}. PURE (no vscode runtime) so
+ * a test asserts it directly. Layout: a short human header (project/task, `<base>...<branch>`,
+ * the file count, and the word `truncated` when the producer capped the diff), then one stat
+ * line per file (`M  path  +3 -1`), then a blank line, then the unified `patch` verbatim.
+ *
+ * TOKEN NOTE: `taskDiff` is the notifier-distilled, token-free shape; this only reorders its
+ * own fields into text, so no token can reach the rendered document.
+ */
+export function renderDiffDocument(taskDiff: TaskDiff): string {
+  const { project, task, branch, base, files, patch, truncated } = taskDiff;
+  const range = `${base || "?"}...${branch || "?"}`;
+  const fileWord = files.length === 1 ? "file" : "files";
+  const header = [
+    `# Conductor diff — ${project}/${task}`,
+    `# ${range} · ${files.length} ${fileWord}${truncated ? " · truncated" : ""}`,
+  ];
+  const stats = files.map((f) => `# ${(f.status || "?").padEnd(2)} ${f.path}  +${f.additions} -${f.deletions}`);
+  // Header + per-file stats, a blank separator, then the patch (which may be "" when the
+  // producer dropped it / there's no textual change — the stats still convey the change).
+  return [...header, ...stats, "", patch].join("\n");
+}
+
+/**
+ * One retained diff in the {@link DiffStore}: enough to (a) serve the content provider and
+ * (b) label a quick-pick item. `uri` is the stable string key; `task` + `fileCount` build the
+ * quick-pick label. Token-free (derived from a TaskDiff).
+ */
+export interface StoredDiff {
+  uri: string;
+  task: string;
+  fileCount: number;
+  content: string;
+}
+
+/**
+ * A small BOUNDED store of recently-emitted diffs, keyed by their `conductor-diff:` URI
+ * string. Mints a unique URI per diff from a monotonic counter (so re-diffing the same task
+ * never collides with a stale document), caps the retained set at {@link DIFF_STORE_CAP}
+ * (evicting the OLDEST), serves the content provider, and lists the recents (newest first)
+ * for the quick-pick. No vscode runtime → unit-tested directly. Token-free by construction
+ * (every entry is built from a token-free TaskDiff via {@link renderDiffDocument}).
+ */
+export class DiffStore {
+  // Insertion-ordered: Map preserves insertion order, so the first key is the oldest.
+  readonly #byUri = new Map<string, StoredDiff>();
+  #counter = 0;
+
+  /** Renders + stores a diff, returning its fresh unique URI string. The path ends in
+   * `.diff` so VS Code applies the `diff` language; segments are encoded so a task id with
+   * odd characters can't break the URI. Evicts the oldest entry past the cap. */
+  add(taskDiff: TaskDiff): string {
+    const n = (this.#counter += 1);
+    const uri = `${DIFF_SCHEME}:/${encodeURIComponent(taskDiff.project)}/${encodeURIComponent(
+      taskDiff.task,
+    )}/${n}.diff`;
+    this.#byUri.set(uri, {
+      uri,
+      task: taskDiff.task,
+      fileCount: taskDiff.files.length,
+      content: renderDiffDocument(taskDiff),
+    });
+    // Evict oldest while over the cap (normally a single eviction per add).
+    while (this.#byUri.size > DIFF_STORE_CAP) {
+      const oldest = this.#byUri.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      this.#byUri.delete(oldest);
+    }
+    return uri;
+  }
+
+  /** The rendered content for a URI, or undefined if it's unknown/evicted (the content
+   * provider maps that to a placeholder). */
+  content(uri: string): string | undefined {
+    return this.#byUri.get(uri)?.content;
+  }
+
+  /** The retained diffs, NEWEST first (the most recent is `recents()[0]`). */
+  recents(): StoredDiff[] {
+    return [...this.#byUri.values()].reverse();
+  }
+
+  /** The number of retained diffs (drives the status-bar count). */
+  get size(): number {
+    return this.#byUri.size;
+  }
+}
+
+/** The placeholder body a diff document shows once its entry has been evicted from the
+ * bounded store (the URI outlived the cap). Plain text; carries no token. */
+export const DIFF_EVICTED_PLACEHOLDER = "(diff no longer available)";
+
+/**
+ * Builds the read-only `TextDocumentContentProvider` for the `conductor-diff` scheme, backed
+ * by the given store. VS Code calls `provideTextDocumentContent(uri)` to fill the virtual
+ * document; we return the stored body, or a clear placeholder for an unknown/evicted URI.
+ * Content is immutable per URI, so no onDidChange emitter is needed. Pure of vscode runtime
+ * apart from the structural return type → unit-tested directly.
+ */
+export function makeDiffContentProvider(store: DiffStore): DiffContentProvider {
+  return {
+    provideTextDocumentContent(uri: DiffUri): string {
+      return store.content(uri.toString()) ?? DIFF_EVICTED_PLACEHOLDER;
+    },
+  };
+}
+
+/**
+ * Opens a stored diff (by its URI string) in a native read-only diff document: parse the
+ * URI → `openTextDocument` (the content provider fills it) → `showTextDocument` (preview so
+ * diffs don't stack tabs) → explicitly set the `diff` language (the `.diff` suffix already
+ * does, this is belt-and-braces). Pure of the picking logic so both the status-bar click and
+ * the quick-pick reuse it.
+ */
+async function openDiff(api: DiffVscodeApi, uri: string): Promise<void> {
+  const doc = await api.workspace.openTextDocument(api.Uri.parse(uri));
+  await api.window.showTextDocument(doc, { preview: true });
+  await api.languages.setTextDocumentLanguage(doc, "diff");
+}
+
+/**
+ * The show-diff flow (4C-1b), the `conductor.showDiff` command + the diff status-bar click.
+ * With several retained diffs it offers a quick-pick labelled `<task> (<n> files)` and opens
+ * the chosen; with exactly one it opens it directly; with none it shows an info message. The
+ * quick-pick label is index-aligned to the recents list so the pick maps back to a URI
+ * (task ids aren't unique across diffs). Token-free throughout (the store is token-free).
+ */
+export async function runShowDiff(api: DiffVscodeApi, store: DiffStore): Promise<void> {
+  const recents = store.recents();
+  if (recents.length === 0) {
+    await api.window.showInformationMessage("No task diffs yet.");
+    return;
+  }
+  if (recents.length === 1) {
+    await openDiff(api, recents[0]!.uri);
+    return;
+  }
+  const labels = recents.map((d) => diffQuickPickLabel(d));
+  const picked = await api.window.showQuickPick(labels, { placeHolder: "Select a task diff" });
+  if (picked === undefined) {
+    return; // cancelled — quiet no-op.
+  }
+  const idx = labels.indexOf(picked);
+  if (idx < 0) {
+    return; // defensive: the picked label isn't one we offered.
+  }
+  await openDiff(api, recents[idx]!.uri);
+}
+
+/** Labels a stored diff for the quick-pick: `<task> (<n> file[s])`. Pure; token-free. */
+function diffQuickPickLabel(d: StoredDiff): string {
+  const noun = d.fileCount === 1 ? "file" : "files";
+  return `${d.task} (${d.fileCount} ${noun})`;
+}
+
+/**
+ * The testable core of the diff handler (4C-1b): given the new diff, store + render it, then
+ * reflect the retained-diff COUNT on the dedicated status-bar item (show it; the count is
+ * always ≥1 here). Deliberately QUIET — NO toast (the status bar is the signal; interventions
+ * already toast, so a per-diff toast would be double-noise; auto-surfacing held-task diffs is
+ * a possible later enhancement). The status-bar item's `command` (set at activation) opens
+ * the most-recent diff. Token-free: `taskDiff` carries no token and neither the store nor the
+ * status text echoes anything else.
+ */
+export function handleDiff(
+  store: DiffStore,
+  statusBar: InterventionStatusBar,
+  taskDiff: TaskDiff,
+): void {
+  store.add(taskDiff);
+  statusBar.text = diffStatusText(store.size);
+  statusBar.show();
+}
+
 /**
  * The connect flow: guide if the URL is unset, prompt for the token (password input),
  * delegate to the ConnectionManager, and surface a token-FREE result message. The
@@ -561,10 +844,11 @@ function conflictMessage(action: ControlAction): string {
  * running host. `gatewayUrl` is captured for the connect flow's URL.
  */
 export function registerConductor(
-  api: VscodeApi,
+  api: VscodeApi & DiffVscodeApi,
   manager: ConnectionManager,
   gatewayUrl: string,
   control: Control,
+  diffStore: DiffStore,
   fleetConfig?: FleetViewConfig,
 ): vscode.Disposable[] {
   const connect = api.commands.registerCommand(CONNECT_COMMAND, () => {
@@ -581,12 +865,22 @@ export function registerConductor(
       void runControl(api, control, action);
     }),
   );
+  // 4C-1b: the read-only diff scheme + the show-diff command. The content provider serves the
+  // bounded store; the command opens the most-recent diff (or quick-picks when several are
+  // retained). The DiffObserver (wired in activate) feeds the store on each green-gate diff.
+  const diffProvider = api.workspace.registerTextDocumentContentProvider(
+    DIFF_SCHEME,
+    makeDiffContentProvider(diffStore),
+  );
+  const showDiff = api.commands.registerCommand(SHOW_DIFF_COMMAND, () => {
+    void runShowDiff(api, diffStore);
+  });
   // The Fleet view attaches the host↔webview bridge on resolve. When a config is
   // provided (the production path) the provider builds a real HostBridge; tests may omit
   // it (static-HTML provider) or pass one with a fake bridge factory.
   const provider = fleetConfig ? new FleetViewProvider(fleetConfig) : new FleetViewProvider();
   const fleetView = api.window.registerWebviewViewProvider(FLEET_VIEW_ID, provider);
-  return [connect, disconnect, ...controlDisposables, fleetView];
+  return [connect, disconnect, ...controlDisposables, diffProvider, showDiff, fleetView];
 }
 
 /** Maps a control action to its contributed command id (kept in lockstep with the
@@ -637,6 +931,15 @@ export function activate(context: vscode.ExtensionContext): void {
   interventionBar.command = REVEAL_CONTAINER_COMMAND;
   let pendingInterventions = 0;
 
+  // 4C-1b: a SEPARATE status-bar item for recently-emitted task diffs ($(git-compare)
+  // Conductor: N diff(s)), shown only when N>0 (mirrors the 4C-3 bell). Its command opens
+  // the most-recent diff (runShowDiff with one entry opens it directly). The bounded store
+  // holds the rendered diffs; the content provider (registered in registerConductor) serves
+  // them. Starts hidden.
+  const diffBar = vscode.window.createStatusBarItem();
+  diffBar.command = SHOW_DIFF_COMMAND;
+  const diffStore = new DiffStore();
+
   // 4C-3: the host's OWN intervention-filtered WS subscription. The 4B-2 HostBridge only
   // forwards events to the webview while it's OPEN; this fires native notifications even
   // when the Conductor view is closed. TokenProvider reads SecretStorage per start (never
@@ -652,19 +955,32 @@ export function activate(context: vscode.ExtensionContext): void {
     },
   });
 
+  // 4C-1b: the host's OWN diff-filtered WS subscription — same seams + same lifecycle as the
+  // notifier. On each green-gate KindDiff it stores the rendered diff + bumps the
+  // $(git-compare) count (QUIET — no toast; the status bar is the signal). Token rides only
+  // in the WS URL; onDiff carries the token-free distilled TaskDiff.
+  const diffObserver = new DiffObserver({
+    wsBaseUrl: deriveWsUrl(normalizeBaseUrl(gatewayUrl)),
+    tokenProvider: { getToken: () => Promise.resolve(context.secrets.get(GATEWAY_TOKEN_KEY)) },
+    wsConnector,
+    onDiff: (taskDiff) => handleDiff(diffStore, diffBar, taskDiff),
+  });
+
   const manager = new ConnectionManager({
     secrets: context.secrets,
     gateway: makeGatewayProbe(gatewayUrl),
     onStateChange: (state) => {
       statusBar.text = statusBarText(state);
-      // 4C-3: tie the host intervention subscription to the link state — open it on
-      // "connected", tear it down otherwise. Extends the SAME onStateChange the status bar
+      // 4C-3 + 4C-1b: tie the host WS subscriptions to the link state — open them on
+      // "connected", tear them down otherwise. Extends the SAME onStateChange the status bar
       // uses (no second manager). start() is fire-and-forget (reads the token, never
       // throws/logs it); stop() is idempotent.
       if (state === "connected") {
         void notifier.start();
+        void diffObserver.start();
       } else {
         notifier.stop();
+        diffObserver.stop();
       }
     },
   });
@@ -683,17 +999,19 @@ export function activate(context: vscode.ExtensionContext): void {
   // The Fleet view's bridge reads the token from SecretStorage (per request) and talks
   // to the gateway at the configured URL; the token never reaches the webview. The
   // extensionUri lets the provider build the cockpit bundle's webview resource URIs.
-  const disposables = registerConductor(vscode, manager, gatewayUrl, control, {
+  const disposables = registerConductor(vscode, manager, gatewayUrl, control, diffStore, {
     secrets: context.secrets,
     gatewayUrl,
     extensionUri: context.extensionUri,
   });
-  // Push the intervention status-bar item + a dispose-wrapper that stops the notifier's WS
-  // subscription on deactivate (so the host socket is torn down with the extension).
+  // Push the intervention + diff status-bar items + dispose-wrappers that stop the host WS
+  // subscriptions on deactivate (so the host sockets are torn down with the extension).
   context.subscriptions.push(
     statusBar,
     interventionBar,
+    diffBar,
     { dispose: () => notifier.stop() },
+    { dispose: () => diffObserver.stop() },
     ...disposables,
   );
 
