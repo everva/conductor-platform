@@ -222,6 +222,18 @@ dalga başlarında.
   hop'undan ayrı bir `Subscribe`'a sağlam ulaştı; gateway→bridge→webview ile AYNI pipe). CI 3-job TAM YEŞİL. **Yolda
   yakalandı:** CI `-tags e2e` adımı `writeFile` test-helper çakışmasını yakaladı (agent + ben `go test ./...` etiketsiz
   koştuğumuz için kaçmıştı) → `writeFileIn`'e yeniden adlandırıldı; ARTIK her iki etiket modu (default + e2e) bağımsız
-  doğrulandı (ders: Go işinde Rule#9 = HER iki etiket modu). **Sıradaki: 4C-1b (editör host KindDiff'i native VS Code
-  diff'te render — notifier-desenli host-tarafı `?kind=diff` gözlemci → bounded unified patch salt-okunur `language:'diff'`
-  virtual doc'ta; gerçek side-by-side ADR-0030'un ertelenen full-diff endpoint'ini gerektirir). Sonra 4D fork-repo + 4E.**
+  doğrulandı (ders: Go işinde Rule#9 = HER iki etiket modu).
+- ✅ **4C-1b editör native diff render** (`35f8962`, ADR-0030; **editor/ only — Go/web DOKUNULMADI**): host-tarafı
+  `DiffObserver` (`editor/src/diffObserver.ts`, 4C-3 notifier desenini birebir aynalar — `?kind=diff` WS, token YALNIZ
+  URL, tek restart-safe handle, defansif parse → token-FREE `TaskDiff`). Render = **salt-okunur virtual doc**
+  (`conductor-diff:` scheme + `.diff` URI → otomatik `diff` dili; immutable per-URI → EventEmitter yok): pure
+  `renderDiffDocument` (header + per-file stat + unified patch) + bounded `DiffStore` (cap 20, eski-tahliye,
+  evict→placeholder). Tetik QUIET (4C-3 bell gibi): ayrı `$(git-compare) Conductor: N diff(s)` status-bar +
+  `conductor.showDiff` komutu (>1→quick-pick); toast YOK (gürültü-önleme). Ayrı `DiffVscodeApi` arayüzü (mevcut 26
+  call-site kırılmadan; gerçek vscode + headless mock ikisi de sağlar). **Token disiplini**: token yalnız WS URL'inde;
+  render/store/status/mesaj token-FREE — diffObserver + extension leak-guard test'li. Bağımsız doğrulama (Rule#9): yerel
+  editör gate yeşil (host+webview tsc + eslint --max-warnings 0 + **165 vitest** [diffObserver 17 + extension 64] +
+  esbuild iki bundle) + izolasyon kanıtı (sadece editor/ değişti; web/ + Go boş) + kod incelemesi (token-discipline +
+  güvenli notifier-mirror). CI 3-job TAM YEŞİL.
+  **→ 4C-1 (a+b) TAMAM. SIRADAKİ: 4D fork-repo (everva/conductor-editor) paketleme — Code-OSS fork + extension built-in +
+  rebrand + CI/release (AĞIR ALTYAPI); sonra 4E uçtan-uca. NOT: canlı fork-editor render hâlâ test edilmedi (opt-in/manuel).**
