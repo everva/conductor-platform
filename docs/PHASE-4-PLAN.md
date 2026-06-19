@@ -296,4 +296,13 @@ dalga başlarında.
   - ✅ **ADVERSARIAL REVIEW** (agent GERÇEK Code-OSS build script'lerini okudu): **C1 CRITICAL blocker** — inject prepare.sh'te build'DEN ÖNCE çalışıyordu → gulp package build `vscode/extensions/`'ı siler/yeniden-işler, doğru post-build app-inject yolu HİÇ çalışmıyordu. **FIX:** inject POST-build (üretilen `.app`'in `Contents/Resources/app/extensions/`'ına; review bu yolu DOĞRU diye doğruladı); prepare=yalnız-patch; all.sh package'te build SONRASI inject. + **H1** inject npm ci+hata-yüzeye-çıkar · **H2/H3** build.sh node-pin assert (sessiz yanlış-node yok) · **H4** CI brew-`||true` kaldırıldı · **M1/M2** marker-dışarı + patch-fail→pin-invalidate · **M4** VSCode-${PLATFORM} · güvenlik commit-SHA+vsce pin. Hepsi düzeltildi (`c4fb599`); bash -n + fast-path + compile doğrulandı.
   - ✅ **4D-2 rebrand** (`2766581`): `patches/0001-rebrand-product.patch` (12 alan: nameShort=Conductor, nameLong=Conductor Editor, applicationName=conductor, data/server/tunnel-folder, darwinBundleIdentifier=ai.everva.conductor-editor, urlProtocol, linuxIconName, reportIssueUrl). prepare.sh temiz+idempotent uygular; get-vscode reset pristine'e döndürür — overlay döngüsü uçtan-uca doğrulandı. (App ikonu .icns = follow-up.)
   - ✅ **4D-1 inject script** + clean package: `editor/.vscodeignore` (`9597ead`) webview/tsx/tsconfig.webview/harness'ı dışlar → **8 dosya, 114KB .vsix** (doğrulandı). `build/inject-extension.sh` post-build app'e enjekte eder.
-  - 🟡 **CAPSTONE KOŞUYOR:** `build/all.sh package` (vscode-darwin-arm64-min, AĞIR) → branded `.app` + built-in conductor extension. Tamamlanınca app-branding + built-in-extension varlığı doğrulanacak. **SIRADAKİ:** 4D-3 CI release (imzalı artifact, Apple cert) follow-up; sonra Faz-4 KAPANIŞ + adversarial review.
+  - ✅ **CAPSTONE DOĞRULANDI** (fork main `4cf5b3e`): `build/all.sh package` (vscode-darwin-arm64-min) → **`Conductor
+    Editor.app`** (1.3G): `CFBundleIdentifier=ai.everva.conductor-editor`, `CFBundleName=Conductor`, executable `Conductor`,
+    `bin/code --version`→`1.122.1`/`8761a556`/arm64 (binary GERÇEKTEN koşuyor) + built-in `everva.conductor-editor`
+    (`dist/extension.js` mevcut) inject edildi. `build/verify-app.sh` PASS (branding + built-in deterministik gate;
+    all.sh package + CI'a bağlı — sahte-yeşil yok). **→ 4D-0 (fork+build) + 4D-1 (built-in inject) + 4D-2 (rebrand) TAMAM +
+    GERÇEK branded app'te uçtan-uca doğrulandı.**
+  - **KALAN (follow-up):** 4D-3 imzalı/notarize release (Apple Developer cert — kullanıcı girdisi gerekir; CI workflow
+    taslağı hazır, unsigned artifact) + rebrand-polish (CLI bin `code`→`conductor` derin-build-touch; app `.icns` ikonu) +
+    fork GUI activation eyeball (display gerekir; extension aktivasyonu zaten electron-smoke'ta KANITLI, aynı bundle).
+    **SIRADAKİ: Faz-4 KAPANIŞ adversarial review.**
