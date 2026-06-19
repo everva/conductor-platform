@@ -235,5 +235,17 @@ dalga başlarında.
   editör gate yeşil (host+webview tsc + eslint --max-warnings 0 + **165 vitest** [diffObserver 17 + extension 64] +
   esbuild iki bundle) + izolasyon kanıtı (sadece editor/ değişti; web/ + Go boş) + kod incelemesi (token-discipline +
   güvenli notifier-mirror). CI 3-job TAM YEŞİL.
-  **→ 4C-1 (a+b) TAMAM. SIRADAKİ: 4D fork-repo (everva/conductor-editor) paketleme — Code-OSS fork + extension built-in +
-  rebrand + CI/release (AĞIR ALTYAPI); sonra 4E uçtan-uca. NOT: canlı fork-editor render hâlâ test edilmedi (opt-in/manuel).**
+  **→ 4C-1 (a+b) TAMAM.**
+- ✅ **Faz-4 CANLI DOĞRULAMA** (kullanıcı kararı: 4D'den ÖNCE; `1058a2e`): forked-editör render'ı GERÇEK VS Code'da
+  doğrulandı. (1) **Real-electron smoke** (`@vscode/test-electron`, opt-in) GENİŞLETİLDİ + koşuldu: extension GERÇEK VS
+  Code host'ta aktive olur, `conductor.connect`+`conductor.showDiff` kayıtlı, ve **native diff render çalışır** —
+  `conductor-diff:` URI extension'ın content-provider'ına yönlenir + `.diff` → `diff` dili (unit testlerin yalnız
+  mock'layabildiği gerçek `registerTextDocumentContentProvider`/`openTextDocument`/dil-eşleme yolu). PASSED (exit 0).
+  Yol-fix: `ELECTRON_RUN_AS_NODE=1` (ortamda set) VS Code binary'sini Node gibi çalıştırıp tüm GUI flag'lerini
+  reddediyordu (`bad option: --no-sandbox`, exit 9) → `env -u ELECTRON_RUN_AS_NODE` (README'ye not) + eslint `.vscode-test`
+  (258MB indirilen VS Code) ignore (smoke sonrası yerel gate OOM'unu önler). (2) **Gateway backend GERÇEK koşuldu**:
+  `/readyz` 200, authed `/status` 200, token'sız `/status` 401, onboard `POST /projects`→201 + `GET /projects` editör Fleet
+  panelinin render edeceği veriyi döndürür. KALAN (insan-gözü): webview cockpit'in canlı boyaması + canlı diff'in pencerede
+  açılması = `editor/README` "Live cockpit check" runbook'u (test edilmiş komutlar + F5 Extension Dev Host adımları).
+  **SIRADAKİ: 4D fork-repo (everva/conductor-editor) paketleme — Code-OSS fork + extension built-in + rebrand + CI/release
+  (AĞIR ALTYAPI); sonra 4E uçtan-uca.**
