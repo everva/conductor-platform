@@ -27,7 +27,7 @@ describe("TokenGate", () => {
   it("renders children after a valid token is verified and submitted", async () => {
     const verify = vi.fn(() => Promise.resolve());
     renderGate(verify);
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
 
     await user.type(screen.getByLabelText(/api token/i), "good-token");
     await user.click(screen.getByRole("button", { name: /sign in/i }));

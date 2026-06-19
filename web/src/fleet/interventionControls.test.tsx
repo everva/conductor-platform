@@ -154,7 +154,7 @@ async function settle(): Promise<void> {
 
 describe("Pause / Resume", () => {
   it("calls pause with the project id, disables optimistically, and refreshes on success", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const d = deferred<{ project: string; paused: boolean }>();
     const client = makeFake({ pause: vi.fn(() => d.promise) });
     const refresh = vi.fn(async () => {});
@@ -180,7 +180,7 @@ describe("Pause / Resume", () => {
   });
 
   it("shows Resume for a paused project and calls resume", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const client = makeFake();
     render(
       <Harness client={client} projects={[project({ paused: true })]} refresh={vi.fn(async () => {})} />,
@@ -190,7 +190,7 @@ describe("Pause / Resume", () => {
   });
 
   it("reverts the optimistic paused bit and surfaces a notice on error", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const d = deferred<{ project: string; paused: boolean }>();
     const client = makeFake({ pause: vi.fn(() => d.promise) });
     const refresh = vi.fn(async () => {});
@@ -214,7 +214,7 @@ describe("Pause / Resume", () => {
   });
 
   it("signs out on a 401", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onUnauthorized = vi.fn();
     const client = makeFake({
       pause: vi.fn(async () => {
@@ -241,7 +241,7 @@ describe("Abort", () => {
   };
 
   it("confirms then aborts, then refreshes", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const client = makeFake();
     const refresh = vi.fn(async () => {});
     render(
@@ -261,7 +261,7 @@ describe("Abort", () => {
   });
 
   it("surfaces a 409 as a non-fatal warn and does not get stuck", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const client = makeFake({
       abort: vi.fn(async () => {
         throw new ApiError(409, "no task running to abort");
@@ -292,7 +292,7 @@ describe("Abort", () => {
   });
 
   it("cancel dismisses the dialog without calling abort", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const client = makeFake();
     render(
       <Harness client={client} projects={[project()]} leasesByProject={lease} refresh={vi.fn(async () => {})} />,
@@ -308,7 +308,7 @@ describe("Approve", () => {
   const heldTask = task({ id: "t1", status: "awaiting-approval", approved: false });
 
   it("confirms then approves task-level with the task id", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const client = makeFake();
     const refresh = vi.fn(async () => {});
     render(
@@ -334,7 +334,7 @@ describe("Approve", () => {
   });
 
   it("project-level approve auto-resolves a unique awaiting task (no task id)", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const client = makeFake();
     render(
       <Harness
@@ -352,7 +352,7 @@ describe("Approve", () => {
   });
 
   it("surfaces a 409 (ambiguous/none awaiting) clearly", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const client = makeFake({
       approve: vi.fn(async () => {
         throw new ApiError(409, "multiple tasks awaiting approval; specify task_id");

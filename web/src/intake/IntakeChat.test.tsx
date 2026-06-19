@@ -66,7 +66,7 @@ function fakeClient(over: Partial<IntakeClient> = {}): IntakeClient {
 
 describe("IntakeChat", () => {
   it("distill renders the proposed scenario (id/lane/tier/holdout) and fills the YAML", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const client = fakeClient();
     render(
       <IntakeChat
@@ -93,7 +93,7 @@ describe("IntakeChat", () => {
   });
 
   it("editing the YAML then Approve posts the EDITED yaml and shows created ids", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const client = fakeClient();
     render(
       <IntakeChat
@@ -120,7 +120,7 @@ describe("IntakeChat", () => {
   });
 
   it("a 422 distill shows the add-more-detail guidance and clears the spinner", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const client = fakeClient({
       distill: vi.fn(() =>
         Promise.reject(
@@ -146,7 +146,7 @@ describe("IntakeChat", () => {
   });
 
   it("an invalid-YAML 400 from intake shows the inline parse error", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const client = fakeClient({
       intake: vi.fn(() =>
         Promise.reject(new ApiError(400, "yaml: line 2: mapping values not allowed")),
@@ -172,7 +172,7 @@ describe("IntakeChat", () => {
   });
 
   it("a 401 from distill triggers onUnauthorized", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onUnauthorized = vi.fn();
     const client = fakeClient({
       distill: vi.fn(() => Promise.reject(new ApiError(401, "unauthorized"))),

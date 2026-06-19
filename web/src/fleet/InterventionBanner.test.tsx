@@ -85,7 +85,7 @@ describe("InterventionBanner", () => {
   });
 
   it("Approve from the banner confirms then calls approve with the row's task", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const client = fake();
     render(<Harness events={[ev({ project: "p1", task: "t1" })]} client={client} />);
 
@@ -96,7 +96,7 @@ describe("InterventionBanner", () => {
   });
 
   it("Pause from the banner is immediate", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const client = fake();
     render(<Harness events={[ev({})]} client={client} />);
     await user.click(screen.getByRole("button", { name: /^pause$/i }));
@@ -105,7 +105,7 @@ describe("InterventionBanner", () => {
   });
 
   it("the project link focuses the project", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onSelectProject = vi.fn();
     render(
       <Harness
