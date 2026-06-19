@@ -137,6 +137,11 @@ also serves the cockpit's history backfill (`GET /events?kind=diff`), the intake
 with no re-develop, `outcome=approved-merged`). The token rides only the `Authorization`
 header / WS `?token=` query — never the webview.
 
+> Verification level: only the **DiffObserver check is an automated, committed test**
+> (`src/diffObserver.live.test.ts` — fails if no live diff arrives). The `/events` backfill, the
+> `/distill`, and the `/approve`→merge checks above are **manual runbook verifications** (run by the
+> author against the live stack), not committed automated tests.
+
 ## Go carve-out
 
 `editor/go.mod` is a nested, **config-only** Go module (no Go source). It makes the

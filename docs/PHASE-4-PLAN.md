@@ -281,9 +281,13 @@ dalga başlarında.
     `POST /projects/{id}/distill` GERÇEK claude ile konuşmayı önerilen senaryoya çevirdi (A-1/T1, ~8s). **G4
     approve→merge** — T3 task governance ile HELD (`awaiting-approval`) → `POST /approve` (editörün kontrol yolu,
     HTTP 200 `approved_task`) → daemon `outcome=approved-merged` (preserved verified branch'i RE-DEVELOP'SUZ merge) →
-    done. Editör live test GATE-SAFE (env yoksa skip; editor gate typecheck/lint/vitest/esbuild YEŞİL). Native-render-of-
-    real-content zaten katmanlı kanıtlı: unit (`renderDiffDocument` patch + content-provider real body) + electron smoke
-    (gerçek VS Code `conductor-diff` doc + `diff` dili). Runbook: `editor/README` "Live e2e check (4E)".
+    done. **DOĞRULAMA SEVİYESİ (dürüstlük — closing review Lens-3): G1 = COMMITTED env-gated OTOMATİK test
+    (`diffObserver.live.test.ts`; diff gelmezse timeout→FAIL, sahte-yeşil yok). G2/G3/G4 = orchestrator tarafından CANLI
+    ELDEN doğrulandı (curl `/events` + `/distill` + daemon approve→merge; runbook `editor/README` "Live e2e check (4E)") —
+    committed otomatik test/captured-artifact DEĞİL (manuel Rule#9 koşumu).** Editör live test GATE-SAFE (env yoksa skip;
+    editor gate typecheck/lint/vitest/esbuild YEŞİL). Native-render-of-real-content zaten katmanlı kanıtlı: unit
+    (`renderDiffDocument` patch + content-provider real body) + electron smoke (gerçek VS Code `conductor-diff` doc + `diff`
+    dili). Runbook: `editor/README` "Live e2e check (4E)".
   **→ 4E TAMAM. Editör GERÇEK uçtan-uca döngüyü (intake-distill → develop → verify → native-diff → approve → merge)
   gözlemleyip kontrol ediyor; KALAN (önceki kayıttaki "daemon gerçek task işleyince görülür") artık KANITLANDI.**
   **SIRADAKİ: 4D fork-repo paketleme — `everva/conductor-editor` private repo REZERVE edildi (kullanıcı onayı + platform

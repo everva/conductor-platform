@@ -32,6 +32,8 @@ describe.skipIf(!GATEWAY || !TOKEN)("DiffObserver live integration (CP_LIVE_GATE
   it(
     "receives a live KindDiff from the running gateway and distills it token-free",
     async () => {
+      // skipIf guarantees a non-empty token here, so the leak assertion below is meaningful.
+      expect(TOKEN).toBeTruthy();
       let observer: DiffObserver | undefined;
       const firstDiff = new Promise<TaskDiff>((resolve) => {
         observer = new DiffObserver({
