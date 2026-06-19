@@ -304,9 +304,17 @@ dalga başlarında.
     Editor.app`** (1.3G): `CFBundleIdentifier=ai.everva.conductor-editor`, `CFBundleName=Conductor`, executable `Conductor`,
     `bin/code --version`→`1.122.1`/`8761a556`/arm64 (binary GERÇEKTEN koşuyor) + built-in `everva.conductor-editor`
     (`dist/extension.js` mevcut) inject edildi. `build/verify-app.sh` PASS (branding + built-in deterministik gate;
-    all.sh package + CI'a bağlı — sahte-yeşil yok). **→ 4D-0 (fork+build) + 4D-1 (built-in inject) + 4D-2 (rebrand) TAMAM +
-    GERÇEK branded app'te uçtan-uca doğrulandı.**
+    all.sh package + CI'a bağlı — sahte-yeşil yok).
+  - ✅ **RUNTIME DOĞRULANDI** (fork main `9cdf0bb`; `build/verify-runtime.sh` PASS): packaged app'i direct-exec ile boot
+    ettim → exthost log'unda `_doActivateExtension everva.conductor-editor (onStartupFinished)` — **built-in conductor
+    extension GERÇEK fork editörde AKTİVE oluyor** (vscode.git/github yanında); ayrıca rebrand RUNTIME'da canlı
+    (`~/.conductor-editor-shared` kullanılıyor). Reproducible (verify-runtime.sh). NOT: ad-hoc-signed/unsigned olduğu için
+    `open` LaunchServices'e takılır → direct-exec veya sağ-tık→Aç gerekir (4D-3 imzalamaya kadar). **→ 4D-0 + 4D-1 + 4D-2
+    TAMAM, GERÇEK branded app'te STATİK + RUNTIME uçtan-uca doğrulandı (binary koşuyor + branded + built-in AKTİVE).**
+  - ✅ **Faz-4 KAPANIŞ adversarial review** (`docs/REVIEW-FAZ4-CLOSING-FINDINGS.md`, develop `30dc94b`): 3 paralel mercek
+    (frozen-kontratlar / token-disiplini+supply-chain / genuineness) — 0 crit/high. Frozen kontratlar INTACT (additive,
+    git-doğrulandı); token disiplini SOUND; testler GENUINE (sahte-yeşil yok). Düzeltildi: M1 vsce exact-pin + M2 zorunlu
+    commit-pin (fork) + dürüstlük (G2/G3/G4 = manuel runbook doğrulaması, otomatik test DEĞİL — ledger+README'de etiketlendi).
   - **KALAN (follow-up):** 4D-3 imzalı/notarize release (Apple Developer cert — kullanıcı girdisi gerekir; CI workflow
-    taslağı hazır, unsigned artifact) + rebrand-polish (CLI bin `code`→`conductor` derin-build-touch; app `.icns` ikonu) +
-    fork GUI activation eyeball (display gerekir; extension aktivasyonu zaten electron-smoke'ta KANITLI, aynı bundle).
-    **SIRADAKİ: Faz-4 KAPANIŞ adversarial review.**
+    taslağı hazır, unsigned artifact) + rebrand-polish (CLI bin `code`→`conductor` derin-build-touch; app `.icns` ikonu —
+    tasarlanmış asset gerek). **→ FAZ-4 İŞLEVSEL OLARAK TAMAM (4A→4E + 4D-0/1/2); kalan yalnız imzalama+kozmetik cila.**
