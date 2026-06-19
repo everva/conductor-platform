@@ -161,7 +161,24 @@ dalga başlarında.
   bundle eder (opsiyonel native dep'ler `bufferutil`/`utf-8-validate` external). Bağımsız doğrulama (Rule#9): yerel gate
   yeşil (tsc + eslint + **68 vitest**: bridge protocol 6 / hostBridge 15 / webviewTransport 10 + önceki 37 + esbuild
   142kb ws-bundled) + root go-carve-out hâlâ geçiyor + hostBridge güvenlik incelemesi. SSRF-guard testi + token-leak guard
-  testi (her postMessage argümanı toplanır, sentinel hiçbirinde yok — fetch-throw dahil). **Sıradaki: 4B-3 (cockpit
-  panelleri: webview React bundle = 3B bileşenleri 4A-2 barrel reuse, bridge transport'ları inject; gerçek gateway'e
-  bağlanıp canlı veri). NOT: 4B-3 webview build'i web/src/cockpit.ts'i tüketecek → fiziksel paylaşım (ADR-0028 ertelenen
-  workspace) kararı burada netleşir.**
+  testi (her postMessage argümanı toplanır, sentinel hiçbirinde yok — fetch-throw dahil). **4B-2 TAMAM.**
+- ⚙️ **CI-stabilize** (`6ac59fd`): web vitest paylaşılan self-hosted runner'da CPU-contention'da flake etti (6 etkileşim
+  testi 5000ms default timeout'u aştı; AYNI suite yerelde + önceki 4A-2/4B-1 koşularında geçmişti; 4B-2 editor-only =
+  regresyon değil). Düzeltme: `vitest.config.ts` testTimeout/hookTimeout=20000 (yüklü runner'a pay; assertion'lar
+  değişmedi — sahte-yeşil değil) + `userEvent.setup({delay:null})` (ağır YAML/conversation fill'lerinde gerçek hız).
+- ✅ **4B-3 cockpit panelleri** (`editor/webview/`, ADR-0029): fork webview React bundle = **3B bileşenleri reuse**.
+  Paylaşım = **cross-dir source alias** (kullanıcı kararı, ADR-0029): editor webview build'i `web/src/cockpit.ts`'i
+  `@cockpit` alias ile KAYNAK import eder; **web/ byte-byte DOKUNULMADI** (git status web/ boş). `webview/main.tsx`
+  FORK modu mount: `token=""`, üç `make*Client = () => new ApiClient({transport: http})` (4B-2 köprü HTTP transport'u),
+  `eventTransport = events` (4A-2: eventTransport varsa enabled, token'sız çalışır), `onUnauthorized` token-free.
+  `tsconfig.webview.json` (DOM+react-jsx, Bundler res + allowImportingTsExtensions, `@cockpit` alias) → webview typecheck
+  alias'ı çözüp **FleetDashboard prop'larını köprü transport'larıyla TİP-UYUMLU** doğrular (ADR-0029 tip-kanıtı). esbuild
+  2. bundle (browser/iife, React+CSS bundle, jsx automatic). `extension.ts` FleetViewProvider artık bundle'ı yükler:
+  `localResourceRoots=dist/webview`, sıkı CSP (`default-src 'none'`, `script-src 'nonce'`, **`connect-src 'none'`** —
+  webview KENDİ ağını yapamaz, veri yalnız host köprüsünden → token webview'e GİRMEZ), `asWebviewUri`+nonce'lu
+  script/style. Bağımsız doğrulama (Rule#9): yerel gate yeşil (host tsc + **webview tsc alias-çözümlü** + eslint +
+  **74 vitest** + esbuild İKİ bundle: host 143kb + webview 351kb = React+3B-cockpit+CSS `web/src`'ten — cross-dir reuse
+  build kanıtı) + web/ dokunulmadı + go build geçiyor + webviewHtml CSP testi + main.tsx/CSP incelemesi. CANLI render
+  (extension yüklenir→gerçek gateway→canlı paneller) = opt-in/manuel kabul (ADR-0029; electron+gateway gerekir, headless
+  CI'da değil). **4B DALGASI (0..3) DETERMİNİSTİK TAMAM. Sıradaki: 4C (editör-native: 4C-0 diff-kaynağı kararı → native
+  diff / inline komutlar / bildirim).**
