@@ -113,4 +113,14 @@ dalga başlarında.
   DistillNoScenariosError) + event callbacks/close-on-unmount. Bağımsız doğrulama (Rule#9): yerel gate yeşil
   (tsc -b + eslint + 84 vitest) + CI self-hosted'da TAM YEŞİL (Go job 50s + web job 1m18s, **Playwright hard-gate dahil**
   — gerçek-tarayıcı default-transport davranış-eşitliği kanıtı). Yolda 2 gate-hatası yakalandı: exactOptionalPropertyTypes
-  (`req.contentType` guard) + kullanılmayan `_url` param. **Sıradaki: Faz-4 → 4A-2 (paylaşılabilir UI).**
+  (`req.contentType` guard) + kullanılmayan `_url` param.
+- ✅ **4A-2 paylaşılabilir UI** (ADR-0028): (a) transport injection bileşen ağacının YUKARISINA taşındı — `eventTransport?:
+  EventTransport` `useFleet`/`useEventFeed`/`EventStreamView`/`FleetDashboard`'a threaded (additive, conditional-spread);
+  (b) **readiness token'dan ayrıştı** — `enabled` default'u `opts.enabled ?? (token.length>0)`, iç kapı `!enabled`
+  (DAVRANIŞ KORUNUR: her mevcut çağrı byte-for-byte; fork `enabled:true`+boş-token ile token'sız mount); (c) açık
+  **barrel `web/src/cockpit.ts`** (mount yüzeyi + iki transport seam + domain tipleri; iki mount modu dokümante;
+  `events.gen.ts` tek-kaynak), App.tsx barrel'ı tüketir (web = ilk tüketici); (d) ESLint sınır kilidi (paylaşılan UI
+  `src/{fleet,events,intake,api}` ⊥ `auth`/`main`; negatif-test edildi). Fiziksel workspace paketi ERTELENDİ (4B,
+  `editor/` gelince). Bağımsız doğrulama (Rule#9): yerel gate yeşil (tsc -b + eslint + **86 vitest**, +1 dosya
+  `cockpit.test.tsx` = token'sız fork-mount kanıtı: injected REST+EventTransport, gerçek socket YOK), mevcut 84 test
+  DEĞİŞMEDEN geçti. **4A DALGASI TAMAM. Sıradaki: Faz-4 → 4B (VS Code extension, `editor/`).**
