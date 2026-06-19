@@ -92,10 +92,18 @@ function toFleetError(err: unknown): FleetError {
   return { message: "Could not reach the gateway.", status: null, unauthorized: false };
 }
 
+// Default read client. MODULE-SCOPE on purpose so its identity is STABLE across
+// renders. An inline default (`makeClient = (t) => new ApiClient(...)`) is a fresh
+// function every render, which would make the `client` useMemo and `refresh`
+// useCallback below change identity every render, re-run the poll effect every
+// render, and fire a refresh each time → a request storm a fast gateway turns into
+// ERR_INSUFFICIENT_RESOURCES. A stable default keeps the poll on its interval.
+const defaultMakeClient = (t: string): FleetClient => new ApiClient({ token: t });
+
 export function useFleet(opts: UseFleetOptions): FleetSnapshot {
   const {
     token,
-    makeClient = (t) => new ApiClient({ token: t }),
+    makeClient = defaultMakeClient,
     refreshIntervalMs = 5000,
     selectedProjectId,
     eventTransport,

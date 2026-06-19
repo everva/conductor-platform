@@ -113,6 +113,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -126,6 +127,40 @@ async function flush(): Promise<void> {
 }
 
 describe("useFleet", () => {
+  // Regression (caught in live verification): the DEFAULT makeClient must be a STABLE
+  // module-scope reference. An inline default built a fresh ApiClient every render, so
+  // `client`/`refresh` changed identity every render, the poll effect re-ran every
+  // render, and it fired an unbounded request storm (the browser hit
+  // ERR_INSUFFICIENT_RESOURCES and the UI flickered). With NO makeClient passed (the
+  // production web path) refresh must be referentially stable across re-renders. fetch
+  // is stubbed to never resolve so the only thing under test is render-driven
+  // (in)stability, not network behavior. (The other tests pass a fake that returns the
+  // SAME object, which masked this — the bug only bites when makeClient mints a fresh
+  // client per call, i.e. the default.)
+  it("uses a stable default client → refresh is referentially stable across renders (no storm)", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    const seen: Array<FleetSnapshot["refresh"]> = [];
+    function Probe() {
+      const fleet = useFleet({ token: "tkn" }); // DEFAULT makeClient (production web path)
+      seen.push(fleet.refresh);
+      return null;
+    }
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<Probe />);
+    });
+    await act(async () => {
+      view.rerender(<Probe />);
+    });
+    await act(async () => {
+      view.rerender(<Probe />);
+    });
+    expect(seen.length).toBeGreaterThanOrEqual(3);
+    // A stable default keeps one refresh identity; the pre-fix inline default produced a
+    // new one on every render (the storm's root cause).
+    expect(new Set(seen).size).toBe(1);
+  });
+
   it("aggregates status, projects, hosts, and per-project tasks", async () => {
     const client = makeFakeClient();
     render(<Harness client={client} onSnapshot={(s) => (snapshot = s)} />);
