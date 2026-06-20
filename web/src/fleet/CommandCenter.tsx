@@ -56,11 +56,11 @@ export function CommandCenter({
         <span className="cc-strip-right">
           {hosts.map((h) => (
             <span key={h.id} className="cc-host-pill" title={h.capabilities.join(", ")}>
-              ● {h.id}
+              <span className="cc-dot" /> {h.id}
             </span>
           ))}
           {onNewWork && (
-            <button type="button" className="fleet-btn primary" onClick={onNewWork}>
+            <button type="button" className="cc-newwork" onClick={onNewWork}>
               + New work
             </button>
           )}
@@ -79,7 +79,7 @@ export function CommandCenter({
             >
               <div className="cc-col-head">
                 <span>{col.label}</span>
-                <span className="muted">{cards.length}</span>
+                <span className="cc-col-count">{cards.length}</span>
               </div>
               <div className="cc-col-body">
                 {cards.length === 0 ? (
@@ -116,13 +116,18 @@ function BoardCardView({ card, controls, onSelectProject }: BoardCardViewProps) 
   const busy = controls?.isTaskBusy(t.project_id, t.id) ?? false;
   const select = () => onSelectProject?.(t.project_id);
 
-  const cls = [
-    "cc-card",
-    held ? "cc-card-attn" : "",
-    blocked ? "cc-card-blocked" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  // The status accent rail follows the card's lifecycle: held → amber, blocked →
+  // red, running (a leasing host) → blue, done → green, else a neutral ready.
+  const kind = held
+    ? "attn"
+    : blocked
+      ? "blocked"
+      : card.host
+        ? "running"
+        : t.status === "done"
+          ? "done"
+          : "ready";
+  const cls = `cc-card cc-card-${kind}`;
 
   return (
     <article
@@ -145,7 +150,11 @@ function BoardCardView({ card, controls, onSelectProject }: BoardCardViewProps) 
       <div className="cc-card-proj">{t.project_id}</div>
       <div className="cc-card-meta">
         {t.lane && <span className="cc-card-lane">{t.lane}</span>}
-        {card.host && <span className="cc-host-tag">● {card.host}</span>}
+        {card.host && (
+          <span className="cc-host-tag">
+            <span className="cc-dot cc-dot-live" /> {card.host}
+          </span>
+        )}
         {card.livePhase && <span className="cc-phase">▸ {card.livePhase}</span>}
       </div>
       {card.diff && (
@@ -162,7 +171,7 @@ function BoardCardView({ card, controls, onSelectProject }: BoardCardViewProps) 
           {held && controls && (
             <button
               type="button"
-              className="fleet-btn primary"
+              className="cc-btn cc-btn-approve"
               disabled={busy}
               onClick={() => controls.requestApprove(t.project_id, t.id)}
             >
@@ -170,7 +179,7 @@ function BoardCardView({ card, controls, onSelectProject }: BoardCardViewProps) 
             </button>
           )}
           {onSelectProject && (
-            <button type="button" className="fleet-btn" onClick={select}>
+            <button type="button" className="cc-btn" onClick={select}>
               Review ▸
             </button>
           )}

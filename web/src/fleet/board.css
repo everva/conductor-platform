@@ -1,175 +1,303 @@
-/* Command Center board styles (redesign E1). Status-Kanban: four lifecycle
-   columns of task cards, the director's "Needs Review" lane highlighted. Palette
-   echoes fleet.css / the dark shell; native VS-Code theming is an E4 polish item. */
+/* Command Center board — premium agent-native surface (redesign E1, visual pass).
+   Layered dark, the Conductor indigo→violet brand accent, soft depth + hover-lift,
+   status-accented cards, a live pulse for running work. Echoes the dark shell but
+   aims for a modern command-center feel (not a flat ops table). */
 
 .cc {
+  --cc-bg: #14161c;
+  --cc-surface: #1a1d25;
+  --cc-surface-2: #1e2230;
+  --cc-line: rgba(255, 255, 255, 0.07);
+  --cc-line-soft: rgba(255, 255, 255, 0.045);
+  --cc-text: #eef1f7;
+  --cc-text-2: #aab2c0;
+  --cc-text-3: #79828f;
+  --cc-brand: #8b5cf6;
+  --cc-brand-2: #6366f1;
+  --cc-green: #34d399;
+  --cc-blue: #60a5fa;
+  --cc-amber: #fbbf24;
+  --cc-red: #f87171;
   display: flex;
   flex-direction: column;
-  gap: 0.85rem;
-  min-height: 0;
+  gap: 1rem;
+  color: var(--cc-text);
 }
 
-/* --- top strip: the counts a director scans first --- */
+/* --- top strip: the counts a director scans first, as chips --- */
 .cc-strip {
   display: flex;
   align-items: center;
-  gap: 1.25rem;
+  gap: 0.6rem;
   flex-wrap: wrap;
-  padding: 0.6rem 0.9rem;
-  border: 1px solid #2a2f37;
-  border-radius: 0.5rem;
-  background: #1b1e24;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--cc-line);
+  border-radius: 0.85rem;
+  background: linear-gradient(180deg, #1d212b, #181b22);
 }
 
 .cc-stat {
-  font-size: 0.9rem;
-  color: #c7ced8;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  color: var(--cc-text-2);
+  padding: 0.3rem 0.7rem;
+  border-radius: 0.55rem;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid transparent;
 }
 .cc-stat b {
-  font-size: 1.15rem;
-  margin-right: 0.25rem;
-  color: #e8edf3;
+  color: var(--cc-text);
+  font-size: 1.05rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
 }
-.cc-attn b {
-  color: #ffcf5c;
+.cc-stat.cc-attn {
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.25);
+  color: var(--cc-amber);
+}
+.cc-stat.cc-attn b {
+  color: #fcd34d;
 }
 
 .cc-strip-right {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.55rem;
   flex-wrap: wrap;
 }
 .cc-host-pill {
-  font-size: 0.78rem;
-  color: #8fd6a0;
-  border: 1px solid #2a2f37;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.76rem;
+  color: var(--cc-text-2);
+  border: 1px solid var(--cc-line);
   border-radius: 1rem;
-  padding: 0.1rem 0.55rem;
+  padding: 0.18rem 0.6rem 0.18rem 0.55rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* a small status dot; the "live" variant pulses (running work) */
+.cc-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--cc-green);
+  flex: none;
+}
+.cc-dot-live {
+  box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6);
+  animation: cc-pulse 1.9s ease-out infinite;
+}
+@keyframes cc-pulse {
+  70% { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+}
+
+.cc-newwork {
+  border: none;
+  border-radius: 0.55rem;
+  padding: 0.42rem 0.85rem;
+  font-size: 0.83rem;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+  background: linear-gradient(135deg, var(--cc-brand-2), var(--cc-brand));
+  box-shadow: 0 1px 3px rgba(99, 102, 241, 0.45);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+}
+.cc-newwork:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.5);
+  filter: brightness(1.06);
 }
 
 /* --- board: four columns --- */
 .cc-board {
   display: grid;
-  grid-template-columns: repeat(4, minmax(180px, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(4, minmax(210px, 1fr));
+  gap: 0.85rem;
   align-items: start;
 }
 
 .cc-col {
-  border: 1px solid #2a2f37;
-  border-radius: 0.5rem;
-  background: #16191e;
+  border: 1px solid var(--cc-line-soft);
+  border-radius: 0.85rem;
+  background: rgba(255, 255, 255, 0.014);
   display: flex;
   flex-direction: column;
-  min-height: 8rem;
+  min-height: 7rem;
 }
-/* the director's action lane stands out */
 .cc-col-needs-review {
-  border-color: #5a4a1f;
-  background: #1c1a14;
+  border-color: rgba(251, 191, 36, 0.22);
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.05), rgba(255, 255, 255, 0.012) 40%);
 }
 
 .cc-col-head {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 0.5rem 0.7rem;
-  font-size: 0.78rem;
+  justify-content: space-between;
+  padding: 0.7rem 0.8rem 0.55rem;
+  font-size: 0.7rem;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #9aa4b2;
-  border-bottom: 1px solid #2a2f37;
+  letter-spacing: 0.09em;
+  font-weight: 650;
+  color: var(--cc-text-3);
 }
 .cc-col-needs-review .cc-col-head {
-  color: #ffcf5c;
+  color: var(--cc-amber);
+}
+.cc-col-count {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--cc-text-2);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 1rem;
+  padding: 0.05rem 0.5rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .cc-col-body {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.55rem;
   padding: 0.5rem;
 }
 .cc-col-empty {
-  color: #5b636e;
+  color: #4d555f;
   text-align: center;
-  padding: 0.75rem 0;
+  padding: 1rem 0;
   margin: 0;
+  font-size: 0.85rem;
 }
 
 /* --- card --- */
 .cc-card {
-  border: 1px solid #2a2f37;
-  border-radius: 0.4rem;
-  background: #1b1e24;
-  padding: 0.55rem 0.6rem;
+  position: relative;
+  border: 1px solid var(--cc-line);
+  border-radius: 0.65rem;
+  background: linear-gradient(180deg, #20242e, #1a1d26);
+  padding: 0.65rem 0.7rem 0.65rem 0.85rem;
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 0.45rem;
+  transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
 }
-.cc-card:hover,
+.cc-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(139, 92, 246, 0.5);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+}
 .cc-card:focus-visible {
-  border-color: #3d6fb4;
-  outline: none;
+  outline: 2px solid var(--cc-brand);
+  outline-offset: 2px;
 }
-.cc-card-attn {
-  border-left: 3px solid #ffcf5c;
+/* left status accent rail */
+.cc-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55rem;
+  bottom: 0.55rem;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--cc-text-3);
 }
-.cc-card-blocked {
-  border-left: 3px solid #e0635a;
-}
+.cc-card-running::before { background: linear-gradient(var(--cc-blue), #3b82f6); }
+.cc-card-attn::before { background: linear-gradient(var(--cc-amber), #f59e0b); }
+.cc-card-blocked::before { background: linear-gradient(var(--cc-red), #dc2626); }
+.cc-card-done::before { background: linear-gradient(var(--cc-green), #10b981); }
 
 .cc-card-top {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: baseline;
+  gap: 0.5rem;
 }
 .cc-card-id {
   font-weight: 600;
-  color: #e8edf3;
+  color: var(--cc-text);
+  font-size: 0.9rem;
 }
 .cc-card-tier {
-  font-size: 0.72rem;
-  color: #9aa4b2;
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: var(--cc-text-3);
+  border: 1px solid var(--cc-line);
+  border-radius: 0.3rem;
+  padding: 0.04rem 0.34rem;
 }
 .cc-card-proj {
-  font-size: 0.82rem;
-  color: #c7ced8;
+  font-size: 0.8rem;
+  color: var(--cc-text-2);
 }
 .cc-card-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
-  font-size: 0.74rem;
-  color: #9aa4b2;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.72rem;
+  color: var(--cc-text-3);
+}
+.cc-card-lane {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 0.3rem;
+  padding: 0.04rem 0.4rem;
 }
 .cc-host-tag {
-  color: #8fd6a0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  color: var(--cc-green);
 }
 .cc-phase {
-  color: #6db3e0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: #a78bfa;
 }
+
 .cc-card-diff {
-  font-size: 0.74rem;
+  font-size: 0.72rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-variant-numeric: tabular-nums;
 }
-.cc-add {
-  color: #8fd6a0;
-}
-.cc-del {
-  color: #e0938c;
-}
+.cc-add { color: var(--cc-green); }
+.cc-del { color: var(--cc-red); }
 
 .cc-card-actions {
   display: flex;
-  gap: 0.4rem;
-  margin-top: 0.15rem;
+  gap: 0.45rem;
+  margin-top: 0.1rem;
 }
+.cc-btn {
+  font-size: 0.78rem;
+  font-weight: 600;
+  border-radius: 0.45rem;
+  padding: 0.32rem 0.7rem;
+  cursor: pointer;
+  border: 1px solid var(--cc-line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--cc-text);
+  transition: filter 0.12s ease, transform 0.12s ease;
+}
+.cc-btn:hover { filter: brightness(1.15); }
+.cc-btn-approve {
+  border: none;
+  color: #052e1f;
+  background: linear-gradient(135deg, #34d399, #10b981);
+}
+.cc-btn-approve:disabled { opacity: 0.6; cursor: default; }
 
 /* Narrow viewports (a webview side panel): stack the columns. */
-@media (max-width: 720px) {
+@media (max-width: 760px) {
   .cc-board {
     grid-template-columns: 1fr;
   }
