@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/everva/conductor-platform/internal/conductor"
+	"github.com/everva/conductor-platform/internal/gitsafe"
 	"github.com/everva/conductor-platform/internal/intake"
 	"github.com/everva/conductor-platform/internal/statestore"
 	"gopkg.in/yaml.v3"
@@ -75,14 +76,19 @@ func (s *apiServer) handleOnboard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "repo is required")
 		return
 	}
-	// Reject a repo that could be mis-parsed as a git CLI option (review F4): the
-	// daemon's provisioner later runs `git clone <repo>` with repo as a positional
-	// arg WITHOUT a `--` guard, so a value starting with "-" (e.g. "--upload-pack=…")
-	// would be argument-injected into git. Also reject embedded whitespace/control
-	// chars. This is post-auth defense-in-depth; it still allows owner/name, https
-	// URLs, and absolute local paths.
-	if strings.HasPrefix(req.Repo, "-") || strings.ContainsAny(req.Repo, " \t\r\n") {
+	// Reject a repo that could be mis-parsed as a git CLI option: the daemon's
+	// provisioner runs `git clone -- <repo>` with repo as a positional, so a value
+	// starting with "-" (e.g. "--upload-pack=<cmd>") must never reach it. gitsafe also
+	// rejects embedded whitespace/control chars. Defense-in-depth (the provisioner's
+	// "--" is the exec-site guard); still allows owner/name, https URLs, abs paths.
+	if !gitsafe.ValidArg(req.Repo) {
 		writeError(w, http.StatusBadRequest, "invalid repo")
+		return
+	}
+	// An explicit base branch also flows to `git fetch`/`git worktree` as a
+	// positional, so it gets the same guard; an empty one defaults below, safely.
+	if req.BaseBranch != "" && !gitsafe.ValidArg(req.BaseBranch) {
+		writeError(w, http.StatusBadRequest, "invalid base_branch")
 		return
 	}
 	baseBranch := req.BaseBranch

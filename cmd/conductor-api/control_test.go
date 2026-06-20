@@ -128,6 +128,26 @@ func TestOnboardInvalidRepo400(t *testing.T) {
 	}
 }
 
+// TestOnboardInvalidBaseBranch400 proves an EXPLICIT base_branch that could be
+// mis-parsed as a git option (leading "-") or carries whitespace/control chars is
+// rejected before it reaches the daemon's `git fetch`/`git worktree`. An empty
+// base_branch is fine — it defaults.
+func TestOnboardInvalidBaseBranch400(t *testing.T) {
+	s, _ := emptyServer()
+	for _, branch := range []string{"--upload-pack=evil", "-x", "de velop", "develop\nx"} {
+		bodyBytes, _ := json.Marshal(map[string]string{"repo": "owner/ok", "base_branch": branch})
+		rec := doBody(t, s, http.MethodPost, "/projects", bearer(), string(bodyBytes))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("base_branch %q: status = %d, want 400; body=%s", branch, rec.Code, rec.Body.String())
+		}
+	}
+	// An empty base_branch defaults and is accepted.
+	rec := doBody(t, s, http.MethodPost, "/projects", bearer(), `{"repo":"owner/defaults-ok"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("default base_branch: status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 // --- intake ---
 
 const validIntakeYAML = `id: A-1

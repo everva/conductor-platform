@@ -63,6 +63,37 @@ func TestConductorctl_Onboard_CreatesProject_Idempotent(t *testing.T) {
 	}
 }
 
+// TestConductorctl_Onboard_RejectsUnsafeArgs proves the CLI onboard rejects a repo
+// or explicit base branch that could be mis-parsed as a git option (leading "-",
+// e.g. "--upload-pack=<cmd>") or carries whitespace/control chars — matching the
+// gateway guard so a CLI onboard cannot option-inject the provisioner's git calls.
+func TestConductorctl_Onboard_RejectsUnsafeArgs(t *testing.T) {
+	ctx := context.Background()
+	a, store, _, _ := newApp(t)
+
+	for _, repo := range []string{"--upload-pack=evil", "-x", "owner/ x", "owner/x\nmalicious"} {
+		if _, err := a.onboard(ctx, repo, "develop"); err == nil {
+			t.Errorf("onboard repo %q: want error, got nil", repo)
+		}
+	}
+	for _, branch := range []string{"--upload-pack=evil", "-x", "de velop", "develop\nx"} {
+		if _, err := a.onboard(ctx, "owner/ok", branch); err == nil {
+			t.Errorf("onboard base branch %q: want error, got nil", branch)
+		}
+	}
+	// A legitimate repo + empty base (defaults) still works and persists exactly one.
+	if _, err := a.onboard(ctx, "owner/legit", ""); err != nil {
+		t.Fatalf("valid onboard: %v", err)
+	}
+	projects, err := store.ListProjects(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(projects) != 1 {
+		t.Fatalf("expected exactly one project (rejections must not persist), got %d", len(projects))
+	}
+}
+
 // richScenario renders a valid rich (ADR-0012/ADR-0018) scenario document: the
 // intake path now delegates to internal/intake, which requires title, acceptance,
 // and a repo-EXTERNAL hidden_holdout_ref (a `store://...` locator here) in addition

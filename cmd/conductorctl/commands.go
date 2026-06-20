@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/everva/conductor-platform/internal/conductor"
+	"github.com/everva/conductor-platform/internal/gitsafe"
 	"github.com/everva/conductor-platform/internal/intake"
 	"github.com/everva/conductor-platform/internal/statestore"
 )
@@ -32,6 +33,16 @@ type app struct {
 func (a *app) onboard(ctx context.Context, repo, baseBranch string) (statestore.Project, error) {
 	if repo == "" {
 		return statestore.Project{}, errors.New("onboard: repo is required")
+	}
+	// Match the gateway's guard: repo + an explicit base branch become POSITIONAL
+	// git arguments in the provisioner, so a value starting with "-" (e.g.
+	// "--upload-pack=<cmd>") or carrying whitespace/control chars must be rejected
+	// here too — otherwise a CLI onboard could option-inject `git clone`/`fetch`.
+	if !gitsafe.ValidArg(repo) {
+		return statestore.Project{}, errors.New("onboard: invalid repo")
+	}
+	if baseBranch != "" && !gitsafe.ValidArg(baseBranch) {
+		return statestore.Project{}, errors.New("onboard: invalid base branch")
 	}
 	if baseBranch == "" {
 		baseBranch = defaultBaseBranch

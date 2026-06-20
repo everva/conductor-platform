@@ -97,7 +97,11 @@ func (p *Provisioner) EnsureClone(ctx context.Context, project statestore.Projec
 	if err := os.MkdirAll(filepath.Dir(clone), 0o755); err != nil {
 		return fmt.Errorf("provisioner: prepare clone dir: %w", err)
 	}
-	if err := runGit(ctx, p.cfg.RootDir, p.gitEnv(), "clone", "--origin", "origin", project.Repo, clone); err != nil {
+	// The literal "--" ends git option parsing so project.Repo is ALWAYS a
+	// positional repository, never an option, even if it begins with "-" (defense in
+	// depth against `git clone --upload-pack=<cmd>`-style injection; onboard also
+	// validates via gitsafe). git clone accepts: clone [<options>] [--] <repo> <dir>.
+	if err := runGit(ctx, p.cfg.RootDir, p.gitEnv(), "clone", "--origin", "origin", "--", project.Repo, clone); err != nil {
 		return fmt.Errorf("provisioner: clone %q: %w", project.Repo, err)
 	}
 	if err := p.configureAuth(ctx, clone); err != nil {
