@@ -90,14 +90,10 @@ test("board is the default surface and buckets tasks into the four lifecycle col
 });
 
 test("awaiting-approval card exposes Approve; a card click focuses its project (E1 drill-in)", async ({ page }) => {
-  let approveCalls = 0;
   await signInToBoard(page);
-  await page.route("**/projects/*/approve", (route) => {
-    approveCalls += 1;
-    return route.fulfill(json({ project: "ios-app", task: "I-await" }));
-  });
 
-  // The held card offers Approve (confirm-gated, same path as TasksView).
+  // The held card offers Approve (confirm-gated, same path as TasksView; the full
+  // confirm→POST→created-ids leg is covered deterministically by the vitest suite).
   const review = column(page, "Needs Review");
   await expect(review.getByRole("button", { name: "Approve" })).toBeVisible();
 
