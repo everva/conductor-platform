@@ -75,9 +75,9 @@ describe("CommandCenter board", () => {
     expect(within(running).getByText(/host-mac/)).toBeInTheDocument();
   });
 
-  it("offers Approve on an awaiting-approval card and focuses its project on click", async () => {
+  it("offers Approve on an awaiting-approval card and opens its session on click", async () => {
     const user = userEvent.setup();
-    const onSelectProject = vi.fn();
+    const onOpenSession = vi.fn();
     const requestApprove = vi.fn();
     const controls = {
       isTaskBusy: () => false,
@@ -91,14 +91,16 @@ describe("CommandCenter board", () => {
         hosts={[]}
         recentEvents={[]}
         controls={controls}
-        onSelectProject={onSelectProject}
+        onOpenSession={onOpenSession}
       />,
     );
     await user.click(screen.getByRole("button", { name: "Approve" }));
     expect(requestApprove).toHaveBeenCalledWith("p", "T-h");
 
-    // Clicking the card body (not the action) focuses the project.
+    // Clicking the card body (not the action) drills into the task's session.
     await user.click(screen.getByText("T-h"));
-    expect(onSelectProject).toHaveBeenCalledWith("p");
+    expect(onOpenSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "T-h", project_id: "p" }),
+    );
   });
 });

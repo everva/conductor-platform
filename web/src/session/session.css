@@ -1,0 +1,266 @@
+/* Session view styles (redesign E2) — premium dark, matching the Command Center
+   board: layered surfaces, the indigo→violet brand accent, the Verifier verdict as
+   a highlighted "hero" panel (the trust differentiator), an inline colored diff. */
+
+.sv {
+  --sv-line: rgba(255, 255, 255, 0.07);
+  --sv-surface: #1a1d25;
+  --sv-text: #eef1f7;
+  --sv-text-2: #aab2c0;
+  --sv-text-3: #79828f;
+  --sv-brand: #8b5cf6;
+  --sv-green: #34d399;
+  --sv-red: #f87171;
+  --sv-amber: #fbbf24;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  color: var(--sv-text);
+}
+
+/* --- header --- */
+.sv-head {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--sv-line);
+  border-radius: 0.85rem;
+  background: linear-gradient(180deg, #1d212b, #181b22);
+}
+.sv-back {
+  border: 1px solid var(--sv-line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--sv-text-2);
+  border-radius: 0.5rem;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: filter 0.12s ease;
+}
+.sv-back:hover {
+  filter: brightness(1.2);
+}
+.sv-head-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.sv-head-id {
+  font-size: 0.74rem;
+  color: var(--sv-text-3);
+}
+.sv-head-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+.sv-head-meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.sv-tag {
+  font-size: 0.72rem;
+  color: var(--sv-text-2);
+  border: 1px solid var(--sv-line);
+  border-radius: 0.35rem;
+  padding: 0.1rem 0.45rem;
+  background: rgba(255, 255, 255, 0.03);
+}
+.sv-status-review {
+  color: var(--sv-amber);
+  border-color: rgba(251, 191, 36, 0.3);
+}
+.sv-status-blocked {
+  color: var(--sv-red);
+  border-color: rgba(248, 113, 113, 0.3);
+}
+.sv-status-done {
+  color: var(--sv-green);
+  border-color: rgba(52, 211, 153, 0.3);
+}
+
+/* --- grid + panels --- */
+.sv-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 0.85rem;
+  align-items: start;
+}
+.sv-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  min-width: 0;
+}
+.sv-panel {
+  border: 1px solid var(--sv-line);
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.014);
+  padding: 0.75rem 0.85rem;
+}
+.sv-panel-head {
+  margin: 0 0 0.6rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 650;
+  color: var(--sv-text-3);
+}
+.sv-muted {
+  color: var(--sv-text-3);
+  font-size: 0.85rem;
+}
+.sv-add { color: var(--sv-green); }
+.sv-del { color: var(--sv-red); }
+
+/* --- spec --- */
+.sv-accept {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.sv-accept li {
+  font-size: 0.88rem;
+  color: var(--sv-text);
+}
+.sv-holdout {
+  margin: 0.6rem 0 0;
+  font-size: 0.78rem;
+}
+
+/* --- Verifier verdict: the hero --- */
+.sv-verdict {
+  border-color: rgba(139, 92, 246, 0.28);
+  background: linear-gradient(180deg, rgba(139, 92, 246, 0.06), rgba(255, 255, 255, 0.012) 45%);
+}
+.sv-checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.sv-checks li {
+  display: grid;
+  grid-template-columns: 1rem auto 1fr;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+.sv-check-icon {
+  font-weight: 700;
+}
+.sv-check-pass .sv-check-icon { color: var(--sv-green); }
+.sv-check-fail .sv-check-icon { color: var(--sv-red); }
+.sv-check-name {
+  font-weight: 600;
+}
+.sv-check-evidence {
+  color: var(--sv-text-3);
+  font-size: 0.76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sv-verdict-line {
+  margin: 0.7rem 0 0;
+  font-weight: 650;
+  font-size: 0.9rem;
+}
+.sv-verdict-line.sv-pass { color: var(--sv-green); }
+.sv-verdict-line.sv-fail { color: var(--sv-amber); }
+
+/* --- activity timeline --- */
+.sv-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.sv-tl {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  font-size: 0.84rem;
+  padding-left: 0.7rem;
+  border-left: 2px solid var(--sv-line);
+}
+.sv-tl-time {
+  color: var(--sv-text-3);
+  font-size: 0.76rem;
+  flex: none;
+}
+.sv-tl-decision { border-left-color: var(--sv-brand); }
+.sv-tl-diff { border-left-color: #60a5fa; }
+.sv-tl-merge { border-left-color: var(--sv-green); }
+.sv-tl-intervention-needed { border-left-color: var(--sv-amber); }
+
+/* --- diff --- */
+.sv-difffiles {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+}
+.sv-difffiles li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.sv-difffile-status {
+  width: 1rem;
+  color: var(--sv-text-3);
+  font-weight: 700;
+}
+.sv-patch {
+  margin: 0;
+  padding: 0.6rem 0.7rem;
+  background: #121419;
+  border: 1px solid var(--sv-line);
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  max-height: 22rem;
+}
+.sv-patch div {
+  white-space: pre;
+}
+.sv-diff-add { color: #7ee0a0; background: rgba(52, 211, 153, 0.08); }
+.sv-diff-del { color: #f0938c; background: rgba(248, 113, 113, 0.08); }
+.sv-diff-hunk { color: #a78bfa; }
+.sv-diff-meta { color: var(--sv-text-3); }
+
+/* --- actions --- */
+.sv-actions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--sv-line);
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.014);
+}
+.sv-error {
+  color: var(--sv-red);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 860px) {
+  .sv-grid {
+    grid-template-columns: 1fr;
+  }
+}

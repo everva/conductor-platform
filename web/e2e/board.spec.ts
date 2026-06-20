@@ -57,6 +57,9 @@ async function signInToBoard(page: Page) {
     const pid = route.request().url().match(/\/projects\/([^/]+)\/tasks/)?.[1] ?? "";
     return route.fulfill(json(TASKS_BY_PROJECT[pid] ?? []));
   });
+  // The session drill-in fetches these; empty is fine for the board-level tests.
+  await page.route("**/projects/*/scenarios", (r) => r.fulfill(json([])));
+  await page.route("**/events*", (r) => r.fulfill(json([])));
   await page.goto("/");
   await page.getByLabel(/api token/i).fill("test-token");
   await page.getByRole("button", { name: /sign in/i }).click();
@@ -89,7 +92,7 @@ test("board is the default surface and buckets tasks into the four lifecycle col
   await page.screenshot({ path: "test-results/command-center-board.png", fullPage: true });
 });
 
-test("awaiting-approval card exposes Approve; a card click focuses its project (E1 drill-in)", async ({ page }) => {
+test("awaiting-approval card exposes Approve; a card click drills into its session", async ({ page }) => {
   await signInToBoard(page);
 
   // The held card offers Approve (confirm-gated, same path as TasksView; the full
@@ -97,8 +100,7 @@ test("awaiting-approval card exposes Approve; a card click focuses its project (
   const review = column(page, "Needs Review");
   await expect(review.getByRole("button", { name: "Approve" })).toBeVisible();
 
-  // Clicking a card body focuses its project — the E1 drill-in switches to the Fleet
-  // view for that project (E2 replaces this with the full session view).
+  // Clicking a card body drills into that task's session detail view (E2).
   await review.getByText("I-await").click();
-  await expect(page.getByRole("tab", { name: /^fleet$/i })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("region", { name: /^session$/i })).toBeVisible();
 });

@@ -28,7 +28,10 @@ import { EventStreamView } from "../events/EventStreamView.tsx";
 import type { HistoryLoader } from "../events/useEventFeed.ts";
 import { IntakeChat } from "../intake/IntakeChat.tsx";
 import type { IntakeClient } from "../intake/IntakeChat.tsx";
+import { SessionView } from "../session/SessionView.tsx";
+import type { ScenarioClient } from "../session/SessionView.tsx";
 import { ApiClient } from "../api/client.ts";
+import type { Task } from "../api/types.ts";
 import type { EventTransport } from "../api/useEventStream.ts";
 import "./fleet.css";
 
@@ -49,6 +52,10 @@ export interface FleetDashboardProps {
   // blocks a direct fetch, so without this the Events tab shows "Could not reach the
   // gateway". Web mode omits it → EventStreamView's default token ApiClient (unchanged).
   makeHistory?: (token: string) => HistoryLoader;
+  // makeScenarioClient builds the read client the session view fetches a task's spec
+  // (acceptance) from (GET /projects/{id}/scenarios). Injectable like the others;
+  // defaults to the real ApiClient. In FORK MODE the host passes a bridge-backed one.
+  makeScenarioClient?: (token: string) => ScenarioClient;
   // eventTransport, when supplied, selects FORK MODE: the host (extension) is
   // already connected, owns auth, and injects this transport (a postMessage bridge)
   // for the live event stream. Its presence means "host is connected" so the
@@ -74,9 +81,14 @@ export function FleetDashboard({
   makeControlClient,
   makeIntakeClient,
   makeHistory,
+  makeScenarioClient,
   eventTransport,
 }: FleetDashboardProps) {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  // selectedTask drives the session detail view (redesign E2): set by a board card
+  // drill-in; cleared by the session's back button. When set it replaces the tabbed
+  // content with the SessionView (the status bar + notices + confirm dialog persist).
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [tab, setTab] = useState<DashboardTab>("board");
 
   // The intake client defaults to the real ApiClient (distill + intake); tests
@@ -135,6 +147,19 @@ export function FleetDashboard({
         </p>
       )}
 
+      {selectedTask ? (
+        <SessionView
+          task={selectedTask}
+          token={token}
+          onBack={() => setSelectedTask(null)}
+          onUnauthorized={onUnauthorized}
+          controls={controls}
+          {...(makeScenarioClient ? { makeScenarioClient } : {})}
+          {...(makeHistory ? { makeHistory } : {})}
+          {...(eventTransport ? { eventTransport } : {})}
+        />
+      ) : (
+        <>
       <div className="fleet-tabs" role="tablist" aria-label="Dashboard view">
         <button
           type="button"
@@ -181,10 +206,7 @@ export function FleetDashboard({
           hosts={fleet.hosts}
           recentEvents={fleet.recentEvents}
           controls={controls}
-          onSelectProject={(p) => {
-            setSelectedProjectId(p);
-            setTab("fleet");
-          }}
+          onOpenSession={setSelectedTask}
           onNewWork={() => setTab("intake")}
         />
       ) : tab === "fleet" ? (
@@ -235,6 +257,8 @@ export function FleetDashboard({
           onUnauthorized={onUnauthorized}
           onViewTasks={focusProject}
         />
+      )}
+        </>
       )}
 
       <ConfirmDialog

@@ -24,8 +24,8 @@ export interface CommandCenterProps {
   recentEvents: readonly Event[];
   // controls is the action layer; when omitted the board is read-only (no Approve).
   controls?: FleetControls;
-  // onSelectProject focuses a project (the E1 drill-in; a card click / Review).
-  onSelectProject?: (projectId: string) => void;
+  // onOpenSession opens a task's session detail view (the drill-in: card click / Review).
+  onOpenSession?: (task: Task) => void;
   // onNewWork opens the intake flow ("+ New work").
   onNewWork?: () => void;
 }
@@ -36,7 +36,7 @@ export function CommandCenter({
   hosts,
   recentEvents,
   controls,
-  onSelectProject,
+  onOpenSession,
   onNewWork,
 }: CommandCenterProps) {
   const board = buildBoard(tasksByProject, leasesByProject, recentEvents);
@@ -90,7 +90,7 @@ export function CommandCenter({
                       key={card.task.id}
                       card={card}
                       {...(controls ? { controls } : {})}
-                      {...(onSelectProject ? { onSelectProject } : {})}
+                      {...(onOpenSession ? { onOpenSession } : {})}
                     />
                   ))
                 )}
@@ -106,15 +106,15 @@ export function CommandCenter({
 interface BoardCardViewProps {
   card: BoardCard;
   controls?: FleetControls;
-  onSelectProject?: (projectId: string) => void;
+  onOpenSession?: (task: Task) => void;
 }
 
-function BoardCardView({ card, controls, onSelectProject }: BoardCardViewProps) {
+function BoardCardView({ card, controls, onOpenSession }: BoardCardViewProps) {
   const t = card.task;
   const held = isAwaitingApproval(t);
   const blocked = t.status === "blocked";
   const busy = controls?.isTaskBusy(t.project_id, t.id) ?? false;
-  const select = () => onSelectProject?.(t.project_id);
+  const select = () => onOpenSession?.(t);
 
   // The status accent rail follows the card's lifecycle: held → amber, blocked →
   // red, running (a leasing host) → blue, done → green, else a neutral ready.
@@ -178,7 +178,7 @@ function BoardCardView({ card, controls, onSelectProject }: BoardCardViewProps) 
               {busy ? "Approving…" : "Approve"}
             </button>
           )}
-          {onSelectProject && (
+          {onOpenSession && (
             <button type="button" className="cc-btn" onClick={select}>
               Review ▸
             </button>

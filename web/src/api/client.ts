@@ -14,6 +14,7 @@ import type {
   Host,
   IntakeResult,
   Project,
+  Scenario,
   StatusSummary,
   Task,
 } from "./types.ts";
@@ -140,6 +141,13 @@ export class ApiClient {
     return this.request<Task[]>(
       "GET",
       `/projects/${encodeURIComponent(projectId)}/tasks`,
+    );
+  }
+
+  listScenarios(projectId: string): Promise<Scenario[]> {
+    return this.request<Scenario[]>(
+      "GET",
+      `/projects/${encodeURIComponent(projectId)}/scenarios`,
     );
   }
 
