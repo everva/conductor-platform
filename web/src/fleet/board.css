@@ -1,0 +1,176 @@
+/* Command Center board styles (redesign E1). Status-Kanban: four lifecycle
+   columns of task cards, the director's "Needs Review" lane highlighted. Palette
+   echoes fleet.css / the dark shell; native VS-Code theming is an E4 polish item. */
+
+.cc {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  min-height: 0;
+}
+
+/* --- top strip: the counts a director scans first --- */
+.cc-strip {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid #2a2f37;
+  border-radius: 0.5rem;
+  background: #1b1e24;
+}
+
+.cc-stat {
+  font-size: 0.9rem;
+  color: #c7ced8;
+}
+.cc-stat b {
+  font-size: 1.15rem;
+  margin-right: 0.25rem;
+  color: #e8edf3;
+}
+.cc-attn b {
+  color: #ffcf5c;
+}
+
+.cc-strip-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.cc-host-pill {
+  font-size: 0.78rem;
+  color: #8fd6a0;
+  border: 1px solid #2a2f37;
+  border-radius: 1rem;
+  padding: 0.1rem 0.55rem;
+}
+
+/* --- board: four columns --- */
+.cc-board {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.cc-col {
+  border: 1px solid #2a2f37;
+  border-radius: 0.5rem;
+  background: #16191e;
+  display: flex;
+  flex-direction: column;
+  min-height: 8rem;
+}
+/* the director's action lane stands out */
+.cc-col-needs-review {
+  border-color: #5a4a1f;
+  background: #1c1a14;
+}
+
+.cc-col-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9aa4b2;
+  border-bottom: 1px solid #2a2f37;
+}
+.cc-col-needs-review .cc-col-head {
+  color: #ffcf5c;
+}
+
+.cc-col-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem;
+}
+.cc-col-empty {
+  color: #5b636e;
+  text-align: center;
+  padding: 0.75rem 0;
+  margin: 0;
+}
+
+/* --- card --- */
+.cc-card {
+  border: 1px solid #2a2f37;
+  border-radius: 0.4rem;
+  background: #1b1e24;
+  padding: 0.55rem 0.6rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.cc-card:hover,
+.cc-card:focus-visible {
+  border-color: #3d6fb4;
+  outline: none;
+}
+.cc-card-attn {
+  border-left: 3px solid #ffcf5c;
+}
+.cc-card-blocked {
+  border-left: 3px solid #e0635a;
+}
+
+.cc-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.cc-card-id {
+  font-weight: 600;
+  color: #e8edf3;
+}
+.cc-card-tier {
+  font-size: 0.72rem;
+  color: #9aa4b2;
+}
+.cc-card-proj {
+  font-size: 0.82rem;
+  color: #c7ced8;
+}
+.cc-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  font-size: 0.74rem;
+  color: #9aa4b2;
+}
+.cc-host-tag {
+  color: #8fd6a0;
+}
+.cc-phase {
+  color: #6db3e0;
+}
+.cc-card-diff {
+  font-size: 0.74rem;
+}
+.cc-add {
+  color: #8fd6a0;
+}
+.cc-del {
+  color: #e0938c;
+}
+
+.cc-card-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.15rem;
+}
+
+/* Narrow viewports (a webview side panel): stack the columns. */
+@media (max-width: 720px) {
+  .cc-board {
+    grid-template-columns: 1fr;
+  }
+}

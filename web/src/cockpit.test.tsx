@@ -158,6 +158,12 @@ describe("cockpit barrel: FleetDashboard token-free over injected transports", (
     );
     await flush();
 
+    // Redesign E1: the Command Center board is now the DEFAULT surface. This test
+    // exercises the FLEET view's injected-REST + ticker wiring, so switch to it.
+    act(() => {
+      screen.getByRole("tab", { name: "Fleet" }).click();
+    });
+
     // REST flowed via the injected clients despite the empty token: the fleet panel
     // shows the injected project + host (decoupled readiness, enabled via the fork
     // contract). 401 was never bubbled.

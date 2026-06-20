@@ -88,6 +88,9 @@ test("renders the fleet dashboard with mocked gateway", async ({ page }) => {
 
   // Fleet panels render with the mocked data.
   await expect(page.getByRole("region", { name: /fleet status/i })).toBeVisible();
+  // Redesign E1: the Command Center board is the default surface; this test asserts
+  // the Fleet view's project/host tables, so switch to it.
+  await page.getByRole("tab", { name: /^fleet$/i }).click();
   await expect(page.getByRole("cell", { name: "p1" }).first()).toBeVisible();
   await expect(page.getByText("paused")).toBeVisible();
   await expect(page.getByRole("cell", { name: "h1" }).first()).toBeVisible();
@@ -174,6 +177,9 @@ test("intervention controls: resume (200) and abort (409 notice) over mocked con
   await page.getByLabel(/api token/i).fill("test-token");
   await page.getByRole("button", { name: /sign in/i }).click();
   await expect(page.getByRole("region", { name: /fleet status/i })).toBeVisible();
+  // Redesign E1: board is the default surface; the per-project Pause/Resume/Abort
+  // controls live in the Fleet view, so switch to it.
+  await page.getByRole("tab", { name: /^fleet$/i }).click();
 
   // Abort is confirm-gated: clicking it opens the dialog; confirming POSTs abort. The
   // mocked 409 ("no task running to abort") surfaces as a non-fatal warn notice and

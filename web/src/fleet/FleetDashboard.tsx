@@ -16,6 +16,7 @@ import type { FleetClient } from "./useFleet.ts";
 import { useFleetControls } from "./useFleetControls.ts";
 import type { ControlClient } from "./controls.ts";
 import { FleetStatusBar } from "./FleetStatusBar.tsx";
+import { CommandCenter } from "./CommandCenter.tsx";
 import { ProjectsTable } from "./ProjectsTable.tsx";
 import { HostsPanel } from "./HostsPanel.tsx";
 import { TasksView } from "./TasksView.tsx";
@@ -60,10 +61,11 @@ export interface FleetDashboardProps {
   eventTransport?: EventTransport;
 }
 
-// DashboardTab toggles the cockpit between the fleet overview and the full event
-// stream (3B-2). The fleet view keeps the lightweight EventTicker; the stream view
-// is the full filterable/pausable feed.
-type DashboardTab = "fleet" | "events" | "intake";
+// DashboardTab selects the cockpit surface. "board" is the agent-native Command
+// Center (redesign E1) and the DEFAULT surface a director lands on; "fleet" is the
+// per-project detail (the 3B overview, kept as a drill-in), "events" the full
+// filterable feed (3B-2), "intake" the spec/distill flow.
+type DashboardTab = "board" | "fleet" | "events" | "intake";
 
 export function FleetDashboard({
   token,
@@ -75,7 +77,7 @@ export function FleetDashboard({
   eventTransport,
 }: FleetDashboardProps) {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [tab, setTab] = useState<DashboardTab>("fleet");
+  const [tab, setTab] = useState<DashboardTab>("board");
 
   // The intake client defaults to the real ApiClient (distill + intake); tests
   // inject a fake. Built lazily per-render is cheap and keeps the token in memory.
@@ -137,6 +139,15 @@ export function FleetDashboard({
         <button
           type="button"
           role="tab"
+          aria-selected={tab === "board"}
+          className={tab === "board" ? "fleet-tab active" : "fleet-tab"}
+          onClick={() => setTab("board")}
+        >
+          Board
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={tab === "fleet"}
           className={tab === "fleet" ? "fleet-tab active" : "fleet-tab"}
           onClick={() => setTab("fleet")}
@@ -163,7 +174,20 @@ export function FleetDashboard({
         </button>
       </div>
 
-      {tab === "fleet" ? (
+      {tab === "board" ? (
+        <CommandCenter
+          tasksByProject={fleet.tasksByProject}
+          leasesByProject={fleet.leasesByProject}
+          hosts={fleet.hosts}
+          recentEvents={fleet.recentEvents}
+          controls={controls}
+          onSelectProject={(p) => {
+            setSelectedProjectId(p);
+            setTab("fleet");
+          }}
+          onNewWork={() => setTab("intake")}
+        />
+      ) : tab === "fleet" ? (
         <>
           <InterventionBanner
             events={fleet.recentEvents}
