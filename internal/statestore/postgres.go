@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
 )
 
 // migrationsFS embeds the goose SQL migrations so a PostgresStore can apply its
@@ -94,7 +95,18 @@ func runGooseUp(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("statestore: open embedded migrations: %w", err)
 	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, db, sub)
+	// Serialize concurrent migrators with a Postgres advisory lock. BOTH the daemon
+	// (cmd/conductor) and the API gateway (cmd/conductor-api) run Up on startup, so a
+	// simultaneous cold start against a fresh database would otherwise race two goose
+	// runs into a conflict (e.g. duplicate CREATE TABLE). goose holds the advisory
+	// lock on a dedicated connection for the duration of Up and releases it after, so
+	// the loser simply waits and then finds the schema already current (a no-op). Our
+	// migrations are transactional SQL, so this is safe with the normal multi-conn pool.
+	locker, err := lock.NewPostgresSessionLocker()
+	if err != nil {
+		return fmt.Errorf("statestore: build migration locker: %w", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectPostgres, db, sub, goose.WithSessionLocker(locker))
 	if err != nil {
 		return fmt.Errorf("statestore: build goose provider: %w", err)
 	}
