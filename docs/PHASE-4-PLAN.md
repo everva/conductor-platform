@@ -337,7 +337,13 @@ dalga başlarında.
     (workflow_dispatch; build→sign→notarize; tüm Apple secret'ları Infisical'dan runtime'da çeker; tek GitHub secret =
     Infisical machine-identity) + `build/ci-keychain.sh` (ephemeral keychain import — YEREL doğrulandı: identity import +
     throwaway sign PASS). actionlint + shellcheck temiz. İmza materyali repoya GİRMEDİ. **→ FAZ-4 TAMAMEN BİTTİ (4A→4E +
-    4D-0/1/2/2b/3). Kalan yalnız opsiyonel kozmetik (imzalı `.dmg`).**
+    4D-0/1/2/2b/3).**
+  - ✅ **İMZALI + NOTARIZE `.dmg` ÜRETİLDİ** (fork main `e18aeed`): `build/dmg.sh` — imzalı+stapled app'i drag-to-install
+    disk image'e sarar; dmg'nin KENDİSİ de Developer-ID imzalı + notarize + stapled. GERÇEK koşuldu: dmg 484M → codesign →
+    notarytool **Accepted** (`50564185…`) → stapler staple+validate ✓ + codesign --verify ✓; mount edilen dmg içindeki app
+    `spctl` = Notarized Developer ID. NOT: dmg `spctl --assess -t open` ile DOĞRULANMAZ (CLI'da "Insufficient Context" döner —
+    valid notarize dmg'de bile; otorite kontrol = `stapler validate` + `codesign --verify`). notarize.sh transport-zip cila'sı
+    + README dmg doğrulama notu. **→ FAZ-4 KAPANDI: review→test→imzalı-dmg üçlüsü tamam; dağıtılabilir `.dmg`+`.zip` hazır.**
   - ✅ **OVERNIGHT HARDENING — gateway onboard-500 (PG) DÜZELTİLDİ** (develop `ed1ed3d`, CI yeşil): demo'da bulunan bug;
     kök-neden gateway başlangıçta migration KOŞMUYORDU (daemon koşar) → taze/migrate-edilmemiş DB'de her store op 500, ve
     500'ler gerçek hatayı YUTUYORDU (loglanmıyordu). Fix: `newStore` idempotent `pg.Migrate` (daemon'la simetrik) +
