@@ -57,7 +57,8 @@ describe.skipIf(!GATEWAY || !TOKEN)("DiffObserver live integration (CP_LIVE_GATE
         expect(diff.files.length).toBeGreaterThan(0);
         expect(diff.files.some((f) => f.path.endsWith("greeting.go"))).toBe(true);
         // TOKEN DISCIPLINE: the bearer token never leaks into the user-facing diff.
-        expect(JSON.stringify(diff)).not.toContain(TOKEN);
+        // Assert via a boolean so a failure message can NEVER echo the token itself.
+        expect(JSON.stringify(diff).includes(TOKEN!)).toBe(false);
       } finally {
         observer?.stop();
       }

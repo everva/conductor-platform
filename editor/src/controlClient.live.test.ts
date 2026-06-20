@@ -79,7 +79,8 @@ describe.skipIf(!HTTP_BASE || !TOKEN || !PROJECT)(
         const result = await client.approve(PROJECT!, heldId);
         expect(result.ok, `approve result: ${JSON.stringify(result)}`).toBe(true);
         // TOKEN DISCIPLINE: the token never rides in the returned ControlResult.
-        expect(JSON.stringify(result)).not.toContain(TOKEN);
+        // Assert via a boolean so a failure message can NEVER echo the token itself.
+        expect(JSON.stringify(result).includes(TOKEN!)).toBe(false);
 
         // The daemon merges on its next tick: poll until the task leaves awaiting-approval
         // (advanced/merged) or disappears from the active list.

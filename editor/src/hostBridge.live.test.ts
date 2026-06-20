@@ -121,7 +121,8 @@ describe.skipIf(!HTTP_BASE || !TOKEN)("HostBridge live distill (G3, CP_LIVE_GATE
         expect((body.yaml as string).length).toBeGreaterThan(0);
 
         // TOKEN DISCIPLINE: nothing the host posts back to the webview carries the token.
-        expect(JSON.stringify(webview.posted)).not.toContain(TOKEN);
+        // Assert via a boolean so a failure message can NEVER echo the token itself.
+        expect(JSON.stringify(webview.posted).includes(TOKEN!)).toBe(false);
       } finally {
         bridge.dispose();
       }
