@@ -1,5 +1,14 @@
 # İki-makineli (Linux + macOS) capability-routed çok-proje demo — PLAN
 
+> **DURUM (güncel):** **Faz A ✅** (committed `internal/conductor/multihost_e2e_test.go`
+> — gerçek-PG, iki capability-ayrı Conductor, routing-safety + routed-merge + gate-authority,
+> teeth-doğrulandı; + CANLI iki-süreç koşusu `deploy/demo-2host/run-demo.sh` GEÇTİ:
+> host-linux iOS işini REDDETTİ + web'i MERGE etti, host-mac iOS'u MERGE etti, çapraz-bulaşma
+> yok). **Faz B ✅** runbook `deploy/demo-2host/README.md` (Linux+macOS host kurulumu).
+> **Faz C** = kullanıcının gerçek host'ları (claude girişli + Playwright/maestro+Xcode). Registry
+> seviyesi routing/lease/reap ayrıca `internal/conductor/twohost_test.go` ile deterministik kanıtlı.
+
+
 **Amaç:** Çok-host vizyonunu CANLI kanıtla — bir **Linux** host + bir **macOS** host, AYNI
 Postgres'i paylaşır; bir **web projesi** (Playwright → visual-diff gate, ADR-0023) Linux'ta,
 bir **iOS projesi** (maestro UI-flow gate, ADR-0023) Mac'te otonom kodlanıp KENDİ deterministik
