@@ -15,6 +15,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"sort"
 	"time"
@@ -46,6 +47,11 @@ type apiServer struct {
 	reader events.EventReader
 	// token is the expected bearer token (constant-time compared, never echoed).
 	token string
+	// logger records the REAL cause of a 500 server-side (operators need it to
+	// diagnose; the client only ever sees the fixed "internal error" string). It is
+	// optional: a nil logger falls back to slog.Default(), so a zero-value apiServer
+	// (and the many test constructors) still work. Wired to the process logger in main.
+	logger *slog.Logger
 	// distiller is the assisted-distillation seam (ADR-0005, ADR-0012) backing
 	// POST /projects/{id}/distill: it turns a free-text conversation into PROPOSED,
 	// shape-validated scenarios for human review (never persists). main.go wires the
@@ -188,7 +194,7 @@ type statusDTO struct {
 func (s *apiServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 	projects, err := s.store.ListProjects(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error")
+		s.serverError(w, "projects: list", err)
 		return
 	}
 
@@ -218,13 +224,13 @@ func (s *apiServer) handleProjectTasks(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "project not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error")
+		s.serverError(w, "tasks: get project", err)
 		return
 	}
 
 	tasks, err := s.store.ListTasks(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error")
+		s.serverError(w, "tasks: list", err)
 		return
 	}
 	// Stable ordering by task id regardless of store insertion order.
@@ -255,7 +261,7 @@ func (s *apiServer) handleProjectTasks(w http.ResponseWriter, r *http.Request) {
 func (s *apiServer) handleHosts(w http.ResponseWriter, r *http.Request) {
 	hosts, err := s.store.ListHosts(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error")
+		s.serverError(w, "hosts: list", err)
 		return
 	}
 	sort.Slice(hosts, func(i, j int) bool { return hosts[i].ID < hosts[j].ID })
@@ -285,17 +291,17 @@ func (s *apiServer) handleHosts(w http.ResponseWriter, r *http.Request) {
 func (s *apiServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	projects, err := s.store.ListProjects(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error")
+		s.serverError(w, "status: list projects", err)
 		return
 	}
 	hosts, err := s.store.ListHosts(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error")
+		s.serverError(w, "status: list hosts", err)
 		return
 	}
 	leases, err := s.store.ListLeases(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error")
+		s.serverError(w, "status: list leases", err)
 		return
 	}
 	sort.Slice(leases, func(i, j int) bool { return leases[i].ProjectID < leases[j].ProjectID })
@@ -367,4 +373,21 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// serverError logs the REAL cause of a 500 server-side and returns the fixed,
+// secret-free "internal error" body to the client. Before this existed every 500
+// swallowed its cause, so an operator saw "internal error" with no signal — the
+// gateway-onboard-500 bug (a gateway pointed at an unmigrated DB) was invisible in
+// the logs. op is a short STATIC label (e.g. "onboard: list projects"), never
+// request data. Logging err is safe: statestore/pgx *query* errors carry the SQL
+// state and message but NOT the DSN/password (credentials surface only at
+// connection time, which happens at startup — never inside a handler).
+func (s *apiServer) serverError(w http.ResponseWriter, op string, err error) {
+	lg := s.logger
+	if lg == nil {
+		lg = slog.Default()
+	}
+	lg.Error("conductor-api handler error", slog.String("op", op), slog.Any("err", err))
+	writeError(w, http.StatusInternalServerError, "internal error")
 }

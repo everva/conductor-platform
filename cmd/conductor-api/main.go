@@ -138,6 +138,8 @@ func run(ctx context.Context, argv []string, logger *slog.Logger, stderr io.Writ
 		reader: asReader(bus),
 		token:  cfg.token,
 		clock:  time.Now,
+		// Logger for server-side 500-cause logging (secret-free); see apiServer.logger.
+		logger: logger,
 		// Production distiller: the real `claude -p` subscription path (no API key).
 		// It only DRAFTS proposed scenarios for human review at POST /distill; it
 		// persists nothing. Tests inject a stub via the apiServer field instead.
@@ -206,6 +208,16 @@ func newStore(ctx context.Context, cfg config, logger *slog.Logger) (statestore.
 	if err != nil {
 		// pgx does not echo the password in its error; we still never log cfg.dsn.
 		return nil, nil, fmt.Errorf("open postgres store: %w", err)
+	}
+	// Ensure the schema exists before serving (idempotent goose Up). Without this, a
+	// gateway pointed at a fresh/unmigrated DB — or started before the daemon — would
+	// accept requests and then fail EVERY store op with a 500 ("relation ... does not
+	// exist"). The daemon migrates identically on startup (cmd/conductor/main.go);
+	// goose is idempotent, so both services running it is safe.
+	if err := pg.Migrate(ctx); err != nil {
+		pg.Close()
+		// goose/pgx errors do not echo the password; we still never log cfg.dsn.
+		return nil, nil, fmt.Errorf("migrate postgres store: %w", err)
 	}
 	logger.Info("statestore backend selected", slog.String("backend", "postgres"))
 	return pg, pg.Close, nil

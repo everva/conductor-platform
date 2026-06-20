@@ -96,7 +96,7 @@ func (s *apiServer) handleOnboard(w http.ResponseWriter, r *http.Request) {
 	// repo is returned unchanged with 200.
 	existing, err := s.store.ListProjects(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error")
+		s.serverError(w, "onboard: list projects", err)
 		return
 	}
 	for _, p := range existing {
@@ -113,7 +113,7 @@ func (s *apiServer) handleOnboard(w http.ResponseWriter, r *http.Request) {
 		Readiness:  "ready",
 	}
 	if err := s.store.CreateProject(ctx, p); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error")
+		s.serverError(w, "onboard: create project", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, toProjectDTO(p))
@@ -206,7 +206,7 @@ func (s *apiServer) handleDistill(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "project not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error")
+		s.serverError(w, "distill: get project", err)
 		return
 	}
 
@@ -228,7 +228,7 @@ func (s *apiServer) handleDistill(w http.ResponseWriter, r *http.Request) {
 
 	yamlStr, err := marshalIntakeYAML(scenarios)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error")
+		s.serverError(w, "distill: marshal yaml", err)
 		return
 	}
 
@@ -277,7 +277,7 @@ func (s *apiServer) handleAbort(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "no task running to abort")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error")
+		s.serverError(w, "abort", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"project": id, "aborted_task": taskID})
@@ -306,7 +306,7 @@ func (s *apiServer) handleApprove(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "project not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error")
+		s.serverError(w, "approve: get project", err)
 		return
 	}
 
@@ -320,7 +320,7 @@ func (s *apiServer) handleApprove(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, statestore.ErrNotFound):
 			writeError(w, http.StatusNotFound, "project not found")
 		default:
-			writeError(w, http.StatusInternalServerError, "internal error")
+			s.serverError(w, "approve", err)
 		}
 		return
 	}
@@ -426,7 +426,7 @@ func (s *apiServer) writeSeamError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
-	writeError(w, http.StatusInternalServerError, "internal error")
+	s.serverError(w, "seam", err)
 }
 
 // decodeJSONBody decodes an OPTIONAL JSON request body into v. An empty body is

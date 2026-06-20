@@ -115,8 +115,9 @@ func (s *apiServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	evs, err := s.reader.ListEvents(r.Context(), filter, since, limit)
 	if err != nil {
-		// Never surface the underlying error (could mention the DSN) — fixed string.
-		writeError(w, http.StatusInternalServerError, "internal error")
+		// Client gets only the fixed string; the real cause is logged server-side
+		// (secret-free: a query error carries SQL state, not the DSN/password).
+		s.serverError(w, "events: list", err)
 		return
 	}
 
