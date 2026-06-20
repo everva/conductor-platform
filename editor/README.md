@@ -130,17 +130,35 @@ go run ./cmd/conductor -project <id> -root <dir> -dsn "$DSN" \
 ```
 
 The live test resolves on the first `diff` frame and asserts it is a real, token-free diff
-(non-empty patch, the changed file present, the bearer token absent). The same running gateway
-also serves the cockpit's history backfill (`GET /events?kind=diff`), the intake-chat distill
-(`POST /projects/{id}/distill` → proposed scenarios via real claude), and the inline approve
-(`POST /projects/{id}/approve` → the daemon merges a held T3 task's preserved verified branch
-with no re-develop, `outcome=approved-merged`). The token rides only the `Authorization`
-header / WS `?token=` query — never the webview.
+(non-empty patch, the changed file present, the bearer token absent).
 
-> Verification level: only the **DiffObserver check is an automated, committed test**
-> (`src/diffObserver.live.test.ts` — fails if no live diff arrives). The `/events` backfill, the
-> `/distill`, and the `/approve`→merge checks above are **manual runbook verifications** (run by the
-> author against the live stack), not committed automated tests.
+**Editor — distill (G3) + approve→merge (G4) are now committed env-gated tests too.** Against the
+same running stack:
+
+```sh
+# G3 — the host bridge proxies POST /distill to the gateway and gets PROPOSED scenarios back.
+# Requires the gateway host to have an authed subscription `claude` (its distiller shells out to
+# `claude -p`); discovers a project via GET /projects. An http(s):// or ws(s):// base both work.
+CP_LIVE_GATEWAY=http://localhost:8080 CP_LIVE_TOKEN="$CONDUCTOR_API_TOKEN" \
+  npx vitest run src/hostBridge.live.test.ts
+
+# G4 — ControlClient approves a HELD task and the daemon merges it (it leaves awaiting-approval).
+# Precondition: CP_LIVE_PROJECT has exactly one task parked in awaiting-approval (a held T3/T4)
+# and the daemon runs over the shared DSN so it merges after approval.
+CP_LIVE_GATEWAY=http://localhost:8080 CP_LIVE_TOKEN="$CONDUCTOR_API_TOKEN" CP_LIVE_PROJECT=<id> \
+  npx vitest run src/controlClient.live.test.ts
+```
+
+The token rides only the `Authorization` header / WS `?token=` query — never the webview; each
+live test also asserts the token never appears in any host→webview message or returned result.
+
+> Verification level: the **diff (G1), distill (G3), and approve→merge (G4) checks are now
+> automated, committed env-gated tests** (`diffObserver.live.test.ts`, `hostBridge.live.test.ts`,
+> `controlClient.live.test.ts`) — collected-but-skipped without their env, so the default gate stays
+> deterministic and offline. They require a live stack to actually run (G3 also needs an authed
+> `claude -p` on the gateway host; G4 needs a held task + the running daemon), exactly like the
+> original manual checks — now reproducible on demand. Only the `GET /events?kind=diff` history
+> backfill remains a manual runbook verification.
 
 ## Go carve-out
 
