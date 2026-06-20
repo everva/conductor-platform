@@ -327,5 +327,20 @@ dalga başlarında.
     yerel `~/conductor-signing/` (gizli). Detay+plan: memory `conductor-editor-signing`. → **4D-3 ARTIK OTONOM YAPILABİLİR**
     (cert KULLANICI-girdisi engeli kalktı): `build.sh`'a codesign(by-hash `3612565AB7…`, `-o runtime --timestamp`) +
     `notarytool submit --wait` + `stapler staple` ekle → imzalı+notarize `.app`/`.dmg`; fork CI Infisical'dan çeker.
-  - **KALAN:** 4D-3 imzalı/notarize release'i ÜRET (artık engelsiz) + fork CI signing. **→ FAZ-4 (4A→4E + 4D-0/1/2/2b) TAMAM;
-    4D-3 son adımı da artık otonom bitirilebilir.**
+  - ✅ **4D-3 İMZALI + NOTARIZE RELEASE ÜRETİLDİ + DOĞRULANDI** (2026-06-20, otonom): fork `everva/conductor-editor` main
+    `e37d7ae`. `build/sign.sh` (inside-out Developer ID codesign + hardened runtime — `--deep` YOK; 37 nested Mach-O + 4
+    framework + 4 helper [per-helper entitlements] + ana app; her biri `flags=0x10000(runtime)`, Team `VT3X56P4ZL`) +
+    `build/notarize.sh` (ditto zip → `notarytool submit --wait` → `stapler staple` → doğrula). GERÇEK koşuldu: notary
+    submission `dd7acfa9…` **Accepted**, `spctl -a -t exec` → **`source=Notarized Developer ID`**, `stapler validate` +
+    `codesign --verify --deep --strict` PASS; dağıtılabilir `dist/Conductor-Editor-darwin-arm64.zip` (364M). Entitlements
+    VS Code'dan vendor'landı (`build/entitlements/`, MIT). **Fork CI signing:** `.github/workflows/release.yml`
+    (workflow_dispatch; build→sign→notarize; tüm Apple secret'ları Infisical'dan runtime'da çeker; tek GitHub secret =
+    Infisical machine-identity) + `build/ci-keychain.sh` (ephemeral keychain import — YEREL doğrulandı: identity import +
+    throwaway sign PASS). actionlint + shellcheck temiz. İmza materyali repoya GİRMEDİ. **→ FAZ-4 TAMAMEN BİTTİ (4A→4E +
+    4D-0/1/2/2b/3). Kalan yalnız opsiyonel kozmetik (imzalı `.dmg`).**
+  - ✅ **OVERNIGHT HARDENING — gateway onboard-500 (PG) DÜZELTİLDİ** (develop `ed1ed3d`, CI yeşil): demo'da bulunan bug;
+    kök-neden gateway başlangıçta migration KOŞMUYORDU (daemon koşar) → taze/migrate-edilmemiş DB'de her store op 500, ve
+    500'ler gerçek hatayı YUTUYORDU (loglanmıyordu). Fix: `newStore` idempotent `pg.Migrate` (daemon'la simetrik) +
+    `apiServer.serverError(op,err)` 16 yutulmuş-500 yerine gerçek nedeni server-side loglar (secret-free). Gerçek-PG test
+    `onboard_pg_test.go` (newStore-migrates-fresh-schema + onboard 201→idempotent 200; teeth-check: migrate kapalıyken
+    SQLSTATE 42P01 ile düşüyor). Rule#9: build/vet/`-race ./...`(gerçek-PG)/e2e-tag/golangci hepsi yeşil.
