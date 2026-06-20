@@ -73,6 +73,9 @@ type fakeVerifier struct {
 	result string
 	err    error
 	calls  int
+	// checks is the per-gate Check slice Verify returns (the Verifier verdict, B1).
+	// Default nil keeps existing callers byte-for-byte; the verdict test sets it.
+	checks []engine.Check
 }
 
 func (f *fakeVerifier) Verify(context.Context, engine.Verdict, engine.Workspace, []verify.Gate, string) (engine.ReviewResult, []engine.Check, error) {
@@ -80,7 +83,7 @@ func (f *fakeVerifier) Verify(context.Context, engine.Verdict, engine.Workspace,
 	if f.err != nil {
 		return engine.ReviewResult{}, nil, f.err
 	}
-	return engine.ReviewResult{Result: f.result}, nil, nil
+	return engine.ReviewResult{Result: f.result}, f.checks, nil
 }
 
 // fakeMerger records merge calls and returns a fixed SHA so the green path can be

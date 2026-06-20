@@ -515,6 +515,38 @@ func (c *Conductor) emitDiff(ctx context.Context, project statestore.Project, ta
 	c.emit(ctx, task, events.PhaseReview, events.KindDiff, summary.Payload())
 }
 
+// maxVerdictChecks bounds the number of per-gate checks carried in a verdict
+// KindDecision payload. The recipe has a handful of gates plus one holdout, so this
+// is a defensive cap; combined with the verifier's per-check evidence cap it keeps
+// the payload well within the PG LISTEN/NOTIFY limit (mirroring KindDiff's bounding).
+const maxVerdictChecks = 24
+
+// emitVerdict publishes the deterministic Verifier verdict (B1, ADR-0033): the
+// overall result PLUS the per-gate checks (name/result/evidence) as a PhaseReview
+// KindDecision event, so the editor's session view renders the gate decision — the
+// platform's trust differentiator — rather than only "pass/changes". The payload is
+// BOUNDED (checks capped here; evidence already first-line-capped by the verifier).
+// Observability-only: a nil emitter is a no-op (emit handles it), and this never
+// alters the tick. It reuses KindDecision (additive payload) so no new event Kind is
+// introduced; the session view recognizes a verdict by the presence of `checks`.
+func (c *Conductor) emitVerdict(ctx context.Context, task statestore.Task, review engine.ReviewResult, checks []engine.Check) {
+	out := make([]map[string]any, 0, len(checks))
+	for i, ck := range checks {
+		if i >= maxVerdictChecks {
+			break
+		}
+		out = append(out, map[string]any{
+			"name":     ck.Name,
+			"result":   ck.Result,
+			"evidence": ck.Evidence,
+		})
+	}
+	c.emit(ctx, task, events.PhaseReview, events.KindDecision, map[string]any{
+		"result": review.Result,
+		"checks": out,
+	})
+}
+
 // Tick runs ONE fresh-context tick for the project (ADR-0001 sıralılık):
 //
 //	PickReady -> admit (governor) -> acquire lease -> Workspace -> Develop -> Verify
@@ -673,7 +705,7 @@ func (c *Conductor) runTask(ctx context.Context, project statestore.Project, tas
 	// treats as "no holdout" (skipped cleanly), so non-holdout projects work.
 	holdoutRef := c.resolveHoldoutRef(ctx, task)
 	c.emit(ctx, task, events.PhaseVerify, events.KindStarted, nil)
-	review, _, verErr := c.verifier.Verify(ctx, verdict, ws, c.recipe.Gates, holdoutRef)
+	review, checks, verErr := c.verifier.Verify(ctx, verdict, ws, c.recipe.Gates, holdoutRef)
 	if verErr != nil {
 		// Verify could not produce a result: block rather than fake-green.
 		if blockErr := c.markBlocked(ctx, task); blockErr != nil {
@@ -682,6 +714,14 @@ func (c *Conductor) runTask(ctx context.Context, project statestore.Project, tas
 		return TickResult{Outcome: OutcomeBlocked, TaskID: task.ID, Verdict: verdict},
 			fmt.Errorf("conductor: tick: verify %q: %w", task.ID, verErr)
 	}
+
+	// Verifier verdict (B1, ADR-0033): emit the deterministic per-gate decision (the
+	// platform's TRUST differentiator — a machine verdict, not an LLM's "looks good")
+	// so the editor's session view can render WHY the gate passed/failed, not just the
+	// summary. Emitted here so it covers EVERY downstream path uniformly (pass,
+	// changes-requested, human-hold). Bounded payload (checks capped, evidence already
+	// first-line-capped by the verifier) → within the PG LISTEN/NOTIFY budget, like KindDiff.
+	c.emitVerdict(ctx, task, review, checks)
 
 	if review.Result != reviewPass {
 		return c.handleChangesRequested(ctx, task, verdict, review)

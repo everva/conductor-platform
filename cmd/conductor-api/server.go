@@ -90,6 +90,7 @@ func (s *apiServer) routes() http.Handler {
 	// Protected read endpoints.
 	mux.Handle("GET /projects", s.requireAuth(http.HandlerFunc(s.handleProjects)))
 	mux.Handle("GET /projects/{id}/tasks", s.requireAuth(http.HandlerFunc(s.handleProjectTasks)))
+	mux.Handle("GET /projects/{id}/scenarios", s.requireAuth(http.HandlerFunc(s.handleProjectScenarios)))
 	mux.Handle("GET /hosts", s.requireAuth(http.HandlerFunc(s.handleHosts)))
 	mux.Handle("GET /status", s.requireAuth(http.HandlerFunc(s.handleStatus)))
 
@@ -251,6 +252,46 @@ func (s *apiServer) handleProjectTasks(w http.ResponseWriter, r *http.Request) {
 			RetryCount:     t.RetryCount,
 			AbortRequested: t.AbortRequested,
 			Approved:       t.Approved,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleProjectScenarios: GET /projects/{id}/scenarios → JSON array of that
+// project's scenarios (id/title/lane/tier/deps/acceptance + the holdout ref),
+// sorted by scenario ID. The agent-native session view (redesign E2) reads a
+// task's SPEC — its acceptance criteria — here via the task's scenario_id, so a
+// director sees what the agent is being held to. Unknown project → 404. Additive
+// read (B2); the gateway stays a pure projection of the frozen StateStore (ADR-0025).
+func (s *apiServer) handleProjectScenarios(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	if _, err := s.store.GetProject(r.Context(), id); err != nil {
+		if errors.Is(err, statestore.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		s.serverError(w, "scenarios: get project", err)
+		return
+	}
+
+	scenarios, err := s.store.ListScenarios(r.Context(), id)
+	if err != nil {
+		s.serverError(w, "scenarios: list", err)
+		return
+	}
+	sort.Slice(scenarios, func(i, j int) bool { return scenarios[i].ID < scenarios[j].ID })
+
+	out := make([]scenarioDTO, 0, len(scenarios))
+	for _, sc := range scenarios {
+		out = append(out, scenarioDTO{
+			ID:         sc.ID,
+			Title:      sc.Title,
+			Lane:       sc.Lane,
+			Tier:       sc.Tier,
+			Deps:       nonNil(sc.Deps),
+			Acceptance: nonNil(sc.Acceptance),
+			HoldoutRef: sc.HoldoutRef,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

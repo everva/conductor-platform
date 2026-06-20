@@ -260,8 +260,9 @@ func TestConductor_Tick_DifferError_NoKindDiff_StillMerges(t *testing.T) {
 }
 
 // TestConductor_Tick_NilDiffer_NoKindDiff_BackwardCompat proves the default harness
-// (no Differ) emits NO KindDiff and that the existing event sequence is byte-
-// identical to the pre-4C-1 lifecycle (started, started, merge) — backward compat.
+// (no Differ) emits NO KindDiff. The green-path sequence is develop-started,
+// verify-started, the Verifier verdict (a KindDecision, B1/ADR-0033), then merge —
+// the verdict is the only addition over the pre-4C-1 lifecycle; crucially still NO diff.
 func TestConductor_Tick_NilDiffer_NoKindDiff_BackwardCompat(t *testing.T) {
 	ctx := context.Background()
 	em := &recordingEmitter{}
@@ -278,8 +279,9 @@ func TestConductor_Tick_NilDiffer_NoKindDiff_BackwardCompat(t *testing.T) {
 	if em.hasKind(events.KindDiff) {
 		t.Fatalf("nil Differ must emit NO KindDiff; kinds %v", em.kinds())
 	}
-	// The pre-4C-1 green-path sequence: develop-started, verify-started, merge.
-	want := []events.Kind{events.KindStarted, events.KindStarted, events.KindMerge}
+	// Green-path sequence: develop-started, verify-started, Verifier verdict
+	// (decision, B1/ADR-0033), merge — no KindDiff (nil Differ).
+	want := []events.Kind{events.KindStarted, events.KindStarted, events.KindDecision, events.KindMerge}
 	got := em.kinds()
 	if len(got) != len(want) {
 		t.Fatalf("event sequence = %v, want byte-identical %v", got, want)

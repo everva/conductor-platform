@@ -193,6 +193,67 @@ func TestProjectTasksUnknownProject404(t *testing.T) {
 	}
 }
 
+// TestProjectScenariosHappyPathSorted proves GET /projects/{id}/scenarios returns
+// the project's scenarios sorted by id with the spec the session view shows
+// (title/lane/tier/acceptance + the holdout ref), nil slices serialized as [] (B2).
+func TestProjectScenariosHappyPathSorted(t *testing.T) {
+	ctx := context.Background()
+	store := statestore.NewMemoryStore()
+	mustCreate(t, store.CreateProject(ctx, statestore.Project{ID: "proj-a", BaseBranch: "develop"}))
+	// Inserted out of order to prove the handler sorts by id.
+	mustCreate(t, store.CreateScenario(ctx, statestore.Scenario{
+		ID: "S-2", ProjectID: "proj-a", Title: "Add onboarding screen", Lane: "ios", Tier: "T3",
+		Deps: []string{"S-1"}, Acceptance: []string{"app builds", "maestro flow green"},
+		HoldoutRef: "store://holdouts/S-2/h.go",
+	}))
+	mustCreate(t, store.CreateScenario(ctx, statestore.Scenario{
+		ID: "S-1", ProjectID: "proj-a", Title: "Seed", Lane: "web", Tier: "T1",
+		// nil Deps/Acceptance → must serialize as [].
+		HoldoutRef: "store://holdouts/S-1/h.go",
+	}))
+	s := &apiServer{store: store, token: testToken, clock: fixedClock}
+
+	rec := do(t, s, http.MethodGet, "/projects/proj-a/scenarios", bearer())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var got []scenarioDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got) != 2 || got[0].ID != "S-1" || got[1].ID != "S-2" {
+		t.Fatalf("scenarios not sorted/complete: %+v", got)
+	}
+	if got[0].Deps == nil || got[0].Acceptance == nil {
+		t.Error("nil slices should serialize as non-nil [] DTO slices")
+	}
+	s2 := got[1]
+	if s2.Title != "Add onboarding screen" || s2.Lane != "ios" || s2.Tier != "T3" ||
+		len(s2.Acceptance) != 2 || s2.Acceptance[1] != "maestro flow green" ||
+		s2.HoldoutRef != "store://holdouts/S-2/h.go" {
+		t.Errorf("S-2 mapped wrong: %+v", s2)
+	}
+}
+
+func TestProjectScenariosEmptyIsArray(t *testing.T) {
+	s := seededServer(t) // proj-b has no scenarios
+	rec := do(t, s, http.MethodGet, "/projects/proj-b/scenarios", bearer())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if body := strings.TrimSpace(rec.Body.String()); body != "[]" {
+		t.Errorf("body = %q, want []", body)
+	}
+}
+
+func TestProjectScenariosUnknownProject404(t *testing.T) {
+	s := seededServer(t)
+	rec := do(t, s, http.MethodGet, "/projects/does-not-exist/scenarios", bearer())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHostsHappyPathSortedAndHeartbeatAge(t *testing.T) {
 	s := seededServer(t)
 	rec := do(t, s, http.MethodGet, "/hosts", bearer())
