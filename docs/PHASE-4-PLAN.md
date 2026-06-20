@@ -344,3 +344,17 @@ dalga başlarında.
     `apiServer.serverError(op,err)` 16 yutulmuş-500 yerine gerçek nedeni server-side loglar (secret-free). Gerçek-PG test
     `onboard_pg_test.go` (newStore-migrates-fresh-schema + onboard 201→idempotent 200; teeth-check: migrate kapalıyken
     SQLSTATE 42P01 ile düşüyor). Rule#9: build/vet/`-race ./...`(gerçek-PG)/e2e-tag/golangci hepsi yeşil.
+  - ✅ **OVERNIGHT — editör-loop G3/G4 committed testleri** (develop `135b012`, CI yeşil): kapanış-review Lens-3 "G2/G3/G4
+    manuel" boşluğu kapatıldı. `editor/src/hostBridge.live.test.ts` (G3 distill: gerçek HostBridge rest-request proxy →
+    `/distill` → öneri senaryo, token-free) + `controlClient.live.test.ts` (G4 approve→merge: held task → ControlClient.approve
+    → daemon merge poll). İkisi de skipIf-gated (default gate deterministik; 166 pass/3 skip). NOT: G3 canlı koşumu gateway'de
+    authed `claude -p` gerektirir → bu nested sandbox'ta claude subprocess "Not logged in" (ortamsal, ürün değil); approve
+    wiring CANLI doğrulandı (409 no-held-task + 401 unauthed). README "Live e2e check" güncellendi (G1/G3/G4 committed; yalnız
+    /events backfill manuel).
+  - ✅ **OVERNIGHT — TAM PLATFORM ADVERSARIAL REVIEW** (4 mercek; bkz [[REVIEW-OVERNIGHT-FINDINGS]]): 2 GERÇEK bulgu bulundu+
+    düzeltildi → **M1** eşzamanlı-migration yarışı (daemon+gateway cold start; goose advisory lock `WithSessionLocker`, develop
+    `a86007e`, 6-yönlü concurrent test teeth'li) + **M2** git option-injection (onboard repo/base_branch → `--upload-pack`=RCE;
+    `internal/gitsafe.ValidArg` iki kapıda + provisioner `git clone … --`, develop `a1b30af`, testli). Diğer mercekler temiz:
+    secret git-tracked YOK (iki repo), token/DSN log'da YOK, frozen kontratlar imza-değişmez (ADR-0021), merge-authority sağlam,
+    testler teeth'li, 4D-3 imza GERÇEK Apple-Accepted. NOT: agent-paralel fan-out claude-subprocess-auth yüzünden koşmadı →
+    review elle yapıldı. Rule#9: her fix `-race ./...`(gerçek-PG)+e2e-tag+golangci yeşil + teeth-check'li.
