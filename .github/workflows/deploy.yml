@@ -1,0 +1,96 @@
+name: deploy
+# Auto-deploy the conductor CONTROL-PLANE (the conductor-api gateway + recovery
+# cronjobs) to hetzner-k8s-1 via GitOps. On push to main: build the image, push it
+# to ECR as main-<sha7>, then bump charts/conductor/values.yaml's image.tag in
+# everva/k8s — ArgoCD (App-of-Apps) auto-syncs the new revision.
+#
+# The performer DAEMONS run on claude-authed HOSTS (davinci/Mac), NOT here, so this
+# only ships the read+control gateway + the ADR-0016 cronjobs.
+#
+# Repo secrets required (Settings → Secrets → Actions): AWS_ACCESS_KEY_ID,
+# AWS_SECRET_ACCESS_KEY (ECR push), K8S_REPO_PAT (a PAT with write access to
+# everva/k8s for the tag-bump commit).
+on:
+  push:
+    branches: [develop]
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: eu-central-1
+  ECR_REPO: 827604626727.dkr.ecr.eu-central-1.amazonaws.com/conductor
+
+jobs:
+  build:
+    runs-on: [self-hosted, Linux, X64]
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: echo "tag=develop-$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.ECR_REPO }}:${{ steps.tag.outputs.tag }}
+            ${{ env.ECR_REPO }}:latest
+
+  update-k8s:
+    needs: build
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: everva/k8s
+          token: ${{ secrets.K8S_REPO_PAT }}
+      - name: Bump conductor image.tag in values.yaml
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import os, re, pathlib
+          tag = os.environ["TAG"]
+          p = pathlib.Path("charts/conductor/values.yaml")
+          text = p.read_text()
+          # Rewrite the `tag: "..."` line under the top-level `image:` block only.
+          pat = r'(^image:(?:\n(?!\w).*)*?\n  tag: ")[^"]*(")'
+          new, n = re.subn(pat, rf'\g<1>{tag}\g<2>', text, count=1, flags=re.M)
+          if n != 1:
+              raise SystemExit("image.tag not found in charts/conductor/values.yaml")
+          p.write_text(new)
+          print(f"bumped image.tag -> {tag}")
+          PY
+      - name: Commit & push (rebase-safe)
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add charts/conductor/values.yaml
+          if git diff --cached --quiet; then echo "no image change"; exit 0; fi
+          git commit -m "deploy(conductor): → ${TAG}"
+          for attempt in 1 2 3 4 5; do
+            if git push; then exit 0; fi
+            git pull --rebase --autostash origin main || true
+          done
+          echo "::error::failed to push values.yaml after 5 attempts"; exit 1
