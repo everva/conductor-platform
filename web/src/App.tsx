@@ -25,9 +25,26 @@ function Shell() {
 
   return (
     <div>
-      <header style={styles.header}>
-        <strong>Conductor Cockpit</strong>
-        <button type="button" onClick={signOut} style={styles.signout}>
+      <header className="app-bar">
+        <div className="app-brand">
+          <span className="app-mark" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <g stroke="#fff" strokeWidth="1" opacity="0.6">
+                <line x1="8" y1="8" x2="13" y2="4" />
+                <line x1="8" y1="8" x2="3" y2="5.5" />
+                <line x1="8" y1="8" x2="9.5" y2="13" />
+              </g>
+              <g fill="#fff">
+                <circle cx="8" cy="8" r="2.3" />
+                <circle cx="13" cy="4" r="1.5" />
+                <circle cx="3" cy="5.5" r="1.5" />
+                <circle cx="9.5" cy="13" r="1.5" />
+              </g>
+            </svg>
+          </span>
+          <span className="app-name">Conductor</span>
+        </div>
+        <button type="button" onClick={signOut} className="app-signout">
           Sign out
         </button>
       </header>
@@ -39,20 +56,3 @@ function Shell() {
     </div>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  header: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: "0.75rem 1.25rem",
-    borderBottom: "1px solid #2a2f37",
-  },
-  signout: {
-    padding: "0.375rem 0.75rem",
-    borderRadius: "0.375rem",
-    border: "1px solid #2a2f37",
-    background: "transparent",
-    color: "#e6e6e6",
-  },
-};

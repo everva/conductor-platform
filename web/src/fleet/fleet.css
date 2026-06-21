@@ -14,10 +14,10 @@
   flex-wrap: wrap;
   gap: 1.5rem;
   align-items: center;
-  padding: 0.75rem 1rem;
-  border: 1px solid #2a2f37;
-  border-radius: 0.5rem;
-  background: #1b1e24;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 0.75rem;
+  background: linear-gradient(180deg, #1c2027, #181b21);
 }
 
 .fleet-stat {
@@ -34,8 +34,9 @@
 }
 
 .fleet-stat-value {
-  font-size: 1.4rem;
+  font-size: 1.15rem;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .fleet-stat-value.small {
@@ -71,27 +72,33 @@
   background: #f87171;
 }
 
-/* --- view tabs (fleet | events) --- */
+/* --- view tabs: a segmented control (redesign E4 polish) --- */
 .fleet-tabs {
-  display: flex;
-  gap: 0.4rem;
+  display: inline-flex;
+  gap: 0.2rem;
+  padding: 0.25rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 0.6rem;
+  align-self: flex-start;
 }
 .fleet-tab {
-  padding: 0.35rem 0.85rem;
-  border: 1px solid #2a2f37;
-  border-radius: 0.4rem;
+  padding: 0.35rem 0.9rem;
+  border: none;
+  border-radius: 0.45rem;
   background: transparent;
   color: #9aa4b2;
   font-size: 0.85rem;
+  font-weight: 500;
   cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 .fleet-tab:hover {
-  background: #21252d;
+  color: #e6e6e6;
 }
 .fleet-tab.active {
-  background: #233044;
-  color: #e6e6e6;
-  border-color: #2f4a6b;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
 }
 
 /* --- layout grid --- */

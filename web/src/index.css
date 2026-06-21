@@ -26,3 +26,49 @@ input {
 a {
   color: #6ab0ff;
 }
+
+/* --- app chrome (shell): a sticky brand bar (redesign E4 polish) --- */
+.app-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: linear-gradient(180deg, #181b22, #14161a);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.app-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  box-shadow: 0 1px 4px rgba(99, 102, 241, 0.45);
+}
+.app-name {
+  font-weight: 650;
+  font-size: 1rem;
+  letter-spacing: 0.01em;
+  color: #f0f2f7;
+}
+.app-signout {
+  padding: 0.4rem 0.8rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: #c7ced8;
+  font-size: 0.85rem;
+  transition: filter 0.12s ease;
+}
+.app-signout:hover {
+  filter: brightness(1.35);
+}
