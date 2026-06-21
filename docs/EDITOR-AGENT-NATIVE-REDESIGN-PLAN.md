@@ -13,6 +13,36 @@ plan editörü "yan panel"den **agent komuta merkezi** (default surface) modelin
 
 ---
 
+## DURUM (2026-06-21) — E1+E2+E3+shell TAMAM, sıradaki E4
+
+**develop @ `d3ebc53` (CI 3-job yeşil).** Hepsi non-breaking, çoğu web-only (B1/B2 hariç additive Go),
+Playwright-CANLI KENDİM doğrulandı (Devin-grade):
+- **E1** Command Center board (default Kanban yüzey) + **görsel-polish** (`50b1c55`/`a764782`).
+- **E2** premium Session view drill-in (`2b67bbf` backend + `e1bfc4c` web): SPEC/acceptance +
+  **Verifier-verdict hero** (B1/ADR-0033: conductor `KindDecision`'a bounded per-gate checks emit —
+  checks artık ATILMIYOR) + inline renkli diff + activity timeline + Approve. **B2/ADR-0034**: gateway
+  `GET /projects/{id}/scenarios`.
+- **E4-a shell-polish** (`f4d0d28`): app-bar (indigo→violet marka hub-glyph) + segmented-control tab'lar
+  + slim telemetri çubuğu — tüm kabuk Devin-grade.
+- **E3** spec-first intake (`d3ebc53`): claude-FREE **"Write spec directly"** (YAML editor template →
+  Approve → /intake dispatch) + "View on board →"; **CANLI loop kanıtlı** (LIVE-1 yazıldı → /intake 200 →
+  board READY).
+
+**SIRADAKİ:** (1) kullanıcı tüm akışı gezer; (2) **E4 director güçleri** — komut paleti (⌘K → dispatch/jump),
+needs-review bildirimleri, replay timeline, "take over" → native editör. Sonra E5 (ACP interop + standalone).
+
+**SERT KISIT:** bu sandbox'ta `claude` subprocess auth YOK → assisted distill (yazışma→senaryo) + real-claude
+develop BURADA koşamaz; UI'lar mock/seed ile, gerçek-claude kullanıcının host'unda. E3 direct-path bu yüzden eklendi
+(claude'suz tam-kullanılır).
+
+**Canlı demo stack** (gez/doğrula için): gateway `/tmp/cockpit-demo/conductor-api` `:8080` (schema `cp_view`,
+token `cockpit-demo-token-2026`) + web dev `:5173` (Vite proxy→:8080). Kapanmışsa: B2-rebuild'li gateway'i
+yeniden başlat (`go build -o /tmp/cockpit-demo/conductor-api ./cmd/conductor-api`; `CONDUCTOR_API_TOKEN=… -addr :8080
+-dsn '…search_path=cp_view'`) + gerekirse cp_view seed (projects/tasks/hosts/leases + I-1 scenario+events) +
+`cd web && npm run dev`.
+
+---
+
 ## 0. REVİZYON v2 — kod incelemesiyle doğrulanan boşluklar + net kararlar
 
 Planı kesinleştirmeden ÖNCE kritik varsayımları gerçek kodla sınadım. Bulgu + karar:
