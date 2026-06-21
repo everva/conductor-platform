@@ -73,7 +73,7 @@ alias). Token disiplini (webview/log/test'e ASLA). Canlı optiway/xirigo'ya DOKU
 isolation:"worktree" KULLANMA. NOT: `claude -p` bu makinede ÇALIŞIYOR (bu oturumda
 kanıtlandı) ama UI işi claude-free.
 
-## DURUM (2026-06-22) — V0→V3 TAMAM, SIRADAKİ V4
+## DURUM (2026-06-22) — V0→V4 TAMAM, SIRADAKİ V5 (iterate-to-9 + kullanıcı onayı)
 - Önkoşul: agent-native FEATURE planı E1–E4 ✅; k8s GitOps deploy ✅ (ayrı iş).
   Cockpit `:5173` dev + seeded gateway `:8080` AYAKTA (görsel doğrulama yüzeyi).
 - **V0 ✅ (develop `6f26a1f`)**: `web/src/theme/tokens.css` tek kanonik token
@@ -127,8 +127,18 @@ kanıtlandı) ama UI işi claude-free.
   boşluğu çıkarsa revisit). Canlı KENDİM (session/palette/intake/confirm hepsi
   premium, 0 err). Gate: tsc+eslint+vitest 151/151+**e2e 14/14** (intake selector
   fix dahil).
-- **SIRADAKİ: V4 motion + states + lucide** — surface/list/state geçiş animasyonları
-  (CSS veya framer-motion-lite), skeleton shimmer'ı board/session loading'e bağla,
-  focus craft + rafine scrollbar + tooltip, **lucide** ikon seti (kalan emoji/glyph/
-  inline-SVG'leri değiştir: ✓/✗ verdict, ▸ chevron'lar, tab ikonları, vb.) → V5
-  Devin-referans iterate-to-9. Her faz Playwright-canlı KENDİM.
+- **V4 ✅ (develop `0bb4f54`)**: delight pass. **lucide-react** (tree-shaken) TÜM
+  emoji/glyph/inline-SVG'leri değiştirdi — tab ikonları (LayoutGrid/Server/Activity/
+  Inbox), ⌘K Search, New work Plus, Review ChevronRight, session back ChevronLeft,
+  verdict gerçek Check/X, needs-review+"View on board" ArrowRight, notice dismiss X;
+  .fleet-btn/.fleet-tab/dismiss inline-flex (ikon+metin hizası). **Motion** (token
+  süreli→reduced-motion sıfırlar): board kartları ui-card-in mount'ta (stable key→
+  her refresh'te değil), session+intake ui-surface-in. **States**: board initial-load
+  `<Skeleton>` (fleet.loading→yalnız yükleniyor+boşken) + rafine themed scrollbar.
+  Canlı KENDİM (ikonlar crisp, tablar scannable, 0 err). Gate: tsc+eslint+vitest
+  151/151+**e2e 14/14** (tab'lar map'e refactor; a11y adları korundu).
+- **SIRADAKİ: V5 iterate-to-9** — gerçek Devin.ai UI ekran-görüntüleriyle YAN YANA;
+  her yüzey için öz-eleştiri → kalan boşlukları kapat (density/balance, empty-state
+  craft, tooltip, hover/active ince ayar) → DÜRÜST 9/10 okuyana kadar iterate.
+  **Bitiş = ekran-görüntüsünde "Devin gibi" diyebilmem + KULLANICI ONAYI.** Her
+  iterasyon Playwright-canlı KENDİM. Cockpit şu an ~8.5/10.
