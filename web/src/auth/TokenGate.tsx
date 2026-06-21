@@ -8,7 +8,28 @@
 // real network; in production it constructs an ApiClient and calls status().
 import { useState, type ReactNode } from "react";
 import { ApiClient, ApiError } from "../api/client.ts";
+import { Button } from "../ui/index.ts";
 import { useAuth } from "./context.ts";
+import "./auth.css";
+
+// The Conductor brand mark (mirrors the app-bar): a small constellation glyph.
+const BrandMark = () => (
+  <span className="auth-mark" aria-hidden="true">
+    <svg width="18" height="18" viewBox="0 0 16 16" fill="none">
+      <g stroke="#fff" strokeWidth="1" opacity="0.6">
+        <line x1="8" y1="8" x2="13" y2="4" />
+        <line x1="8" y1="8" x2="3" y2="5.5" />
+        <line x1="8" y1="8" x2="9.5" y2="13" />
+      </g>
+      <g fill="#fff">
+        <circle cx="8" cy="8" r="2.3" />
+        <circle cx="13" cy="4" r="1.5" />
+        <circle cx="3" cy="5.5" r="1.5" />
+        <circle cx="9.5" cy="13" r="1.5" />
+      </g>
+    </svg>
+  </span>
+);
 
 // VerifyFn checks a candidate token against the gateway. It resolves on success
 // and rejects (ideally with ApiError) on failure. Default: status() probe.
@@ -58,27 +79,40 @@ export function TokenGate({ children, verify = defaultVerify }: TokenGateProps) 
   };
 
   return (
-    <main style={styles.wrap}>
-      <form onSubmit={onSubmit} style={styles.form} aria-label="Sign in">
-        <h1 style={styles.title}>Conductor Cockpit</h1>
-        <label htmlFor="token" style={styles.label}>
-          API token
-        </label>
-        <input
-          id="token"
-          type="password"
-          autoComplete="off"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="bearer token"
-          style={styles.input}
-          disabled={busy}
-        />
-        <button type="submit" style={styles.button} disabled={busy}>
+    <main className="auth-wrap">
+      <form onSubmit={onSubmit} className="auth-card" aria-label="Sign in">
+        <div className="auth-brand">
+          <BrandMark />
+          <div>
+            <h1 className="auth-title">Conductor</h1>
+            <p className="auth-subtitle">Sign in to the cockpit</p>
+          </div>
+        </div>
+        <div className="auth-field">
+          <label htmlFor="token" className="auth-label">
+            API token
+          </label>
+          <input
+            id="token"
+            type="password"
+            autoComplete="off"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="bearer token"
+            className="auth-input"
+            disabled={busy}
+          />
+        </div>
+        <Button
+          type="submit"
+          variant="primary"
+          loading={busy}
+          className="auth-submit"
+        >
           {busy ? "Verifying…" : "Sign in"}
-        </button>
+        </Button>
         {error !== null && (
-          <p role="alert" style={styles.error}>
+          <p role="alert" className="auth-error">
             {error}
           </p>
         )}
@@ -86,39 +120,3 @@ export function TokenGate({ children, verify = defaultVerify }: TokenGateProps) 
     </main>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  wrap: {
-    display: "flex",
-    minHeight: "100vh",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  form: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "0.75rem",
-    width: "20rem",
-    padding: "1.5rem",
-    border: "1px solid #2a2f37",
-    borderRadius: "0.5rem",
-    background: "#1b1e24",
-  },
-  title: { margin: 0, fontSize: "1.25rem" },
-  label: { fontSize: "0.85rem", color: "#9aa4b2" },
-  input: {
-    padding: "0.5rem",
-    borderRadius: "0.375rem",
-    border: "1px solid #2a2f37",
-    background: "#14161a",
-    color: "#e6e6e6",
-  },
-  button: {
-    padding: "0.5rem",
-    borderRadius: "0.375rem",
-    border: "none",
-    background: "#3b82f6",
-    color: "white",
-  },
-  error: { margin: 0, color: "#f87171", fontSize: "0.85rem" },
-};

@@ -8,8 +8,9 @@ import { expect, test } from "@playwright/test";
 test("renders the token gate when signed out", async ({ page }) => {
   await page.goto("/");
 
-  // The sign-in form and its token input must be present.
-  await expect(page.getByRole("heading", { name: /conductor cockpit/i })).toBeVisible();
+  // The sign-in form and its token input must be present. (V5: the brand lockup is
+  // the "Conductor" wordmark + a "Sign in to the cockpit" subtitle.)
+  await expect(page.getByRole("heading", { name: /conductor/i })).toBeVisible();
   await expect(page.getByLabel(/api token/i)).toBeVisible();
   await expect(page.getByRole("button", { name: /sign in/i })).toBeVisible();
 });
