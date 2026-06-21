@@ -73,7 +73,7 @@ alias). Token disiplini (webview/log/test'e ASLA). Canlı optiway/xirigo'ya DOKU
 isolation:"worktree" KULLANMA. NOT: `claude -p` bu makinede ÇALIŞIYOR (bu oturumda
 kanıtlandı) ama UI işi claude-free.
 
-## DURUM (2026-06-21) — V0+V1 TAMAM, SIRADAKİ V2
+## DURUM (2026-06-22) — V0+V1+V2 TAMAM, SIRADAKİ V3
 - Önkoşul: agent-native FEATURE planı E1–E4 ✅; k8s GitOps deploy ✅ (ayrı iş).
   Cockpit `:5173` dev + seeded gateway `:8080` AYAKTA (görsel doğrulama yüzeyi).
 - **V0 ✅ (develop `6f26a1f`)**: `web/src/theme/tokens.css` tek kanonik token
@@ -98,9 +98,23 @@ kanıtlandı) ama UI işi claude-free.
   tuning V2). Gate: tsc+eslint(0 warn)+vitest 151/151 (16 yeni). Henüz yüzey
   re-skin YOK (V2). Overlay primitives (Dialog/Tooltip/Tabs/Toast/Select + Radix
   değerlendirmesi) tüketen dalgada (V3) gelecek — KASITLI scoping.
-- **SIRADAKİ: V2 shell + board re-skin** — app-bar/nav + Command Center board'u
-  `src/ui` primitive'lerine geçir (literal→token): density, hiyerarşi, kart craft
-  (status semantic, canlı pulse, hover-lift), empty/loading state. İLK gerçek
-  "9/10 mu?" board ekran-görüntüsü öz-değerlendirmesi (before = V0 baseline).
-  → V3 session/intake/⌘K → V4 motion+lucide → V5 iterate-to-9. Her faz
-  Playwright-canlı KENDİM.
+- **V2 ✅ (develop `f8a6db7`)**: shell + board re-skin = İLK gerçek görsel sıçrama.
+  Board (`CommandCenter.tsx`+`board.css`): kartlar→`<Card>` (gradient surface +
+  hover-lift + selected brand-ring + lifecycle accent-rail), tier→`<Badge>`,
+  lane/host→`<Chip>`+`<StatusDot pulse>`, ID'ler Geist Mono, Approve→`<Button
+  success>`, Review→`<Button>`, New work→`<Button primary>`+icon; board.css
+  token-only layout'a indi (yerel `--cc-*` blok + kart/buton/badge/dot CSS emekli).
+  Tüm test-hook'ları korundu (role=button kartlar, `.cc-stat`, checkbox aria,
+  "Bulk actions" region, buton adları). Shell: app-bar+Sign-out→`<Button ghost>`,
+  FleetStatusBar conn→`<StatusDot>`+Refresh→`<Button>`, segmented tabs+⌘K trigger
+  token, NeedsReviewBadge→`<StatusDot warn pulse>`. **DÜRÜST skor board ~7.5/10**
+  (3.5 baseline'dan). Canlı KENDİM (before/after; Geist+Mono yüklü, 0 err). Gate:
+  tsc+eslint+vitest 151/151+**Playwright e2e 14/14** (intake "+ New work"→"New
+  work" selector; + artık dekoratif aria-hidden icon). NOT: Fleet/Events tab
+  detay CSS'i (panel/tablo/notice/intervention/ticker/modal `fleet.css`) board
+  yüzeyinde DEĞİL → o yüzeylerle birlikte sonra re-skin (literal kaldı, dürüst).
+- **SIRADAKİ: V3 session + intake + ⌘K** — SessionView (verdict-hero + inline
+  diff + timeline/replay), IntakeChat (spec editor), CommandPalette'i `src/ui`
+  primitive'lerine + premium craft + micro-interaction. (Overlay primitives —
+  Dialog/Tooltip/Tabs/Toast + Radix değerlendirmesi — BURADA, tüketen yüzeyle.)
+  → V4 motion+states+lucide → V5 iterate-to-9. Her faz Playwright-canlı KENDİM.
