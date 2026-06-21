@@ -17,6 +17,8 @@ import { useFleetControls } from "./useFleetControls.ts";
 import type { ControlClient } from "./controls.ts";
 import { FleetStatusBar } from "./FleetStatusBar.tsx";
 import { CommandCenter } from "./CommandCenter.tsx";
+import { CommandPalette } from "./CommandPalette.tsx";
+import type { PaletteAction } from "./palette.ts";
 import { ProjectsTable } from "./ProjectsTable.tsx";
 import { HostsPanel } from "./HostsPanel.tsx";
 import { TasksView } from "./TasksView.tsx";
@@ -90,6 +92,10 @@ export function FleetDashboard({
   // content with the SessionView (the status bar + notices + confirm dialog persist).
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [tab, setTab] = useState<DashboardTab>("board");
+  // The ⌘K command palette (redesign E4): a keyboard-first overlay to jump to any
+  // session, switch surface, or start new work. Opened globally by ⌘K/Ctrl+K (or
+  // the tab-bar trigger) and reachable from the session view too.
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   // The intake client defaults to the real ApiClient (distill + intake); tests
   // inject a fake. Built lazily per-render is cheap and keeps the token in memory.
@@ -127,6 +133,41 @@ export function FleetDashboard({
     setTab("fleet");
   };
 
+  // ⌘K / Ctrl+K toggles the command palette from anywhere in the cockpit (board,
+  // a tab, or a session). A window-level listener keeps the shortcut working
+  // regardless of which control holds focus.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // runPaletteAction maps a palette selection to the cockpit's existing navigation
+  // seams (the same setTab/setSelectedTask a tab click or board drill-in uses) and
+  // closes the palette. Navigation clears any open session so the chosen surface
+  // is what renders.
+  const runPaletteAction = (action: PaletteAction) => {
+    setPaletteOpen(false);
+    switch (action.type) {
+      case "navigate":
+        setSelectedTask(null);
+        setTab(action.surface);
+        break;
+      case "new-work":
+        setSelectedTask(null);
+        setTab("intake");
+        break;
+      case "open-session":
+        setSelectedTask(action.task);
+        break;
+    }
+  };
+
   return (
     <div className="fleet">
       <FleetStatusBar
@@ -160,6 +201,7 @@ export function FleetDashboard({
         />
       ) : (
         <>
+      <div className="fleet-tabbar">
       <div className="fleet-tabs" role="tablist" aria-label="Dashboard view">
         <button
           type="button"
@@ -197,6 +239,16 @@ export function FleetDashboard({
         >
           Intake
         </button>
+      </div>
+      <button
+        type="button"
+        className="cmdk-trigger"
+        aria-keyshortcuts="Meta+K Control+K"
+        onClick={() => setPaletteOpen(true)}
+      >
+        <span>Search &amp; jump</span>
+        <kbd>⌘K</kbd>
+      </button>
       </div>
 
       {tab === "board" ? (
@@ -266,6 +318,14 @@ export function FleetDashboard({
         onConfirm={controls.confirm}
         onCancel={controls.cancelConfirm}
       />
+
+      {paletteOpen && (
+        <CommandPalette
+          tasksByProject={fleet.tasksByProject}
+          onAction={runPaletteAction}
+          onClose={() => setPaletteOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -5,7 +5,7 @@
 // couldn't mount token-free over injected transports, it would fail here. The web
 // (token) path stays covered by the existing component/hook tests.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import {
   ApiClient,
   FleetDashboard,
@@ -201,6 +201,44 @@ describe("cockpit barrel: FleetDashboard token-free over injected transports", (
     expect(
       within(ticker).getByText((_, el) => el?.textContent === `${LIVE_EVENT.project}·${LIVE_EVENT.task}`),
     ).toBeInTheDocument();
+  });
+
+  it("⌘K opens the command palette wired to the live fleet; choosing a surface navigates (E4)", async () => {
+    const fakeTransport = new FakeEventTransport();
+    render(
+      <FleetDashboard
+        token=""
+        onUnauthorized={() => {}}
+        makeClient={makeReadClient}
+        makeControlClient={makeControlClient}
+        makeIntakeClient={makeIntakeClient}
+        eventTransport={fakeTransport}
+      />,
+    );
+    await flush();
+
+    // The global ⌘K shortcut opens the palette from anywhere (here, the board).
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }));
+    });
+    const palette = screen.getByRole("dialog", { name: "Command palette" });
+
+    // It is wired to the LIVE fleet snapshot: the injected task shows as a
+    // jump-to-session row (proving FleetDashboard hands it fleet.tasksByProject).
+    expect(within(palette).getByText(TASK.id)).toBeInTheDocument();
+
+    // Choosing "Go to Fleet" routes the cockpit to the Fleet surface via the same
+    // setTab seam a tab click uses (runPaletteAction). mousedown matches the item
+    // handler (it runs before the input blurs).
+    act(() => {
+      fireEvent.mouseDown(within(palette).getByText("Go to Fleet"));
+    });
+    expect(screen.getByRole("tab", { name: "Fleet" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    // The palette closed as part of executing the action.
+    expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
   });
 
   it("exposes the transport seams the fork wires (ApiClient over an injected HttpTransport)", async () => {
