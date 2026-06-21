@@ -6,6 +6,7 @@
 // count comes from needsReviewCount — the SAME bucketing the board's Needs-Review
 // column uses — so the shell badge and the column never disagree. role="status"
 // + aria-live makes it announce when review work appears (an accessible nudge).
+import { StatusDot } from "../ui/index.ts";
 import "./needsReview.css";
 
 export interface NeedsReviewBadgeProps {
@@ -22,7 +23,7 @@ export function NeedsReviewBadge({ count, onReview }: NeedsReviewBadgeProps) {
     count === 1 ? "1 task needs your review" : `${count} tasks need your review`;
   return (
     <div className="needs-review" role="status" aria-live="polite">
-      <span className="needs-review-dot" aria-hidden="true" />
+      <StatusDot tone="warn" pulse className="needs-review-dot" />
       <span className="needs-review-label">{label}</span>
       <button type="button" className="needs-review-btn" onClick={onReview}>
         Review →

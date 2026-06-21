@@ -34,8 +34,9 @@ test("'+ New work' → Write spec directly opens the authoritative YAML editor (
   await page.getByRole("button", { name: /sign in/i }).click();
   await expect(page.getByRole("region", { name: /command center/i })).toBeVisible();
 
-  // "+ New work" jumps to the Intake surface.
-  await page.getByRole("button", { name: "+ New work" }).click();
+  // "New work" jumps to the Intake surface (the leading + is now a decorative,
+  // aria-hidden icon, so the accessible name is "New work").
+  await page.getByRole("button", { name: /new work/i }).click();
   await expect(page.getByRole("tab", { name: /intake/i })).toHaveAttribute("aria-selected", "true");
 
   // The claude-free path: no conversation, no distill — author straight into the

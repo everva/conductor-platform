@@ -1,162 +1,108 @@
-/* Command Center board — premium agent-native surface (redesign E1, visual pass).
-   Layered dark, the Conductor indigo→violet brand accent, soft depth + hover-lift,
-   status-accented cards, a live pulse for running work. Echoes the dark shell but
-   aims for a modern command-center feel (not a flat ops table). */
+/* Command Center board (redesign E1 · V2 re-skin). Structure + layout only — the
+   card surface, status accent rail, buttons, badges, chips and status dots are now
+   the shared web/src/ui primitives (token-driven). Everything here resolves to a
+   theme/tokens.css custom property; no literals. */
 
 .cc {
-  --cc-bg: #14161c;
-  --cc-surface: #1a1d25;
-  --cc-surface-2: #1e2230;
-  --cc-line: rgba(255, 255, 255, 0.07);
-  --cc-line-soft: rgba(255, 255, 255, 0.045);
-  --cc-text: #eef1f7;
-  --cc-text-2: #aab2c0;
-  --cc-text-3: #79828f;
-  --cc-brand: #8b5cf6;
-  --cc-brand-2: #6366f1;
-  --cc-green: #34d399;
-  --cc-blue: #60a5fa;
-  --cc-amber: #fbbf24;
-  --cc-red: #f87171;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
-  color: var(--cc-text);
+  gap: var(--space-4);
+  color: var(--text-1);
 }
 
-/* --- top strip: the counts a director scans first, as chips --- */
+/* --- top strip: the counts a director scans first --- */
 .cc-strip {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: var(--space-2);
   flex-wrap: wrap;
-  padding: 0.7rem 0.85rem;
-  border: 1px solid var(--cc-line);
-  border-radius: 0.85rem;
-  background: linear-gradient(180deg, #1d212b, #181b22);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: linear-gradient(180deg, var(--surface-2), var(--surface-1));
+  box-shadow: var(--shadow-1);
 }
 
 .cc-stat {
   display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  font-size: 0.82rem;
-  color: var(--cc-text-2);
-  padding: 0.3rem 0.7rem;
-  border-radius: 0.55rem;
-  background: rgba(255, 255, 255, 0.035);
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-3);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
   border: 1px solid transparent;
 }
 .cc-stat b {
-  color: var(--cc-text);
-  font-size: 1.05rem;
-  font-weight: 650;
+  color: var(--text-1);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-tight);
   font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 .cc-stat.cc-attn {
-  background: rgba(251, 191, 36, 0.1);
-  border-color: rgba(251, 191, 36, 0.25);
-  color: var(--cc-amber);
+  background: var(--warn-soft);
+  border-color: var(--warn-border);
+  color: var(--warn-text);
 }
 .cc-stat.cc-attn b {
-  color: #fcd34d;
+  color: var(--warn-text);
 }
 
 .cc-strip-right {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 0.55rem;
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
-.cc-host-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.76rem;
-  color: var(--cc-text-2);
-  border: 1px solid var(--cc-line);
-  border-radius: 1rem;
-  padding: 0.18rem 0.6rem 0.18rem 0.55rem;
-  background: rgba(255, 255, 255, 0.02);
-}
 
-/* a small status dot; the "live" variant pulses (running work) */
-.cc-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--cc-green);
-  flex: none;
-}
-.cc-dot-live {
-  box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6);
-  animation: cc-pulse 1.9s ease-out infinite;
-}
-@keyframes cc-pulse {
-  70% { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
-}
-
-.cc-newwork {
-  border: none;
-  border-radius: 0.55rem;
-  padding: 0.42rem 0.85rem;
-  font-size: 0.83rem;
-  font-weight: 600;
-  color: #fff;
-  cursor: pointer;
-  background: linear-gradient(135deg, var(--cc-brand-2), var(--cc-brand));
-  box-shadow: 0 1px 3px rgba(99, 102, 241, 0.45);
-  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
-}
-.cc-newwork:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.5);
-  filter: brightness(1.06);
-}
-
-/* --- board: four columns --- */
+/* --- board: four lifecycle columns --- */
 .cc-board {
   display: grid;
   grid-template-columns: repeat(4, minmax(210px, 1fr));
-  gap: 0.85rem;
+  gap: var(--space-3);
   align-items: start;
 }
 
 .cc-col {
-  border: 1px solid var(--cc-line-soft);
-  border-radius: 0.85rem;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
   background: rgba(255, 255, 255, 0.014);
   display: flex;
   flex-direction: column;
   min-height: 7rem;
 }
 .cc-col-needs-review {
-  border-color: rgba(251, 191, 36, 0.22);
-  background: linear-gradient(180deg, rgba(251, 191, 36, 0.05), rgba(255, 255, 255, 0.012) 40%);
+  border-color: var(--warn-border);
+  background: linear-gradient(
+    180deg,
+    var(--warn-soft),
+    rgba(255, 255, 255, 0.012) 42%
+  );
 }
 
 .cc-col-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.7rem 0.8rem 0.55rem;
-  font-size: 0.7rem;
+  padding: var(--space-3) var(--space-3) var(--space-2);
+  font-size: var(--text-2xs);
   text-transform: uppercase;
-  letter-spacing: 0.09em;
-  font-weight: 650;
-  color: var(--cc-text-3);
+  letter-spacing: var(--tracking-caps);
+  font-weight: var(--weight-bold);
+  color: var(--text-3);
 }
 .cc-col-needs-review .cc-col-head {
-  color: var(--cc-amber);
+  color: var(--warn-text);
 }
 .cc-col-count {
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: var(--cc-text-2);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  color: var(--text-2);
   background: rgba(255, 255, 255, 0.06);
-  border-radius: 1rem;
+  border-radius: var(--radius-full);
   padding: 0.05rem 0.5rem;
   font-variant-numeric: tabular-nums;
 }
@@ -164,174 +110,120 @@
 .cc-col-body {
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
-  padding: 0.5rem;
+  gap: var(--space-2);
+  padding: var(--space-2);
 }
 .cc-col-empty {
-  color: #4d555f;
+  color: var(--text-faint);
   text-align: center;
-  padding: 1rem 0;
+  padding: var(--space-4) 0;
   margin: 0;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 
-/* --- card --- */
+/* --- bulk action bar (E4): appears when held cards are multi-selected --- */
+.cc-bulkbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+  border: 1px solid var(--brand-border);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(
+    180deg,
+    rgba(99, 102, 241, 0.14),
+    rgba(99, 102, 241, 0.05)
+  );
+  box-shadow: var(--shadow-1);
+}
+.cc-bulkbar-count {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text-1);
+}
+.cc-bulkbar-actions {
+  display: inline-flex;
+  gap: var(--space-2);
+}
+
+/* --- card: layout only (the surface + accent rail come from <Card>) --- */
 .cc-card {
-  position: relative;
-  border: 1px solid var(--cc-line);
-  border-radius: 0.65rem;
-  background: linear-gradient(180deg, #20242e, #1a1d26);
-  padding: 0.65rem 0.7rem 0.65rem 0.85rem;
-  cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
-  transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
-}
-.cc-card:hover {
-  transform: translateY(-2px);
-  border-color: rgba(139, 92, 246, 0.5);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
-}
-.cc-card:focus-visible {
-  outline: 2px solid var(--cc-brand);
-  outline-offset: 2px;
-}
-.cc-card.selected {
-  border-color: var(--cc-brand);
-  box-shadow: inset 0 0 0 1px var(--cc-brand), 0 6px 18px rgba(139, 92, 246, 0.18);
+  gap: var(--space-2);
 }
 .cc-card-check {
   display: inline-flex;
   align-items: center;
-  margin-right: 0.1rem;
+  margin-right: var(--space-1);
   cursor: pointer;
 }
 .cc-card-check input {
   width: 0.95rem;
   height: 0.95rem;
-  accent-color: var(--cc-brand);
+  accent-color: var(--brand);
   cursor: pointer;
 }
-
-/* Bulk action bar: appears when held cards are multi-selected (E4). */
-.cc-bulkbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.55rem 0.85rem;
-  border: 1px solid rgba(139, 92, 246, 0.4);
-  border-radius: 0.7rem;
-  background: linear-gradient(180deg, rgba(139, 92, 246, 0.14), rgba(139, 92, 246, 0.05));
-}
-.cc-bulkbar-count {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--cc-text);
-}
-.cc-bulkbar-actions {
-  display: inline-flex;
-  gap: 0.5rem;
-}
-/* left status accent rail */
-.cc-card::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0.55rem;
-  bottom: 0.55rem;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: var(--cc-text-3);
-}
-.cc-card-running::before { background: linear-gradient(var(--cc-blue), #3b82f6); }
-.cc-card-attn::before { background: linear-gradient(var(--cc-amber), #f59e0b); }
-.cc-card-blocked::before { background: linear-gradient(var(--cc-red), #dc2626); }
-.cc-card-done::before { background: linear-gradient(var(--cc-green), #10b981); }
 
 .cc-card-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 .cc-card-id {
-  font-weight: 600;
-  color: var(--cc-text);
-  font-size: 0.9rem;
-}
-.cc-card-tier {
-  font-size: 0.66rem;
-  font-weight: 600;
-  color: var(--cc-text-3);
-  border: 1px solid var(--cc-line);
-  border-radius: 0.3rem;
-  padding: 0.04rem 0.34rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text-1);
+  letter-spacing: 0;
 }
 .cc-card-proj {
-  font-size: 0.8rem;
-  color: var(--cc-text-2);
+  font-size: var(--text-sm);
+  color: var(--text-2);
 }
 .cc-card-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.45rem;
-  font-size: 0.72rem;
-  color: var(--cc-text-3);
-}
-.cc-card-lane {
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 0.3rem;
-  padding: 0.04rem 0.4rem;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-3);
 }
 .cc-host-tag {
   display: inline-flex;
   align-items: center;
-  gap: 0.32rem;
-  color: var(--cc-green);
+  gap: var(--space-1);
+  color: var(--success-text);
 }
 .cc-phase {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
-  color: #a78bfa;
+  gap: var(--space-1);
+  color: var(--violet-400);
 }
 
 .cc-card-diff {
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-1);
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
-.cc-add { color: var(--cc-green); }
-.cc-del { color: var(--cc-red); }
+.cc-add {
+  color: var(--success-text);
+}
+.cc-del {
+  color: var(--danger-text);
+}
 
 .cc-card-actions {
   display: flex;
-  gap: 0.45rem;
-  margin-top: 0.1rem;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
 }
-.cc-btn {
-  font-size: 0.78rem;
-  font-weight: 600;
-  border-radius: 0.45rem;
-  padding: 0.32rem 0.7rem;
-  cursor: pointer;
-  border: 1px solid var(--cc-line);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--cc-text);
-  transition: filter 0.12s ease, transform 0.12s ease;
-}
-.cc-btn:hover { filter: brightness(1.15); }
-.cc-btn-approve {
-  border: none;
-  color: #052e1f;
-  background: linear-gradient(135deg, #34d399, #10b981);
-}
-.cc-btn-approve:disabled { opacity: 0.6; cursor: default; }
 
 /* Narrow viewports (a webview side panel): stack the columns. */
 @media (max-width: 760px) {

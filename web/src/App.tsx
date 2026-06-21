@@ -9,6 +9,7 @@ import { useAuth } from "./auth/context.ts";
 // the fork webview (4B) is the second. Auth/TokenGate stay imported directly from
 // ./auth — they are web-only bootstrap, intentionally NOT in the barrel.
 import { FleetDashboard } from "./cockpit.ts";
+import { Button } from "./ui/index.ts";
 
 export function App() {
   return (
@@ -44,9 +45,9 @@ function Shell() {
           </span>
           <span className="app-name">Conductor</span>
         </div>
-        <button type="button" onClick={signOut} className="app-signout">
+        <Button variant="ghost" size="sm" onClick={signOut}>
           Sign out
-        </button>
+        </Button>
       </header>
       <main>
         {token !== null && (

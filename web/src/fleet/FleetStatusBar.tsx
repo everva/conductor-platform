@@ -3,6 +3,8 @@
 import type { StatusSummary } from "../api/types.ts";
 import type { StreamState } from "../api/useEventStream.ts";
 import { shortTime } from "./format.ts";
+import { Button, StatusDot } from "../ui/index.ts";
+import type { DotTone } from "../ui/index.ts";
 
 export interface FleetStatusBarProps {
   status: StatusSummary | null;
@@ -15,6 +17,12 @@ const CONN_LABEL: Record<StreamState, string> = {
   open: "live",
   connecting: "connecting…",
   closed: "offline",
+};
+
+const CONN_TONE: Record<StreamState, DotTone> = {
+  open: "success",
+  connecting: "warn",
+  closed: "danger",
 };
 
 export function FleetStatusBar({
@@ -46,12 +54,12 @@ export function FleetStatusBar({
       <div className="fleet-spacer" />
 
       <span className="fleet-conn" aria-label={`Stream ${streamState}`}>
-        <span className={`fleet-dot ${streamState}`} />
+        <StatusDot tone={CONN_TONE[streamState]} pulse={streamState === "open"} />
         {CONN_LABEL[streamState]}
       </span>
-      <button type="button" onClick={onRefresh}>
+      <Button variant="secondary" size="sm" onClick={onRefresh}>
         Refresh
-      </button>
+      </Button>
     </div>
   );
 }

@@ -16,7 +16,17 @@ import { buildBoard, BOARD_COLUMNS } from "./board.ts";
 import type { BoardCard } from "./board.ts";
 import { isAwaitingApproval } from "./controls.ts";
 import type { FleetControls } from "./useFleetControls.ts";
+import { Badge, Button, Card, Chip, StatusDot } from "../ui/index.ts";
+import type { CardAccent } from "../ui/index.ts";
 import "./board.css";
+
+// PlusIcon — the only board glyph kept inline (the primary CTA); the rest of the
+// emoji/text glyphs are retired in V2. Real icon set (lucide) lands in V4.
+const PlusIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+  </svg>
+);
 
 // selKey identifies a selected task across projects (project:id).
 function selKey(projectId: string, taskId: string): string {
@@ -119,14 +129,14 @@ export function CommandCenter({
         </span>
         <span className="cc-strip-right">
           {hosts.map((h) => (
-            <span key={h.id} className="cc-host-pill" title={h.capabilities.join(", ")}>
-              <span className="cc-dot" /> {h.id}
-            </span>
+            <Chip key={h.id} className="cc-host-pill" title={h.capabilities.join(", ")}>
+              <StatusDot tone="success" /> {h.id}
+            </Chip>
           ))}
           {onNewWork && (
-            <button type="button" className="cc-newwork" onClick={onNewWork}>
-              + New work
-            </button>
+            <Button variant="primary" size="sm" leftIcon={<PlusIcon />} onClick={onNewWork}>
+              New work
+            </Button>
           )}
         </span>
       </div>
@@ -137,20 +147,16 @@ export function CommandCenter({
             {selectedItems.length} selected
           </span>
           <span className="cc-bulkbar-actions">
-            <button
-              type="button"
-              className="cc-btn cc-btn-approve"
+            <Button
+              variant="success"
+              size="sm"
               onClick={() => controls.requestBulkApprove(selectedItems)}
             >
               Approve &amp; merge {selectedItems.length}
-            </button>
-            <button
-              type="button"
-              className="cc-btn"
-              onClick={() => setSelected(new Set())}
-            >
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
               Clear
-            </button>
+            </Button>
           </span>
         </div>
       )}
@@ -217,22 +223,25 @@ function BoardCardView({
   // Only held (approvable) cards can be multi-selected for a bulk approve.
   const selectable = held && controls !== undefined && onToggleSelect !== undefined;
 
-  // The status accent rail follows the card's lifecycle: held → amber, blocked →
-  // red, running (a leasing host) → blue, done → green, else a neutral ready.
-  const kind = held
-    ? "attn"
+  // The status accent rail follows the card's lifecycle: held → amber (warn),
+  // blocked → red (danger), running (a leasing host) → blue (info), done → green
+  // (success), else a neutral ready.
+  const accent: CardAccent = held
+    ? "warn"
     : blocked
-      ? "blocked"
+      ? "danger"
       : card.host
-        ? "running"
+        ? "info"
         : t.status === "done"
-          ? "done"
-          : "ready";
-  const cls = `cc-card cc-card-${kind}${selected ? " selected" : ""}`;
+          ? "success"
+          : "none";
 
   return (
-    <article
-      className={cls}
+    <Card
+      className="cc-card"
+      interactive
+      selected={selected}
+      accent={accent}
       role="button"
       tabIndex={0}
       aria-label={`Task ${t.id} in ${t.project_id}, status ${held ? "awaiting-approval" : t.status}`}
@@ -260,18 +269,18 @@ function BoardCardView({
             />
           </label>
         )}
-        <span className="mono cc-card-id">{t.id}</span>
-        {t.tier && <span className="cc-card-tier">{t.tier}</span>}
+        <span className="cc-card-id">{t.id}</span>
+        {t.tier && <Badge tone="neutral">{t.tier}</Badge>}
       </div>
       <div className="cc-card-proj">{t.project_id}</div>
       <div className="cc-card-meta">
-        {t.lane && <span className="cc-card-lane">{t.lane}</span>}
+        {t.lane && <Chip>{t.lane}</Chip>}
         {card.host && (
           <span className="cc-host-tag">
-            <span className="cc-dot cc-dot-live" /> {card.host}
+            <StatusDot tone="success" pulse /> {card.host}
           </span>
         )}
-        {card.livePhase && <span className="cc-phase">▸ {card.livePhase}</span>}
+        {card.livePhase && <span className="cc-phase">{card.livePhase}</span>}
       </div>
       {card.diff && (
         <div className="cc-card-diff">
@@ -285,22 +294,22 @@ function BoardCardView({
       {(held || blocked) && (
         <div className="cc-card-actions" onClick={(e) => e.stopPropagation()}>
           {held && controls && (
-            <button
-              type="button"
-              className="cc-btn cc-btn-approve"
+            <Button
+              variant="success"
+              size="sm"
               disabled={busy}
               onClick={() => controls.requestApprove(t.project_id, t.id)}
             >
               {busy ? "Approving…" : "Approve"}
-            </button>
+            </Button>
           )}
           {onOpenSession && (
-            <button type="button" className="cc-btn" onClick={select}>
-              Review ▸
-            </button>
+            <Button variant="secondary" size="sm" onClick={select}>
+              Review
+            </Button>
           )}
         </div>
       )}
-    </article>
+    </Card>
   );
 }
