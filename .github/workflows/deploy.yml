@@ -7,13 +7,14 @@ name: deploy
 # The performer DAEMONS run on claude-authed HOSTS (davinci/Mac), NOT here, so this
 # only ships the read+control gateway + the ADR-0016 cronjobs.
 #
-# Auth (ORG-LEVEL, keyless for AWS):
-#   - ECR push uses GitHub OIDC: the job assumes the org IAM role
-#     vars.AWS_DEPLOY_ROLE_ARN (everva-gha-ecr-push, trust repo:everva/*) — NO
-#     long-lived AWS keys are stored. Region from vars.AWS_REGION. Both are org
-#     variables (Settings → Secrets and variables → Actions → Variables, org).
-#   - The everva/k8s tag-bump commit needs an org SECRET K8S_REPO_PAT (a PAT with
-#     write to everva/k8s) — set it once at the org level for all app repos.
+# Auth (ORG-LEVEL, keyless for AWS). This repo is PUBLIC, so GitHub-Free org-level
+# secrets/variables apply (on Free they do NOT reach PRIVATE repos — that's why it
+# was made public).
+#   - ECR push: keyless GitHub OIDC — the job assumes the org IAM role
+#     vars.AWS_DEPLOY_ROLE_ARN (everva-gha-ecr-push, trust repo:everva/*); region
+#     vars.AWS_REGION. NO long-lived AWS keys anywhere. (Non-secret env fallbacks
+#     below keep it working even from a private repo.)
+#   - everva/k8s tag-bump: org secret K8S_REPO_PAT (write access to everva/k8s).
 on:
   push:
     branches: [develop]
@@ -31,6 +32,12 @@ permissions:
   contents: read
 
 env:
+  # Org variables (vars.*) are preferred (set once for all repos), with these
+  # non-secret fallbacks so the workflow is robust even where org variables don't
+  # reach a private repo (plan-dependent). Neither value is sensitive: the role
+  # ARN is just an identifier — security is the OIDC trust policy on the role.
+  AWS_REGION: eu-central-1
+  AWS_DEPLOY_ROLE_ARN: arn:aws:iam::827604626727:role/everva-gha-ecr-push
   ECR_REPO: 827604626727.dkr.ecr.eu-central-1.amazonaws.com/conductor
 
 jobs:
@@ -44,8 +51,8 @@ jobs:
         run: echo "tag=develop-$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || env.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || env.AWS_REGION }}
       - uses: aws-actions/amazon-ecr-login@v2
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
