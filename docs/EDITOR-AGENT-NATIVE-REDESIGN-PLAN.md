@@ -13,9 +13,9 @@ plan editörü "yan panel"den **agent komuta merkezi** (default surface) modelin
 
 ---
 
-## DURUM (2026-06-21) — E1+E2+E3+shell+E4-b/c/d TAMAM, sıradaki E4 (çoklu-seçim + fork-runtime)
+## DURUM (2026-06-21) — E1+E2+E3+shell+E4-b/c/d/e TAMAM, E4 web-kısmı BİTTİ (kalan: fork-runtime)
 
-**develop @ `cf857c3` (CI 3-job yeşil).** Hepsi non-breaking, çoğu web-only (B1/B2 hariç additive Go),
+**develop @ `dc9babf` (CI 3-job yeşil).** Hepsi non-breaking, çoğu web-only (B1/B2 hariç additive Go),
 Playwright-CANLI KENDİM doğrulandı (Devin-grade):
 - **E1** Command Center board (default Kanban yüzey) + **görsel-polish** (`50b1c55`/`a764782`).
 - **E2** premium Session view drill-in (`2b67bbf` backend + `e1bfc4c` web): SPEC/acceptance +
@@ -46,10 +46,18 @@ Playwright-CANLI KENDİM doğrulandı (Devin-grade):
   opsiyonel `asOf` ts-cutoff (yoksa=latest), `buildTimeline` per-entry summary (gateway/Go dokunulmadı). Rule#9:
   tsc+eslint+131 vitest (asOf-replay pre-decision-null + summary + component scrub) +13 e2e (timeline replay) +
   **CANLI gerçek gateway** (I-1 timeline scrub: verdict/diff as-of'a pinlendi, return-to-live, 0 konsol hatası — KENDİM).
+- **E4-e çoklu-seçim + GÜVENLİ bulk-approve** (`dc9babf`, web-only): board'dan birden çok gate-green
+  (awaiting-approval) kart seç → tek confirm. GÜVENLİK: yalnız held (onaylanabilir) kartlar seçilebilir; bulk
+  aksiyon HER task'ı ENUMERATE eden TEK confirm'den geçer ("Approve 2 tasks? … merge: web-shop/W-a, web-shop/W-b")
+  — hiçbir şey gizli değil; yıkıcı project-level abort KASITLI bulk-DIŞI. Seçim board'da (still-held set'e prune'lanır
+  → onaylanan düşer); action layer `requestBulkApprove` = AYNI confirm+per-task approve path (yeni merge semantiği/
+  gateway yok). Rule#9: tsc+eslint(0)+**135 vitest** (board multi-select→exact items+clear; controls enumerated-
+  confirm→item başı approve+empty no-op) +**14 e2e** (iki held kart→"2 selected"→enumerated confirm) + **CANLI
+  gerçek gateway** (I-1 seç→"Approve 1 task? … ios-app/I-1"→cancel NON-DESTRUCTIVE, 0 hata — KENDİM).
 
-**SIRADAKİ — E4 kalan director güçleri:** (1) kullanıcı tüm akışı gezer; (2) **çoklu-seçim** (board'dan toplu
-approve/abort — web, hassas: bulk-onay), **"take over"** → native editör/diff aç (fork-runtime), 4C-3 native toast
-yükselt (editör-runtime). Sonra E5 (ACP interop + standalone). Web-verifiable kalan = çoklu-seçim; gerisi fork-runtime.
+**E4 web-kısmı BİTTİ (b/c/d/e).** **SIRADAKİ — yalnız fork-runtime kaldı:** **"take over"** → native editör/diff aç
++ 4C-3 native toast yükselt — derlenmiş editör gerektirir, BU sandbox'ta doğrulanamaz → kullanıcının host'unda
+(claude-girişli) yapılır. Sonra E5 (ACP interop + standalone). Web-tarafı director-güçleri tamam.
 
 **SERT KISIT:** bu sandbox'ta `claude` subprocess auth YOK → assisted distill (yazışma→senaryo) + real-claude
 develop BURADA koşamaz; UI'lar mock/seed ile, gerçek-claude kullanıcının host'unda. E3 direct-path bu yüzden eklendi
