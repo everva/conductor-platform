@@ -136,7 +136,13 @@ kanıtlandı) ama UI işi claude-free.
   her refresh'te değil), session+intake ui-surface-in. **States**: board initial-load
   `<Skeleton>` (fleet.loading→yalnız yükleniyor+boşken) + rafine themed scrollbar.
   Canlı KENDİM (ikonlar crisp, tablar scannable, 0 err). Gate: tsc+eslint+vitest
-  151/151+**e2e 14/14** (tab'lar map'e refactor; a11y adları korundu).
+  151/151+**e2e 14/14** (tab'lar map'e refactor; a11y adları korundu). **CI-NOTU:**
+  V4 ilk push'ta **editor job** kırıldı — lucide paylaşılan cockpit'e girdi, editör
+  webview reuse ediyor ama bare-import web/src'ten `web/node_modules`'a tırmanıyor
+  (editör CI kurmaz). Fix: `editor/package.json`+lockfile lucide-react **+
+  `editor/tsconfig.webview.json` `paths` mapping** (react gibi → editor/node_modules;
+  `traceResolution` ile kanıtlandı). **Develop `967fbe7` 3-job YEŞİL doğrulandı**
+  (`gh run view conclusion=success`; watch exit'ine güvenme). Ders → [[gotcha]].
 - **SIRADAKİ: V5 iterate-to-9** — gerçek Devin.ai UI ekran-görüntüleriyle YAN YANA;
   her yüzey için öz-eleştiri → kalan boşlukları kapat (density/balance, empty-state
   craft, tooltip, hover/active ince ayar) → DÜRÜST 9/10 okuyana kadar iterate.
