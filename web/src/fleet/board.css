@@ -197,6 +197,43 @@
   outline: 2px solid var(--cc-brand);
   outline-offset: 2px;
 }
+.cc-card.selected {
+  border-color: var(--cc-brand);
+  box-shadow: inset 0 0 0 1px var(--cc-brand), 0 6px 18px rgba(139, 92, 246, 0.18);
+}
+.cc-card-check {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 0.1rem;
+  cursor: pointer;
+}
+.cc-card-check input {
+  width: 0.95rem;
+  height: 0.95rem;
+  accent-color: var(--cc-brand);
+  cursor: pointer;
+}
+
+/* Bulk action bar: appears when held cards are multi-selected (E4). */
+.cc-bulkbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.55rem 0.85rem;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  border-radius: 0.7rem;
+  background: linear-gradient(180deg, rgba(139, 92, 246, 0.14), rgba(139, 92, 246, 0.05));
+}
+.cc-bulkbar-count {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--cc-text);
+}
+.cc-bulkbar-actions {
+  display: inline-flex;
+  gap: 0.5rem;
+}
 /* left status accent rail */
 .cc-card::before {
   content: "";

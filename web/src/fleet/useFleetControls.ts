@@ -32,6 +32,10 @@ export interface PendingConfirm {
   // taskId is set for a task-level approve; undefined for a project-level approve or
   // a project-scoped abort/pause/resume.
   taskId: string | undefined;
+  // items, when set, makes this a BULK approve (redesign E4): each {projectId, taskId}
+  // is approved+merged on confirm. The body enumerates them so the director sees the
+  // exact gate-green set before one explicit confirmation (single approve leaves it unset).
+  items?: { projectId: string; taskId: string }[];
   title: string;
   body: string;
   // confirmLabel is the affirmative button text (e.g. "Abort task", "Approve & merge").
@@ -66,6 +70,9 @@ export interface FleetControls {
   requestAbort: (projectId: string) => void;
   // requestApprove with a taskId is task-level; without it is project-level auto-resolve.
   requestApprove: (projectId: string, taskId?: string) => void;
+  // requestBulkApprove OPENS one confirm enumerating every selected gate-green task;
+  // on confirm each is approved+merged. A no-op for an empty selection (redesign E4).
+  requestBulkApprove: (items: { projectId: string; taskId: string }[]) => void;
   // the pending confirmation (null when none); confirm runs it, cancel dismisses it.
   pending: PendingConfirm | null;
   confirm: () => void;
@@ -243,6 +250,30 @@ export function useFleetControls(opts: UseFleetControlsOptions): FleetControls {
     });
   }, []);
 
+  const requestBulkApprove = useCallback(
+    (items: { projectId: string; taskId: string }[]) => {
+      if (items.length === 0) {
+        return;
+      }
+      // Enumerate so nothing is hidden; cap the visible list to keep the modal sane
+      // (the count in the title stays authoritative).
+      const shown = items.slice(0, 15).map((i) => `${i.projectId}/${i.taskId}`);
+      const more = items.length - shown.length;
+      const list = shown.join(", ") + (more > 0 ? `, and ${more} more` : "");
+      setPending({
+        kind: "approve",
+        projectId: items[0]!.projectId,
+        taskId: undefined,
+        items,
+        title: `Approve ${items.length} task${items.length === 1 ? "" : "s"}?`,
+        body: `Each of these gate-green tasks triggers a real merge on the next tick: ${list}.`,
+        confirmLabel: `Approve & merge ${items.length}`,
+        tone: "primary",
+      });
+    },
+    [],
+  );
+
   const confirm = useCallback(() => {
     if (pending === null) {
       return;
@@ -252,7 +283,14 @@ export function useFleetControls(opts: UseFleetControlsOptions): FleetControls {
     if (p.kind === "abort") {
       runAbort(p.projectId);
     } else if (p.kind === "approve") {
-      runApprove(p.projectId, p.taskId);
+      if (p.items && p.items.length > 0) {
+        // Bulk: fire each task-level approve (each tracked + reconciled on its own).
+        for (const it of p.items) {
+          runApprove(it.projectId, it.taskId);
+        }
+      } else {
+        runApprove(p.projectId, p.taskId);
+      }
     }
   }, [pending, runAbort, runApprove]);
 
@@ -292,6 +330,7 @@ export function useFleetControls(opts: UseFleetControlsOptions): FleetControls {
     resume,
     requestAbort,
     requestApprove,
+    requestBulkApprove,
     pending,
     confirm,
     cancelConfirm,

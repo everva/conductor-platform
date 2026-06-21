@@ -389,3 +389,75 @@ describe("Approve", () => {
     expect(screen.queryByRole("button", { name: /approve awaiting/i })).toBeNull();
   });
 });
+
+describe("Bulk approve (E4)", () => {
+  // A tiny harness exposing requestBulkApprove (the board's multi-select entry) over
+  // the real hook + the shared ConfirmDialog, so we test the enumerated confirm and
+  // the per-item approve fan-out without the full board.
+  function BulkHarness({
+    client,
+    refresh,
+    items,
+  }: {
+    client: ControlClient;
+    refresh: () => Promise<void>;
+    items: { projectId: string; taskId: string }[];
+  }) {
+    const controls = useFleetControls({
+      token: "tkn",
+      refresh,
+      onUnauthorized: () => {},
+      makeClient: () => client,
+    });
+    return (
+      <div>
+        <button type="button" onClick={() => controls.requestBulkApprove(items)}>
+          bulk
+        </button>
+        <ConfirmDialog
+          pending={controls.pending}
+          onConfirm={controls.confirm}
+          onCancel={controls.cancelConfirm}
+        />
+      </div>
+    );
+  }
+
+  it("opens ONE confirm enumerating the selection, then approves each on confirm", async () => {
+    const user = userEvent.setup({ delay: null });
+    const client = makeFake();
+    render(
+      <BulkHarness
+        client={client}
+        refresh={vi.fn(async () => {})}
+        items={[
+          { projectId: "web", taskId: "W-1" },
+          { projectId: "ios", taskId: "I-2" },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "bulk" }));
+    // One dialog, enumerating BOTH gate-green tasks (nothing hidden).
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/Approve 2 tasks\?/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/web\/W-1/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/ios\/I-2/)).toBeInTheDocument();
+
+    // Confirm → one approve per item, each with its (project, task).
+    await user.click(within(dialog).getByRole("button", { name: /approve & merge 2/i }));
+    await settle();
+    expect(client.approve).toHaveBeenCalledTimes(2);
+    expect(client.approve).toHaveBeenCalledWith("web", "W-1");
+    expect(client.approve).toHaveBeenCalledWith("ios", "I-2");
+  });
+
+  it("is a no-op for an empty selection (no confirm)", async () => {
+    const user = userEvent.setup({ delay: null });
+    const client = makeFake();
+    render(<BulkHarness client={client} refresh={vi.fn(async () => {})} items={[]} />);
+    await user.click(screen.getByRole("button", { name: "bulk" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(client.approve).not.toHaveBeenCalled();
+  });
+});

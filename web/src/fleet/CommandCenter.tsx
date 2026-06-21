@@ -10,12 +10,18 @@
 // no new gateway surface (B3). A card click focuses its project (the E1 drill-in;
 // E2 replaces this with a full session view). Awaiting-approval cards get the same
 // confirm-gated Approve the TasksView uses; blocked cards offer Review.
+import { useEffect, useMemo, useState } from "react";
 import type { Event, Host, Lease, Task } from "../api/types.ts";
 import { buildBoard, BOARD_COLUMNS } from "./board.ts";
 import type { BoardCard } from "./board.ts";
 import { isAwaitingApproval } from "./controls.ts";
 import type { FleetControls } from "./useFleetControls.ts";
 import "./board.css";
+
+// selKey identifies a selected task across projects (project:id).
+function selKey(projectId: string, taskId: string): string {
+  return `${projectId}:${taskId}`;
+}
 
 export interface CommandCenterProps {
   tasksByProject: Record<string, Task[]>;
@@ -40,6 +46,64 @@ export function CommandCenter({
   onNewWork,
 }: CommandCenterProps) {
   const board = buildBoard(tasksByProject, leasesByProject, recentEvents);
+
+  // Multi-select bulk approve (redesign E4): a director can select several gate-green
+  // (awaiting-approval) tasks and clear the review queue in one confirm. Only held
+  // tasks are selectable — they are the only approvable ones. The selection is pruned
+  // to the still-held set so approved tasks (which leave the held state after refresh)
+  // drop out automatically.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const heldKeys = useMemo(() => {
+    const s = new Set<string>();
+    for (const tasks of Object.values(tasksByProject)) {
+      for (const t of tasks) {
+        if (isAwaitingApproval(t)) {
+          s.add(selKey(t.project_id, t.id));
+        }
+      }
+    }
+    return s;
+  }, [tasksByProject]);
+  useEffect(() => {
+    setSelected((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const k of prev) {
+        if (heldKeys.has(k)) next.add(k);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [heldKeys]);
+
+  const toggleSelect = (projectId: string, taskId: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const k = selKey(projectId, taskId);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  };
+
+  // selectedItems resolves the live selection to {projectId, taskId} for the bulk
+  // approve, in a stable order (matches the held tasks' board order).
+  const selectedItems = useMemo(() => {
+    const items: { projectId: string; taskId: string }[] = [];
+    for (const tasks of Object.values(tasksByProject)) {
+      for (const t of tasks) {
+        if (isAwaitingApproval(t) && selected.has(selKey(t.project_id, t.id))) {
+          items.push({ projectId: t.project_id, taskId: t.id });
+        }
+      }
+    }
+    items.sort((a, b) =>
+      a.projectId === b.projectId
+        ? a.taskId.localeCompare(b.taskId)
+        : a.projectId.localeCompare(b.projectId),
+    );
+    return items;
+  }, [tasksByProject, selected]);
 
   return (
     <section className="cc" aria-label="Command Center">
@@ -67,6 +131,30 @@ export function CommandCenter({
         </span>
       </div>
 
+      {controls && selectedItems.length > 0 && (
+        <div className="cc-bulkbar" role="region" aria-label="Bulk actions">
+          <span className="cc-bulkbar-count">
+            {selectedItems.length} selected
+          </span>
+          <span className="cc-bulkbar-actions">
+            <button
+              type="button"
+              className="cc-btn cc-btn-approve"
+              onClick={() => controls.requestBulkApprove(selectedItems)}
+            >
+              Approve &amp; merge {selectedItems.length}
+            </button>
+            <button
+              type="button"
+              className="cc-btn"
+              onClick={() => setSelected(new Set())}
+            >
+              Clear
+            </button>
+          </span>
+        </div>
+      )}
+
       <div className="cc-board" role="list" aria-label="Task board">
         {BOARD_COLUMNS.map((col) => {
           const cards = board.columns[col.key];
@@ -91,6 +179,8 @@ export function CommandCenter({
                       card={card}
                       {...(controls ? { controls } : {})}
                       {...(onOpenSession ? { onOpenSession } : {})}
+                      selected={selected.has(selKey(card.task.project_id, card.task.id))}
+                      onToggleSelect={() => toggleSelect(card.task.project_id, card.task.id)}
                     />
                   ))
                 )}
@@ -107,14 +197,25 @@ interface BoardCardViewProps {
   card: BoardCard;
   controls?: FleetControls;
   onOpenSession?: (task: Task) => void;
+  // selected/onToggleSelect drive the multi-select checkbox (held cards only).
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }
 
-function BoardCardView({ card, controls, onOpenSession }: BoardCardViewProps) {
+function BoardCardView({
+  card,
+  controls,
+  onOpenSession,
+  selected = false,
+  onToggleSelect,
+}: BoardCardViewProps) {
   const t = card.task;
   const held = isAwaitingApproval(t);
   const blocked = t.status === "blocked";
   const busy = controls?.isTaskBusy(t.project_id, t.id) ?? false;
   const select = () => onOpenSession?.(t);
+  // Only held (approvable) cards can be multi-selected for a bulk approve.
+  const selectable = held && controls !== undefined && onToggleSelect !== undefined;
 
   // The status accent rail follows the card's lifecycle: held → amber, blocked →
   // red, running (a leasing host) → blue, done → green, else a neutral ready.
@@ -127,7 +228,7 @@ function BoardCardView({ card, controls, onOpenSession }: BoardCardViewProps) {
         : t.status === "done"
           ? "done"
           : "ready";
-  const cls = `cc-card cc-card-${kind}`;
+  const cls = `cc-card cc-card-${kind}${selected ? " selected" : ""}`;
 
   return (
     <article
@@ -144,6 +245,21 @@ function BoardCardView({ card, controls, onOpenSession }: BoardCardViewProps) {
       }}
     >
       <div className="cc-card-top">
+        {selectable && (
+          // The checkbox is interactive within the card button; stop propagation so
+          // ticking it doesn't also open the session.
+          <label
+            className="cc-card-check"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={onToggleSelect}
+              aria-label={`Select task ${t.id} for bulk approve`}
+            />
+          </label>
+        )}
         <span className="mono cc-card-id">{t.id}</span>
         {t.tier && <span className="cc-card-tier">{t.tier}</span>}
       </div>

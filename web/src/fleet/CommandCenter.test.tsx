@@ -103,4 +103,76 @@ describe("CommandCenter board", () => {
       expect.objectContaining({ id: "T-h", project_id: "p" }),
     );
   });
+
+  it("multi-selects held cards and bulk-approves the exact selection (E4)", async () => {
+    const user = userEvent.setup();
+    const onOpenSession = vi.fn();
+    const requestBulkApprove = vi.fn();
+    const controls = {
+      isTaskBusy: () => false,
+      requestApprove: vi.fn(),
+      requestBulkApprove,
+    } as unknown as FleetControls;
+
+    render(
+      <CommandCenter
+        tasksByProject={{
+          web: [
+            task({ id: "W-1", project_id: "web", status: "awaiting-approval" }),
+            task({ id: "W-2", project_id: "web", status: "awaiting-approval" }),
+            task({ id: "W-run", project_id: "web", status: "running" }),
+          ],
+        }}
+        leasesByProject={{}}
+        hosts={[]}
+        recentEvents={[]}
+        controls={controls}
+        onOpenSession={onOpenSession}
+      />,
+    );
+
+    // Only the two held cards are selectable; the running one has no checkbox.
+    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+
+    // Ticking a checkbox selects WITHOUT opening the session (stopPropagation).
+    await user.click(screen.getByRole("checkbox", { name: /select task W-1/i }));
+    expect(onOpenSession).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("checkbox", { name: /select task W-2/i }));
+
+    // The bulk bar reflects the live count.
+    const bulkbar = screen.getByRole("region", { name: "Bulk actions" });
+    expect(within(bulkbar).getByText("2 selected")).toBeInTheDocument();
+
+    // Approve & merge passes the EXACT selected items (stable order).
+    await user.click(within(bulkbar).getByRole("button", { name: /approve & merge 2/i }));
+    expect(requestBulkApprove).toHaveBeenCalledWith([
+      { projectId: "web", taskId: "W-1" },
+      { projectId: "web", taskId: "W-2" },
+    ]);
+  });
+
+  it("Clear empties the selection and hides the bulk bar (E4)", async () => {
+    const user = userEvent.setup();
+    const controls = {
+      isTaskBusy: () => false,
+      requestApprove: vi.fn(),
+      requestBulkApprove: vi.fn(),
+    } as unknown as FleetControls;
+
+    render(
+      <CommandCenter
+        tasksByProject={{ p: [task({ id: "T-h", project_id: "p", status: "awaiting-approval" })] }}
+        leasesByProject={{}}
+        hosts={[]}
+        recentEvents={[]}
+        controls={controls}
+        onOpenSession={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("checkbox", { name: /select task T-h/i }));
+    expect(screen.getByRole("region", { name: "Bulk actions" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    expect(screen.queryByRole("region", { name: "Bulk actions" })).not.toBeInTheDocument();
+  });
 });

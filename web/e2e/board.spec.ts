@@ -119,3 +119,43 @@ test("the shell's needs-review signal persists across surfaces and routes back t
   await expect(page.getByRole("region", { name: /command center/i })).toBeVisible();
   await expect(column(page, "Needs Review").getByText("I-await")).toBeVisible();
 });
+
+test("multi-select held cards opens an enumerated bulk-approve confirm (E4)", async ({ page }) => {
+  // A local seed with TWO gate-green (awaiting-approval) tasks so we can genuinely
+  // multi-select (the shared seed has one); the per-item approve fan-out is covered
+  // deterministically by the vitest suites.
+  await mockWebSocket(page);
+  await page.route("**/status", (r) => r.fulfill(json({ projects: 1, hosts: 1, leases: [], generated_at: "2026-06-20T00:00:00Z" })));
+  await page.route("**/hosts", (r) => r.fulfill(json(HOSTS)));
+  await page.route("**/projects", (r) => r.fulfill(json([PROJECTS[0]])));
+  const held: Record<string, ReturnType<typeof task>[]> = {
+    "web-shop": [task("W-a", "web-shop", "awaiting-approval"), task("W-b", "web-shop", "awaiting-approval")],
+  };
+  await page.route("**/projects/*/tasks", (r) => {
+    const pid = r.request().url().match(/\/projects\/([^/]+)\/tasks/)?.[1] ?? "";
+    return r.fulfill(json(held[pid] ?? []));
+  });
+  await page.route("**/projects/*/scenarios", (r) => r.fulfill(json([])));
+  await page.route("**/events*", (r) => r.fulfill(json([])));
+  await page.goto("/");
+  await page.getByLabel(/api token/i).fill("test-token");
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page.getByRole("region", { name: /command center/i })).toBeVisible();
+
+  // Select both held cards via their checkboxes (ticking does not open the session).
+  const review = column(page, "Needs Review");
+  await review.getByRole("checkbox", { name: /select task W-a/i }).check();
+  await review.getByRole("checkbox", { name: /select task W-b/i }).check();
+
+  // The bulk bar reflects the live count.
+  const bulkbar = page.getByRole("region", { name: "Bulk actions" });
+  await expect(bulkbar).toContainText("2 selected");
+
+  // Approve & merge opens ONE confirm enumerating BOTH tasks (nothing hidden).
+  await bulkbar.getByRole("button", { name: /approve & merge 2/i }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("Approve 2 tasks?");
+  await expect(dialog).toContainText("web-shop/W-a");
+  await expect(dialog).toContainText("web-shop/W-b");
+  await page.screenshot({ path: "test-results/bulk-approve.png", fullPage: true });
+});
