@@ -89,10 +89,22 @@ say "Building conductor + conductorctl"
 ok "binaries at $BIN"
 CTL=("$BIN/conductorctl" -dsn "$SCHEMA_DSN")
 
-# --- 2. the deterministic performer (stands in for `claude -p`) --------------
-# Writes a compiling, test-passing Go file + test into the worktree (package app),
-# commits on the per-task branch, and emits a schema-valid Verdict on stdout. The
-# INDEPENDENT gate (go build/test) is what actually decides the merge (Rule#9).
+# --- 2. the develop performer ------------------------------------------------
+# DEFAULT: a DETERMINISTIC sh-performer (stands in for `claude -p`) — writes a
+# compiling, test-passing Go file + test into the worktree (package app), commits on
+# the per-task branch, and emits a schema-valid Verdict on stdout. The INDEPENDENT
+# gate (go build/test) is what actually decides the merge (Rule#9).
+#
+# FAZ C: set PERFORMER_OVERRIDE=<path-to-executable> to use the REAL `claude -p`
+# brain instead (e.g. a wrapper that execs `claude -p "<prescriptive prompt>"`). The
+# routing/lease/gate MECHANISM is identical; only the develop brain changes. The
+# gate + hidden holdout still decide the merge, so a real claude that doesn't satisfy
+# the holdout is correctly blocked (never fake-greened).
+if [[ -n "${PERFORMER_OVERRIDE:-}" ]]; then
+  PERFORMER="$PERFORMER_OVERRIDE"
+  [[ -x "$PERFORMER" ]] || die "PERFORMER_OVERRIDE not executable: $PERFORMER"
+  ok "performer (override / real brain): $PERFORMER"
+else
 PERFORMER="$WORK/performer.sh"
 cat > "$PERFORMER" <<'PERF'
 #!/bin/sh
@@ -126,6 +138,7 @@ EOF
 PERF
 chmod +x "$PERFORMER"
 ok "performer at $PERFORMER"
+fi
 
 # --- 3. two throwaway product repos (web-shaped + iOS-shaped) -----------------
 # Each is a real git repo on `develop` with a valid Go module so the deterministic
