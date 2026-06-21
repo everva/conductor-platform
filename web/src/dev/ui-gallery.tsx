@@ -8,6 +8,7 @@ import "@fontsource-variable/geist/index.css";
 import "@fontsource-variable/geist-mono/index.css";
 import "../theme/tokens.css";
 import "../index.css";
+import { Check as CheckIcon, MoreHorizontal, Plus as PlusIcon } from "lucide-react";
 import {
   Badge,
   Button,
@@ -19,21 +20,11 @@ import {
   StatusDot,
 } from "../ui/index.ts";
 
-const Plus = () => (
-  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-    <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-  </svg>
-);
-const Check = () => (
-  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-    <path d="M3.5 8.5l3 3 6-6.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-const Dots = () => (
-  <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-    <circle cx="3" cy="8" r="1.4" /><circle cx="8" cy="8" r="1.4" /><circle cx="13" cy="8" r="1.4" />
-  </svg>
-);
+// Sized lucide aliases so the showcase mirrors the real surfaces (V4: lucide
+// everywhere, no inline glyph SVGs).
+const Plus = () => <PlusIcon size={14} strokeWidth={2.2} />;
+const Check = () => <CheckIcon size={14} strokeWidth={2.4} />;
+const Dots = () => <MoreHorizontal size={15} />;
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
