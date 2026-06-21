@@ -13,9 +13,9 @@ plan editörü "yan panel"den **agent komuta merkezi** (default surface) modelin
 
 ---
 
-## DURUM (2026-06-21) — E1+E2+E3+shell+E4-b(⌘K) TAMAM, sıradaki E4 (kalan director güçleri)
+## DURUM (2026-06-21) — E1+E2+E3+shell+E4-b(⌘K)+E4-c(needs-review) TAMAM, sıradaki E4 (kalan)
 
-**develop @ `d438680` (CI 3-job yeşil).** Hepsi non-breaking, çoğu web-only (B1/B2 hariç additive Go),
+**develop @ `a895a69` (CI 3-job yeşil).** Hepsi non-breaking, çoğu web-only (B1/B2 hariç additive Go),
 Playwright-CANLI KENDİM doğrulandı (Devin-grade):
 - **E1** Command Center board (default Kanban yüzey) + **görsel-polish** (`50b1c55`/`a764782`).
 - **E2** premium Session view drill-in (`2b67bbf` backend + `e1bfc4c` web): SPEC/acceptance +
@@ -33,10 +33,16 @@ Playwright-CANLI KENDİM doğrulandı (Devin-grade):
   ince view (`CommandPalette.tsx`); FleetDashboard ⌘K'yı bağlar + seçimi mevcut setTab/setSelectedTask
   seam'lerine eşler (B3 client-side, gateway dokunulmadı). Rule#9: tsc+eslint+120 vitest+11 e2e + **CANLI
   Playwright gerçek gateway** (⌘K gerçek cp_view session'ları, lane-filtre, LIVE-1 drill-in — KENDİM).
+- **E4-c needs-review sinyali** (`a895a69`, web-only): kabuk-seviyesi kalıcı rozet — HER yüzeyde (board, tab,
+  session içi) görünür; Needs-Review lane'indeki (awaiting-approval+blocked) task sayısını gösterir + tek-tıkla
+  review kuyruğuna (board) götürür. Boşken hiç render etmez (sinyal, gürültü değil); `role="status"`+aria-live
+  ile erişilebilir nudge. Sayı `needsReviewCount` = board'un AYNI leaseHostByTask+columnFor bucketing'i (leased/
+  running task şişirmez → board kolonuyla asla çelişmez). Rule#9: tsc+eslint+127 vitest+12 e2e + **CANLI gerçek
+  gateway** ("2 tasks need your review" board ile eşleşti, Events'te kalıcı, tek-tık döndü — KENDİM).
 
-**SIRADAKİ — E4 kalan director güçleri:** (1) kullanıcı tüm akışı gezer; (2) **needs-review bildirimleri**
-(board sinyali + 4C-3 native toast yükselt), **replay/timeline**, **çoklu-seçim**, **"take over"** → native
-editör/diff aç. Sonra E5 (ACP interop + standalone).
+**SIRADAKİ — E4 kalan director güçleri:** (1) kullanıcı tüm akışı gezer; (2) **replay/timeline**, **çoklu-seçim**
+(toplu approve/abort), **"take over"** → native editör/diff aç (fork-runtime), 4C-3 native toast yükselt (editör).
+Sonra E5 (ACP interop + standalone).
 
 **SERT KISIT:** bu sandbox'ta `claude` subprocess auth YOK → assisted distill (yazışma→senaryo) + real-claude
 develop BURADA koşamaz; UI'lar mock/seed ile, gerçek-claude kullanıcının host'unda. E3 direct-path bu yüzden eklendi
