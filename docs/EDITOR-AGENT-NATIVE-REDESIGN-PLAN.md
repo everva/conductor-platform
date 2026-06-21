@@ -13,9 +13,9 @@ plan editörü "yan panel"den **agent komuta merkezi** (default surface) modelin
 
 ---
 
-## DURUM (2026-06-21) — E1+E2+E3+shell TAMAM, sıradaki E4
+## DURUM (2026-06-21) — E1+E2+E3+shell+E4-b(⌘K) TAMAM, sıradaki E4 (kalan director güçleri)
 
-**develop @ `d3ebc53` (CI 3-job yeşil).** Hepsi non-breaking, çoğu web-only (B1/B2 hariç additive Go),
+**develop @ `d438680` (CI 3-job yeşil).** Hepsi non-breaking, çoğu web-only (B1/B2 hariç additive Go),
 Playwright-CANLI KENDİM doğrulandı (Devin-grade):
 - **E1** Command Center board (default Kanban yüzey) + **görsel-polish** (`50b1c55`/`a764782`).
 - **E2** premium Session view drill-in (`2b67bbf` backend + `e1bfc4c` web): SPEC/acceptance +
@@ -27,9 +27,16 @@ Playwright-CANLI KENDİM doğrulandı (Devin-grade):
 - **E3** spec-first intake (`d3ebc53`): claude-FREE **"Write spec directly"** (YAML editor template →
   Approve → /intake dispatch) + "View on board →"; **CANLI loop kanıtlı** (LIVE-1 yazıldı → /intake 200 →
   board READY).
+- **E4-b ⌘K komut paleti** (`d438680`, web-only, non-breaking): klavye-öncelikli overlay — herhangi bir
+  projedeki task'ın session'ına atla / yüzey değiştir / yeni iş başlat. ⌘K/Ctrl+K (global) veya tab-bar
+  trigger; yaz→filtrele (AND token, id/proje/lane/status), ↑/↓, Enter, Esc. Saf model (`palette.ts`) +
+  ince view (`CommandPalette.tsx`); FleetDashboard ⌘K'yı bağlar + seçimi mevcut setTab/setSelectedTask
+  seam'lerine eşler (B3 client-side, gateway dokunulmadı). Rule#9: tsc+eslint+120 vitest+11 e2e + **CANLI
+  Playwright gerçek gateway** (⌘K gerçek cp_view session'ları, lane-filtre, LIVE-1 drill-in — KENDİM).
 
-**SIRADAKİ:** (1) kullanıcı tüm akışı gezer; (2) **E4 director güçleri** — komut paleti (⌘K → dispatch/jump),
-needs-review bildirimleri, replay timeline, "take over" → native editör. Sonra E5 (ACP interop + standalone).
+**SIRADAKİ — E4 kalan director güçleri:** (1) kullanıcı tüm akışı gezer; (2) **needs-review bildirimleri**
+(board sinyali + 4C-3 native toast yükselt), **replay/timeline**, **çoklu-seçim**, **"take over"** → native
+editör/diff aç. Sonra E5 (ACP interop + standalone).
 
 **SERT KISIT:** bu sandbox'ta `claude` subprocess auth YOK → assisted distill (yazışma→senaryo) + real-claude
 develop BURADA koşamaz; UI'lar mock/seed ile, gerçek-claude kullanıcının host'unda. E3 direct-path bu yüzden eklendi
