@@ -106,6 +106,10 @@
 }
 .sv-panel-head {
   margin: 0 0 0.6rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
   font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -189,22 +193,84 @@
   gap: 0.35rem;
 }
 .sv-tl {
+  border-left: 2px solid var(--sv-line);
+}
+.sv-tl-decision { border-left-color: var(--sv-brand); }
+.sv-tl-diff { border-left-color: #60a5fa; }
+.sv-tl-merge { border-left-color: var(--sv-green); }
+.sv-tl-intervention-needed { border-left-color: var(--sv-amber); }
+
+/* Each timeline row is a button: click to replay the verdict + diff as of it. */
+.sv-tl-btn {
+  width: 100%;
   display: flex;
   align-items: baseline;
   gap: 0.7rem;
+  padding: 0.2rem 0.5rem;
+  border: none;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   font-size: 0.84rem;
-  padding-left: 0.7rem;
-  border-left: 2px solid var(--sv-line);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s ease, box-shadow 0.1s ease;
+}
+.sv-tl-btn:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.sv-tl-btn.selected {
+  background: rgba(139, 92, 246, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(139, 92, 246, 0.42);
 }
 .sv-tl-time {
   color: var(--sv-text-3);
   font-size: 0.76rem;
   flex: none;
 }
-.sv-tl-decision { border-left-color: var(--sv-brand); }
-.sv-tl-diff { border-left-color: #60a5fa; }
-.sv-tl-merge { border-left-color: var(--sv-green); }
-.sv-tl-intervention-needed { border-left-color: var(--sv-amber); }
+.sv-tl-summary {
+  margin-left: auto;
+  color: var(--sv-text-3);
+  font-size: 0.74rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 12rem;
+}
+
+/* Replay affordances: the "return to live" control, the as-of note, the panel tag. */
+.sv-replay-live {
+  margin-left: auto;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid rgba(139, 92, 246, 0.45);
+  border-radius: 0.4rem;
+  background: transparent;
+  color: #c7b8f5;
+  font-family: inherit;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+  cursor: pointer;
+}
+.sv-replay-live:hover {
+  background: rgba(139, 92, 246, 0.16);
+}
+.sv-replay-note {
+  margin: 0 0 0.55rem;
+  font-size: 0.78rem;
+  color: #c7b8f5;
+}
+.sv-replay-tag {
+  padding: 0.05rem 0.4rem;
+  border-radius: 0.3rem;
+  background: rgba(139, 92, 246, 0.22);
+  color: #c7b8f5;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
 
 /* --- diff --- */
 .sv-difffiles {

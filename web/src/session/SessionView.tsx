@@ -110,8 +110,11 @@ export function SessionView({
   }, [feed.error, onUnauthorized]);
 
   const events: readonly Event[] = feed.events;
-  const verdict = useMemo(() => parseVerdict(events), [events]);
-  const diff = useMemo(() => parseDiff(events), [events]);
+  // Replay (E4): selecting a timeline entry pins the verdict + diff panels to the
+  // state AS OF that moment; null = follow live (the latest, today's behavior).
+  const [replayTs, setReplayTs] = useState<string | null>(null);
+  const verdict = useMemo(() => parseVerdict(events, replayTs ?? undefined), [events, replayTs]);
+  const diff = useMemo(() => parseDiff(events, replayTs ?? undefined), [events, replayTs]);
   const timeline = useMemo(() => buildTimeline(events), [events]);
 
   const held = isAwaitingApproval(task);
@@ -163,6 +166,7 @@ export function SessionView({
           <section className="sv-panel sv-verdict" aria-label="Verifier verdict">
             <h3 className="sv-panel-head">
               Verifier verdict <span className="sv-muted">· deterministic gate</span>
+              {replayTs !== null && <span className="sv-replay-tag">replay</span>}
             </h3>
             {verdict ? (
               <>
@@ -188,9 +192,27 @@ export function SessionView({
         </div>
 
         <div className="sv-col">
-          {/* ACTIVITY */}
+          {/* ACTIVITY — a replayable timeline: select an entry to pin the verdict
+              + diff panels to that moment (E4). */}
           <section className="sv-panel" aria-label="Activity">
-            <h3 className="sv-panel-head">Activity</h3>
+            <h3 className="sv-panel-head">
+              Activity
+              {replayTs !== null && (
+                <button
+                  type="button"
+                  className="sv-replay-live"
+                  onClick={() => setReplayTs(null)}
+                >
+                  ● Return to live
+                </button>
+              )}
+            </h3>
+            {replayTs !== null && (
+              <p className="sv-replay-note" role="status">
+                Replaying as of {shortTime(replayTs)} — the verdict and diff show the
+                state at this point.
+              </p>
+            )}
             {timeline.length === 0 ? (
               <p className="sv-muted">No activity yet.</p>
             ) : (
@@ -198,12 +220,25 @@ export function SessionView({
                 {timeline
                   .slice()
                   .reverse()
-                  .map((e) => (
-                    <li key={e.id} className={`sv-tl sv-tl-${e.kind}`}>
-                      <span className="sv-tl-time mono">{shortTime(e.ts)}</span>
-                      <span className="sv-tl-label">{e.label}</span>
-                    </li>
-                  ))}
+                  .map((e) => {
+                    const selected = e.ts === replayTs;
+                    return (
+                      <li key={e.id} className={`sv-tl sv-tl-${e.kind}`}>
+                        <button
+                          type="button"
+                          className={selected ? "sv-tl-btn selected" : "sv-tl-btn"}
+                          aria-pressed={selected}
+                          onClick={() => setReplayTs(selected ? null : e.ts)}
+                        >
+                          <span className="sv-tl-time mono">{shortTime(e.ts)}</span>
+                          <span className="sv-tl-label">{e.label}</span>
+                          {e.summary && (
+                            <span className="sv-tl-summary mono">{e.summary}</span>
+                          )}
+                        </button>
+                      </li>
+                    );
+                  })}
               </ol>
             )}
           </section>
@@ -220,6 +255,7 @@ export function SessionView({
                   {diff.truncated ? " · truncated" : ""}
                 </span>
               )}
+              {replayTs !== null && <span className="sv-replay-tag">replay</span>}
             </h3>
             {diff ? (
               <>

@@ -45,6 +45,9 @@ export interface TimelineEntry {
   phase: string;
   kind: string;
   label: string;
+  // summary is a one-line, payload-derived gloss for the entry ("3 files +66/−0",
+  // "pass", "42%", a log line) so the timeline reads as a replay log, not bare labels.
+  summary: string;
 }
 
 function str(v: unknown): string {
@@ -68,10 +71,21 @@ function latest(events: readonly Event[], pred: (e: Event) => boolean): Event | 
 // parseVerdict extracts the deterministic Verifier verdict from the latest
 // KindDecision event that carries a `checks` array (B1). Retry/approved decisions
 // (no checks) are ignored, so a verdict is the gate's real per-gate decision.
-export function parseVerdict(events: readonly Event[]): SessionVerdict | null {
+//
+// `asOf` (an ISO ts cutoff) drives the session replay (E4): with it set, the
+// verdict is the one that was in effect AT OR BEFORE that moment — null if the gate
+// had not decided yet — so scrubbing the timeline shows the real history, not just
+// the latest. Omitted → the latest verdict (live, today's behavior).
+export function parseVerdict(
+  events: readonly Event[],
+  asOf?: string,
+): SessionVerdict | null {
   const ev = latest(
     events,
-    (e) => e.kind === "decision" && Array.isArray(e.payload["checks"]),
+    (e) =>
+      e.kind === "decision" &&
+      Array.isArray(e.payload["checks"]) &&
+      (asOf === undefined || e.ts <= asOf),
   );
   if (!ev) {
     return null;
@@ -87,9 +101,16 @@ export function parseVerdict(events: readonly Event[]): SessionVerdict | null {
 }
 
 // parseDiff extracts the bounded branch-vs-base diff from the latest KindDiff event,
-// summing the per-file additions/deletions. Null until a diff arrives.
-export function parseDiff(events: readonly Event[]): SessionDiff | null {
-  const ev = latest(events, (e) => e.kind === "diff");
+// summing the per-file additions/deletions. Null until a diff arrives. `asOf` drives
+// replay the same way parseVerdict does: the diff in effect at or before that moment.
+export function parseDiff(
+  events: readonly Event[],
+  asOf?: string,
+): SessionDiff | null {
+  const ev = latest(
+    events,
+    (e) => e.kind === "diff" && (asOf === undefined || e.ts <= asOf),
+  );
   if (!ev) {
     return null;
   }
@@ -136,7 +157,43 @@ const KIND_LABEL: Record<string, string> = {
   "intervention-needed": "needs review",
 };
 
-// buildTimeline maps the task's events (ascending) to readable timeline entries.
+// summarize derives a one-line gloss from an event's payload for the timeline —
+// what actually happened at that step, so the replay log is scannable. Unknown or
+// payload-less kinds yield "" (the label alone carries them).
+function summarize(e: Event): string {
+  switch (e.kind) {
+    case "diff": {
+      const files = Array.isArray(e.payload["files"]) ? e.payload["files"] : [];
+      let a = 0;
+      let d = 0;
+      for (const f of files) {
+        if (f && typeof f === "object") {
+          const r = f as Record<string, unknown>;
+          a += num(r["additions"]);
+          d += num(r["deletions"]);
+        }
+      }
+      return `${files.length} file${files.length === 1 ? "" : "s"} +${a}/−${d}`;
+    }
+    case "decision":
+      return str(e.payload["result"]);
+    case "progress": {
+      const pct = e.payload["pct"];
+      return typeof pct === "number" ? `${pct}%` : "";
+    }
+    case "log":
+      return str(e.payload["msg"]) || str(e.payload["message"]);
+    case "pr": {
+      const n = e.payload["number"];
+      return typeof n === "number" ? `#${n}` : str(e.payload["url"]);
+    }
+    default:
+      return "";
+  }
+}
+
+// buildTimeline maps the task's events (ascending) to readable timeline entries,
+// each with a payload-derived summary for the replay log.
 export function buildTimeline(events: readonly Event[]): TimelineEntry[] {
   return events.map((e) => ({
     id: e.id,
@@ -144,5 +201,6 @@ export function buildTimeline(events: readonly Event[]): TimelineEntry[] {
     phase: e.phase,
     kind: e.kind,
     label: `${PHASE_LABEL[e.phase] ?? e.phase} · ${KIND_LABEL[e.kind] ?? e.kind}`,
+    summary: summarize(e),
   }));
 }

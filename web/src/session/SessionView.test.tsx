@@ -100,4 +100,37 @@ describe("SessionView", () => {
     await userEvent.click(screen.getByRole("button", { name: /command center/i }));
     expect(onBack).toHaveBeenCalled();
   });
+
+  it("replays the verdict + diff as of a selected timeline entry, then returns to live (E4)", async () => {
+    const user = userEvent.setup();
+    render(
+      <SessionView
+        task={TASK}
+        token="t"
+        onBack={vi.fn()}
+        onUnauthorized={() => {}}
+        makeScenarioClient={() => ({ listScenarios: async () => [SCENARIO] })}
+        makeHistory={() => ({ listEvents: async () => EVENTS })}
+        eventTransport={noopTransport}
+      />,
+    );
+
+    // Live: the latest verdict + diff are shown, and the timeline carries summaries.
+    expect(await screen.findByText(/MERGE-READY/)).toBeInTheDocument();
+    expect(screen.getByText("feature.go")).toBeInTheDocument();
+    expect(screen.getByText(/^1 file \+6\/.0$/)).toBeInTheDocument(); // diff summary (E4)
+
+    // Scrub back to the first event (develop started, 10:00) — before the gate
+    // decided and before any diff existed. The panels replay that empty state.
+    await user.click(screen.getByText("Develop · started"));
+    expect(screen.getByText(/Replaying as of 10:00:00/)).toBeInTheDocument();
+    expect(screen.queryByText(/MERGE-READY/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Awaiting the gate/)).toBeInTheDocument();
+    expect(screen.queryByText("feature.go")).not.toBeInTheDocument();
+
+    // Return to live restores the latest verdict + diff.
+    await user.click(screen.getByRole("button", { name: /return to live/i }));
+    expect(screen.getByText(/MERGE-READY/)).toBeInTheDocument();
+    expect(screen.getByText("feature.go")).toBeInTheDocument();
+  });
 });

@@ -66,3 +66,38 @@ test("drill from the board into a task session: spec + verdict + diff + timeline
   await page.getByRole("button", { name: /command center/i }).click();
   await expect(page.getByRole("region", { name: /command center/i })).toBeVisible();
 });
+
+test("the session timeline replays the verdict + diff as of a selected entry (E4)", async ({ page }) => {
+  await mockWebSocket(page);
+  await page.route("**/status", (r) => r.fulfill(json(STATUS)));
+  await page.route("**/hosts", (r) => r.fulfill(json(HOSTS)));
+  await page.route("**/events*", (r) => r.fulfill(json(EVENTS)));
+  await page.route("**/projects/*/scenarios", (r) => r.fulfill(json(SCENARIOS)));
+  await page.route("**/projects/*/tasks", (r) => r.fulfill(json(TASKS)));
+  await page.route("**/projects", (r) => r.fulfill(json(PROJECTS)));
+
+  await page.goto("/");
+  await page.getByLabel(/api token/i).fill("test-token");
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page.getByRole("region", { name: /command center/i })).toBeVisible();
+  await page.getByText("W-1").click();
+
+  const session = page.getByRole("region", { name: /^session$/i });
+  await expect(session).toBeVisible();
+  // Live: the latest verdict + diff.
+  await expect(page.getByText(/MERGE-READY/)).toBeVisible();
+  await expect(page.getByText("feature.go")).toBeVisible();
+
+  // Scrub to the first event (develop started, 10:00) — before the gate decided and
+  // before any diff existed. The verdict + diff panels replay that empty state.
+  await page.getByRole("button", { name: /Develop.*started/ }).click();
+  await expect(page.getByText(/Replaying as of 10:00:00/)).toBeVisible();
+  await expect(page.getByText(/Awaiting the gate/)).toBeVisible();
+  await expect(page.getByText(/MERGE-READY/)).toBeHidden();
+  await expect(page.getByText("feature.go")).toBeHidden();
+
+  // Return to live restores the latest verdict + diff.
+  await page.getByRole("button", { name: /return to live/i }).click();
+  await expect(page.getByText(/MERGE-READY/)).toBeVisible();
+  await expect(page.getByText("feature.go")).toBeVisible();
+});

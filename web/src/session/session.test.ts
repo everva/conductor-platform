@@ -63,6 +63,22 @@ describe("parseVerdict", () => {
   it("returns null when there is no decision event", () => {
     expect(parseVerdict([ev({ kind: "started", phase: "develop" })])).toBeNull();
   });
+
+  it("asOf replays the verdict in effect at that moment, not the latest (E4)", () => {
+    const events: Event[] = [
+      ev({
+        kind: "decision", phase: "review", ts: "2026-06-20T10:05:00Z",
+        payload: { result: "changes-requested", checks: [{ name: "go test", result: "fail", evidence: "x" }] },
+      }),
+      ev({
+        kind: "decision", phase: "review", ts: "2026-06-20T10:09:00Z",
+        payload: { result: "pass", checks: [{ name: "go test", result: "pass", evidence: "ok" }] },
+      }),
+    ];
+    expect(parseVerdict(events)?.result).toBe("pass"); // live → latest
+    expect(parseVerdict(events, "2026-06-20T10:06:00Z")?.result).toBe("changes-requested");
+    expect(parseVerdict(events, "2026-06-20T10:00:00Z")).toBeNull(); // before any decision
+  });
 });
 
 describe("parseDiff", () => {
@@ -91,6 +107,15 @@ describe("parseDiff", () => {
   it("returns null with no diff event", () => {
     expect(parseDiff([ev({ kind: "started", phase: "verify" })])).toBeNull();
   });
+
+  it("asOf replays the diff in effect at that moment (E4)", () => {
+    const mk = (ts: string, additions: number) =>
+      ev({ kind: "diff", phase: "review", ts, payload: { files: [{ path: "a.go", status: "M", additions, deletions: 0 }] } });
+    const events = [mk("2026-06-20T10:05:00Z", 3), mk("2026-06-20T10:08:00Z", 10)];
+    expect(parseDiff(events)?.additions).toBe(10); // live → latest
+    expect(parseDiff(events, "2026-06-20T10:06:00Z")?.additions).toBe(3); // as of earlier
+    expect(parseDiff(events, "2026-06-20T10:00:00Z")).toBeNull(); // before any diff
+  });
 });
 
 describe("buildTimeline", () => {
@@ -105,5 +130,22 @@ describe("buildTimeline", () => {
       "Review · verdict",
       "Merge · merged",
     ]);
+  });
+
+  it("derives a payload summary per entry for the replay log (E4)", () => {
+    const t = buildTimeline([
+      ev({ kind: "progress", phase: "develop", payload: { pct: 42 } }),
+      ev({
+        kind: "diff", phase: "review",
+        payload: { files: [{ path: "a.go", additions: 10, deletions: 2 }, { path: "b.go", additions: 5, deletions: 0 }] },
+      }),
+      ev({ kind: "decision", phase: "review", payload: { result: "pass", checks: [] } }),
+      ev({ kind: "started", phase: "develop" }),
+    ]);
+    expect(t[0]!.summary).toBe("42%");
+    // Glyph-tolerant on the minus (source uses U+2212): files +adds/−dels.
+    expect(t[1]!.summary).toMatch(/^2 files \+15\/.2$/);
+    expect(t[2]!.summary).toBe("pass");
+    expect(t[3]!.summary).toBe("");
   });
 });
