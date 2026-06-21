@@ -13,9 +13,9 @@ plan editörü "yan panel"den **agent komuta merkezi** (default surface) modelin
 
 ---
 
-## DURUM (2026-06-21) — E1+E2+E3+shell+E4-b(⌘K)+E4-c(needs-review) TAMAM, sıradaki E4 (kalan)
+## DURUM (2026-06-21) — E1+E2+E3+shell+E4-b/c/d TAMAM, sıradaki E4 (çoklu-seçim + fork-runtime)
 
-**develop @ `a895a69` (CI 3-job yeşil).** Hepsi non-breaking, çoğu web-only (B1/B2 hariç additive Go),
+**develop @ `cf857c3` (CI 3-job yeşil).** Hepsi non-breaking, çoğu web-only (B1/B2 hariç additive Go),
 Playwright-CANLI KENDİM doğrulandı (Devin-grade):
 - **E1** Command Center board (default Kanban yüzey) + **görsel-polish** (`50b1c55`/`a764782`).
 - **E2** premium Session view drill-in (`2b67bbf` backend + `e1bfc4c` web): SPEC/acceptance +
@@ -39,10 +39,17 @@ Playwright-CANLI KENDİM doğrulandı (Devin-grade):
   ile erişilebilir nudge. Sayı `needsReviewCount` = board'un AYNI leaseHostByTask+columnFor bucketing'i (leased/
   running task şişirmez → board kolonuyla asla çelişmez). Rule#9: tsc+eslint+127 vitest+12 e2e + **CANLI gerçek
   gateway** ("2 tasks need your review" board ile eşleşti, Events'te kalıcı, tek-tık döndü — KENDİM).
+- **E4-d replay/timeline** (`cf857c3`, web-only): session activity timeline'ı replay log'una yükseltti — her
+  entry payload-özeti taşır ("2 files +74/−2", "pass", "42%") + SEÇİLEBİLİR: tıklayınca Verifier-verdict + diff
+  panelleri O ANIN durumuna PİNLENİR (gate karar vermemiş→changes-requested→pass; diff büyürken scrub). "Return
+  to live" + "replaying as of …" notu; paneller "replay" tag'ler. Saf+geriye-uyumlu: `parseVerdict`/`parseDiff`
+  opsiyonel `asOf` ts-cutoff (yoksa=latest), `buildTimeline` per-entry summary (gateway/Go dokunulmadı). Rule#9:
+  tsc+eslint+131 vitest (asOf-replay pre-decision-null + summary + component scrub) +13 e2e (timeline replay) +
+  **CANLI gerçek gateway** (I-1 timeline scrub: verdict/diff as-of'a pinlendi, return-to-live, 0 konsol hatası — KENDİM).
 
-**SIRADAKİ — E4 kalan director güçleri:** (1) kullanıcı tüm akışı gezer; (2) **replay/timeline**, **çoklu-seçim**
-(toplu approve/abort), **"take over"** → native editör/diff aç (fork-runtime), 4C-3 native toast yükselt (editör).
-Sonra E5 (ACP interop + standalone).
+**SIRADAKİ — E4 kalan director güçleri:** (1) kullanıcı tüm akışı gezer; (2) **çoklu-seçim** (board'dan toplu
+approve/abort — web, hassas: bulk-onay), **"take over"** → native editör/diff aç (fork-runtime), 4C-3 native toast
+yükselt (editör-runtime). Sonra E5 (ACP interop + standalone). Web-verifiable kalan = çoklu-seçim; gerisi fork-runtime.
 
 **SERT KISIT:** bu sandbox'ta `claude` subprocess auth YOK → assisted distill (yazışma→senaryo) + real-claude
 develop BURADA koşamaz; UI'lar mock/seed ile, gerçek-claude kullanıcının host'unda. E3 direct-path bu yüzden eklendi
