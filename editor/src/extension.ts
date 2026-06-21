@@ -71,6 +71,14 @@ export const REVEAL_CONTAINER_COMMAND = `workbench.view.extension.${VIEW_CONTAIN
 /** The action label on the intervention notification; picking it reveals the view (4C-3). */
 export const OPEN_CONDUCTOR_ACTION = "Open Conductor";
 
+/** Intervention-toast action: approve the held task in place (confirm-gated → a real merge).
+ * The director acts on the gate-green task without first opening the panel (4C-3 upgrade). */
+export const APPROVE_ACTION = "Approve";
+
+/** Intervention-toast action: open THAT task's most-recent native diff (the take-over-into-
+ * the-editor path) so the director can inspect the change hands-on (4C-3 upgrade / "take over"). */
+export const OPEN_DIFF_ACTION = "Open diff";
+
 /** Settings key (under the "conductor" section) holding the gateway base URL. */
 export const GATEWAY_URL_SETTING = "gatewayUrl";
 
@@ -109,7 +117,9 @@ export interface VscodeApi {
       options: vscode.MessageOptions,
       item: string,
     ): Thenable<string | undefined>;
-    showWarningMessage(message: string, item: string): Thenable<string | undefined>;
+    // Rest form covers the single-action toast (4C-2) AND the 4C-3 multi-action
+    // intervention toast (Approve / Open diff / Open Conductor).
+    showWarningMessage(message: string, ...items: string[]): Thenable<string | undefined>;
     registerWebviewViewProvider(
       viewId: string,
       provider: vscode.WebviewViewProvider,
@@ -425,11 +435,26 @@ export interface InterventionStatusBar {
 }
 
 /**
- * The testable core of the intervention handler (4C-3): given the new pending COUNT and the
- * distilled (token-free) intervention, (1) update + show the dedicated status-bar item, and
- * (2) show a warning toast naming `project/task: reason` with an "Open Conductor" action;
- * if the user picks it, reveal the activity-bar container. Pure of the count bookkeeping
- * (the caller owns the counter) so a test drives it with a fixed count + a mock api.
+ * The task-scoped actions the intervention toast can take, injected so `handleIntervention`
+ * stays pure of the control/diff wiring (a test passes spies; activate passes the real
+ * flows). Both are scoped to the intervention's own project/task. Token-free by contract.
+ */
+export interface InterventionActions {
+  /** Approve THIS held task in place (confirm-gated → a real merge). */
+  approve: (project: string, task: string) => void | Promise<void>;
+  /** Open THIS task's most-recent native diff (take-over-into-the-editor). */
+  openDiff: (project: string, task: string) => void | Promise<void>;
+}
+
+/**
+ * The testable core of the intervention handler (4C-3, upgraded): given the new pending
+ * COUNT and the distilled (token-free) intervention, (1) update + show the dedicated
+ * status-bar item, and (2) show a warning toast naming `project/task: reason` with THREE
+ * one-click actions — Approve (act on the gate-green task in place), Open diff (take over
+ * the change in the native editor), Open Conductor (reveal the panel). The choice routes to
+ * the injected action (or the reveal command) so the director never has to dig for it. Pure
+ * of the count bookkeeping (the caller owns the counter) so a test drives it with a fixed
+ * count + a mock api + spy actions.
  *
  * TOKEN NOTE: `intervention` carries only project/task/reason (the notifier guarantees no
  * token in it), and neither the toast nor the status text echoes anything else — so no
@@ -440,6 +465,7 @@ export async function handleIntervention(
   statusBar: InterventionStatusBar,
   count: number,
   intervention: Intervention,
+  actions: InterventionActions,
 ): Promise<void> {
   statusBar.text = interventionStatusText(count);
   statusBar.show();
@@ -447,10 +473,16 @@ export async function handleIntervention(
   const { project, task, reason } = intervention;
   const choice = await api.window.showWarningMessage(
     `Intervention needed — ${project}/${task}: ${reason}`,
+    APPROVE_ACTION,
+    OPEN_DIFF_ACTION,
     OPEN_CONDUCTOR_ACTION,
   );
   if (choice === OPEN_CONDUCTOR_ACTION) {
     await api.commands.executeCommand(REVEAL_CONTAINER_COMMAND);
+  } else if (choice === APPROVE_ACTION) {
+    await actions.approve(project, task);
+  } else if (choice === OPEN_DIFF_ACTION) {
+    await actions.openDiff(project, task);
   }
 }
 
@@ -514,6 +546,7 @@ export function renderDiffDocument(taskDiff: TaskDiff): string {
  */
 export interface StoredDiff {
   uri: string;
+  project: string;
   task: string;
   fileCount: number;
   content: string;
@@ -542,6 +575,7 @@ export class DiffStore {
     )}/${n}.diff`;
     this.#byUri.set(uri, {
       uri,
+      project: taskDiff.project,
       task: taskDiff.task,
       fileCount: taskDiff.files.length,
       content: renderDiffDocument(taskDiff),
@@ -566,6 +600,13 @@ export class DiffStore {
   /** The retained diffs, NEWEST first (the most recent is `recents()[0]`). */
   recents(): StoredDiff[] {
     return [...this.#byUri.values()].reverse();
+  }
+
+  /** The most-recent retained diff for a specific project/task, or undefined if none is
+   * retained (never emitted, or evicted past the cap). Drives the task-scoped "Open diff"
+   * take-over from the intervention toast. */
+  latestForTask(project: string, task: string): StoredDiff | undefined {
+    return this.recents().find((d) => d.project === project && d.task === task);
   }
 
   /** The number of retained diffs (drives the status-bar count). */
@@ -639,6 +680,72 @@ export async function runShowDiff(api: DiffVscodeApi, store: DiffStore): Promise
 function diffQuickPickLabel(d: StoredDiff): string {
   const noun = d.fileCount === 1 ? "file" : "files";
   return `${d.task} (${d.fileCount} ${noun})`;
+}
+
+/**
+ * Opens a SPECIFIC task's most-recent native diff (4C-3 "take over"): the intervention toast's
+ * "Open diff" routes here so the director lands on the change for the task that needs them —
+ * not a quick-pick of everything. With no retained diff for that task (never emitted / evicted)
+ * it shows a clear info message rather than opening a stale one. Token-free (the store is).
+ */
+export async function runShowDiffForTask(
+  api: DiffVscodeApi,
+  store: DiffStore,
+  project: string,
+  task: string,
+): Promise<void> {
+  const d = store.latestForTask(project, task);
+  if (d === undefined) {
+    await api.window.showInformationMessage(`No diff yet for ${project}/${task}.`);
+    return;
+  }
+  await openDiff(api, d.uri);
+}
+
+/**
+ * Approves a SPECIFIC held task in place (4C-3 toast "Approve"): confirm-gate it (approve
+ * triggers a real merge), fire the authed task-level control POST, and surface a token-FREE
+ * result. Mirrors runControl's approve branch but is task-scoped (no project pick) so the
+ * director acts on the exact gate-green task the intervention named. A declined confirm is a
+ * quiet no-op. The token lives only in the ControlClient header — never in a message here.
+ */
+export async function runApproveTask(
+  api: VscodeApi,
+  control: Pick<Control, "approve">,
+  project: string,
+  task: string,
+): Promise<void> {
+  const choice = await api.window.showWarningMessage(
+    `Approve ${project}/${task}? This triggers a real merge.`,
+    { modal: true },
+    "Yes",
+  );
+  if (choice !== "Yes") {
+    return; // declined / dismissed — quiet no-op.
+  }
+  const result = await control.approve(project, task);
+  if (result.ok) {
+    await api.window.showInformationMessage(`Approve requested for ${project}/${task}.`);
+    return;
+  }
+  switch (result.reason) {
+    case "conflict":
+      await api.window.showWarningMessage(
+        "No single task is awaiting approval (none or multiple).",
+        {},
+        "OK",
+      );
+      return;
+    case "unauthorized":
+      await api.window.showErrorMessage("The gateway rejected the stored token. Reconnect.");
+      return;
+    case "not-connected":
+      await api.window.showErrorMessage("Connect to the gateway first.");
+      return;
+    case "unreachable":
+      await api.window.showErrorMessage("Could not reach the gateway.");
+      return;
+  }
 }
 
 /**
@@ -951,7 +1058,14 @@ export function activate(context: vscode.ExtensionContext): void {
     wsConnector,
     onIntervention: (intervention) => {
       pendingInterventions += 1;
-      void handleIntervention(vscode, interventionBar, pendingInterventions, intervention);
+      // 4C-3 upgrade: the toast's actions act on the intervention's own task — Approve it
+      // in place (confirm-gated) or take it over by opening its native diff. `control` +
+      // `diffStore` are in scope (defined in this activation); the closure runs only when an
+      // intervention fires, by which point both are initialized.
+      void handleIntervention(vscode, interventionBar, pendingInterventions, intervention, {
+        approve: (project, task) => runApproveTask(vscode, control, project, task),
+        openDiff: (project, task) => runShowDiffForTask(vscode, diffStore, project, task),
+      });
     },
   });
 

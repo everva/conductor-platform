@@ -30,6 +30,8 @@ import {
   DIFF_EVICTED_PLACEHOLDER,
   FLEET_VIEW_ID,
   OPEN_CONDUCTOR_ACTION,
+  APPROVE_ACTION,
+  OPEN_DIFF_ACTION,
   PAUSE_COMMAND,
   REVEAL_CONTAINER_COMMAND,
   RESUME_COMMAND,
@@ -50,10 +52,12 @@ import {
   placeholderHtml,
   registerConductor,
   renderDiffDocument,
+  runApproveTask,
   runConnect,
   runControl,
   runDisconnect,
   runShowDiff,
+  runShowDiffForTask,
   statusBarText,
   webviewHtml,
 } from "./extension";
@@ -465,16 +469,22 @@ describe("handleIntervention", () => {
   function makeBar(): InterventionStatusBar & { show: ReturnType<typeof vi.fn>; hide: ReturnType<typeof vi.fn> } {
     return { text: "", show: vi.fn(), hide: vi.fn() };
   }
+  // Spy actions for the toast's Approve / Open diff routes (4C-3 upgrade).
+  function makeActions(): { approve: ReturnType<typeof vi.fn>; openDiff: ReturnType<typeof vi.fn> } {
+    return { approve: vi.fn(), openDiff: vi.fn() };
+  }
 
   const intervention: Intervention = { project: "alpha", task: "t-1", reason: "tests are red" };
 
-  it("shows a warning toast naming project/task/reason + an Open Conductor action, and sets the status text", async () => {
+  it("shows a warning toast naming project/task/reason + Approve/Open diff/Open Conductor actions, and sets the status text", async () => {
     const bar = makeBar();
 
-    await handleIntervention({ commands, window }, bar, 2, intervention);
+    await handleIntervention({ commands, window }, bar, 2, intervention, makeActions());
 
     expect(window.showWarningMessage).toHaveBeenCalledWith(
       "Intervention needed — alpha/t-1: tests are red",
+      APPROVE_ACTION,
+      OPEN_DIFF_ACTION,
       OPEN_CONDUCTOR_ACTION,
     );
     // The status bar reflects the count and is shown.
@@ -485,21 +495,45 @@ describe("handleIntervention", () => {
 
   it("reveals the activity-bar container when the user picks Open Conductor", async () => {
     window.showWarningMessage.mockResolvedValueOnce(OPEN_CONDUCTOR_ACTION);
-    const bar = makeBar();
+    const actions = makeActions();
 
-    await handleIntervention({ commands, window }, bar, 1, intervention);
+    await handleIntervention({ commands, window }, makeBar(), 1, intervention, actions);
 
     expect(commands.executeCommand).toHaveBeenCalledWith(REVEAL_CONTAINER_COMMAND);
     expect(REVEAL_CONTAINER_COMMAND).toBe("workbench.view.extension.conductor");
+    expect(actions.approve).not.toHaveBeenCalled();
+    expect(actions.openDiff).not.toHaveBeenCalled();
   });
 
-  it("does NOT reveal anything when the toast is dismissed", async () => {
-    window.showWarningMessage.mockResolvedValueOnce(undefined); // dismissed.
-    const bar = makeBar();
+  it("approves the intervention's OWN task in place when the user picks Approve", async () => {
+    window.showWarningMessage.mockResolvedValueOnce(APPROVE_ACTION);
+    const actions = makeActions();
 
-    await handleIntervention({ commands, window }, bar, 1, intervention);
+    await handleIntervention({ commands, window }, makeBar(), 1, intervention, actions);
+
+    expect(actions.approve).toHaveBeenCalledWith("alpha", "t-1");
+    expect(commands.executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("opens the intervention's OWN task diff (take over) when the user picks Open diff", async () => {
+    window.showWarningMessage.mockResolvedValueOnce(OPEN_DIFF_ACTION);
+    const actions = makeActions();
+
+    await handleIntervention({ commands, window }, makeBar(), 1, intervention, actions);
+
+    expect(actions.openDiff).toHaveBeenCalledWith("alpha", "t-1");
+    expect(commands.executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("does NOT act when the toast is dismissed", async () => {
+    window.showWarningMessage.mockResolvedValueOnce(undefined); // dismissed.
+    const actions = makeActions();
+
+    await handleIntervention({ commands, window }, makeBar(), 1, intervention, actions);
 
     expect(commands.executeCommand).not.toHaveBeenCalled();
+    expect(actions.approve).not.toHaveBeenCalled();
+    expect(actions.openDiff).not.toHaveBeenCalled();
   });
 
   it("never puts the token in the toast or the status text (token-free input → token-free output)", async () => {
@@ -508,7 +542,7 @@ describe("handleIntervention", () => {
     const TOKEN = "tok-MUST-NOT-LEAK";
     const bar = makeBar();
 
-    await handleIntervention({ commands, window }, bar, 1, intervention);
+    await handleIntervention({ commands, window }, bar, 1, intervention, makeActions());
 
     const toast = String(window.showWarningMessage.mock.calls[0]?.[0] ?? "");
     expect(toast).not.toContain(TOKEN);
@@ -745,6 +779,87 @@ describe("runShowDiff", () => {
 
     expect(workspace.openTextDocument).not.toHaveBeenCalled();
     expect(window.showTextDocument).not.toHaveBeenCalled();
+  });
+});
+
+describe("DiffStore.latestForTask (4C-3 take over)", () => {
+  it("returns the most-recent diff for a project/task, scoped by both", () => {
+    const store = new DiffStore();
+    store.add(makeTaskDiff({ project: "alpha", task: "t-1" }));
+    store.add(makeTaskDiff({ project: "beta", task: "t-1" })); // same task id, OTHER project
+    const newest = store.add(makeTaskDiff({ project: "alpha", task: "t-1" }));
+
+    expect(store.latestForTask("alpha", "t-1")?.uri).toBe(newest);
+    expect(store.latestForTask("alpha", "t-1")?.project).toBe("alpha");
+    expect(store.latestForTask("gamma", "t-1")).toBeUndefined();
+  });
+});
+
+describe("runShowDiffForTask (4C-3 take over)", () => {
+  it("opens the named task's most-recent diff (not a quick-pick of everything)", async () => {
+    const store = new DiffStore();
+    store.add(makeTaskDiff({ project: "alpha", task: "other" }));
+    const target = store.add(makeTaskDiff({ project: "alpha", task: "t-1" }));
+
+    await runShowDiffForTask(diffApi, store, "alpha", "t-1");
+
+    expect(window.showQuickPick).not.toHaveBeenCalled();
+    const opened = workspace.openTextDocument.mock.calls[0]?.[0] as { path: string };
+    expect(opened.path).toBe(target);
+    expect(window.showTextDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ uri: expect.objectContaining({ path: target }) }),
+      expect.objectContaining({ preview: true }),
+    );
+  });
+
+  it("shows a clear info message (no stale diff) when the task has none retained", async () => {
+    const store = new DiffStore();
+    store.add(makeTaskDiff({ project: "alpha", task: "other" }));
+
+    await runShowDiffForTask(diffApi, store, "alpha", "t-1");
+
+    expect(window.showInformationMessage).toHaveBeenCalledWith("No diff yet for alpha/t-1.");
+    expect(workspace.openTextDocument).not.toHaveBeenCalled();
+  });
+});
+
+describe("runApproveTask (4C-3 in-place approve)", () => {
+  it("confirms (modal) then approves the EXACT task and reports", async () => {
+    window.showWarningMessage.mockResolvedValueOnce("Yes");
+    const control = makeControl();
+
+    await runApproveTask({ commands, window }, control, "alpha", "t-1");
+
+    expect(window.showWarningMessage).toHaveBeenCalledWith(
+      expect.stringContaining("Approve alpha/t-1?"),
+      { modal: true },
+      "Yes",
+    );
+    expect(control.approve).toHaveBeenCalledWith("alpha", "t-1");
+    expect(window.showInformationMessage).toHaveBeenCalledWith(
+      "Approve requested for alpha/t-1.",
+    );
+  });
+
+  it("is a quiet no-op when the confirm is declined", async () => {
+    window.showWarningMessage.mockResolvedValueOnce(undefined); // dismissed.
+    const control = makeControl();
+
+    await runApproveTask({ commands, window }, control, "alpha", "t-1");
+
+    expect(control.approve).not.toHaveBeenCalled();
+    expect(window.showInformationMessage).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a 409 conflict as guidance without throwing", async () => {
+    window.showWarningMessage.mockResolvedValueOnce("Yes");
+    const control = makeControl({ result: { ok: false, reason: "conflict", status: 409 } });
+
+    await runApproveTask({ commands, window }, control, "alpha", "t-1");
+
+    expect(control.approve).toHaveBeenCalledWith("alpha", "t-1");
+    const warns = window.showWarningMessage.mock.calls.map((c) => String(c[0]));
+    expect(warns.some((w) => /awaiting approval/i.test(w))).toBe(true);
   });
 });
 
