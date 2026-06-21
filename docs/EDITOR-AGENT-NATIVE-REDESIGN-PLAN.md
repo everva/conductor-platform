@@ -55,9 +55,22 @@ Playwright-CANLI KENDİM doğrulandı (Devin-grade):
   confirm→item başı approve+empty no-op) +**14 e2e** (iki held kart→"2 selected"→enumerated confirm) + **CANLI
   gerçek gateway** (I-1 seç→"Approve 1 task? … ios-app/I-1"→cancel NON-DESTRUCTIVE, 0 hata — KENDİM).
 
-**E4 web-kısmı BİTTİ (b/c/d/e).** **SIRADAKİ — yalnız fork-runtime kaldı:** **"take over"** → native editör/diff aç
-+ 4C-3 native toast yükselt — derlenmiş editör gerektirir, BU sandbox'ta doğrulanamaz → kullanıcının host'unda
-(claude-girişli) yapılır. Sonra E5 (ACP interop + standalone). Web-tarafı director-güçleri tamam.
+**E4 web-kısmı BİTTİ (b/c/d/e).**
+- **E4-f 4C-3 toast yükseltmesi + take-over-to-diff** (`306f049`, editor/, fork-runtime): native intervention
+  toast'ı tek-aksiyon "Open Conductor"dan ÜÇ tek-tık aksiyona çıkardı — **Approve** (held task'ı yerinde onayla,
+  confirm-gated→merge, intervention'ın KENDİ project/task'ına scoped) + **Open diff** (O task'ın en-yeni native
+  diff'ini aç = take-over-into-editor; yeni `DiffStore.latestForTask` + `runShowDiffForTask`) + **Open Conductor**
+  (panel'i aç, değişmedi). `handleIntervention` enjekte edilen task-scoped action'lar alır (saf kalır); activate
+  `runApproveTask`+`runShowDiffForTask`'a yönlendirir. Token disiplini sağlam (toast yalnız project/task/reason).
+  **STATİK GATE BURADA GEÇTİ:** tsc(host+webview)+eslint(0)+**177 vitest** (toast 3-aksiyon routing + latestForTask
+  project+task-scoped + runShowDiffForTask task-diff/no-diff + runApproveTask confirm→approve→report/decline/409) +
+  esbuild build. **RUNTIME (toast'a tıklama) kullanıcı host'unda doğrulanır** (Electron/claude-auth sandbox'ta yok).
+
+**SIRADAKİ — kalan fork-runtime:** webview-session'dan **"Take over" butonu** (HER session'dan, sadece intervention
+değil) → bridge protokol mesajı (webview→host) → host native diff açar. 5-dosya/2-repo plumbing (protocol+hostBridge+
+webviewTransport+web SessionView onTakeOver prop+fork webview glue); her katman unit-test edilebilir ama entegrasyon
+runtime-doğrulaması ister → **kullanıcı host'unda birlikte yapmak daha güvenli** (blind plumbing yerine). Sonra E5
+(ACP interop + standalone).
 
 **SERT KISIT:** bu sandbox'ta `claude` subprocess auth YOK → assisted distill (yazışma→senaryo) + real-claude
 develop BURADA koşamaz; UI'lar mock/seed ile, gerçek-claude kullanıcının host'unda. E3 direct-path bu yüzden eklendi
