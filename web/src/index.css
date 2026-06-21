@@ -1,8 +1,15 @@
 :root {
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  line-height: 1.5;
-  color: #e6e6e6;
-  background: #14161a;
+  /* V0: premium type + base colors are now token-driven (theme/tokens.css).
+     Surfaces/components migrate onto the tokens in V2+. */
+  font-family: var(--font-sans);
+  line-height: var(--leading-normal);
+  color: var(--text-1);
+  background: var(--bg);
+  /* Geist renders crisper with grayscale smoothing + optimized legibility. */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-synthesis: none;
 }
 
 * {
@@ -24,7 +31,20 @@ input {
 }
 
 a {
-  color: #6ab0ff;
+  color: var(--brand-text);
+}
+
+/* Foundation a11y: a single consistent keyboard focus ring everywhere (mouse
+   clicks stay ring-free via :focus-visible). Components may refine, not remove. */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+::selection {
+  background: var(--brand-soft);
+  color: var(--text-1);
 }
 
 /* --- app chrome (shell): a sticky brand bar (redesign E4 polish) --- */
