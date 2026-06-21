@@ -73,7 +73,7 @@ alias). Token disiplini (webview/log/test'e ASLA). Canlı optiway/xirigo'ya DOKU
 isolation:"worktree" KULLANMA. NOT: `claude -p` bu makinede ÇALIŞIYOR (bu oturumda
 kanıtlandı) ama UI işi claude-free.
 
-## DURUM (2026-06-22) — V0→V4 TAMAM, SIRADAKİ V5 (iterate-to-9 + kullanıcı onayı)
+## DURUM (2026-06-22) — V0→V5 TAMAM; BİTİŞ GATE'İ = KULLANICI ONAYI bekliyor
 - Önkoşul: agent-native FEATURE planı E1–E4 ✅; k8s GitOps deploy ✅ (ayrı iş).
   Cockpit `:5173` dev + seeded gateway `:8080` AYAKTA (görsel doğrulama yüzeyi).
 - **V0 ✅ (develop `6f26a1f`)**: `web/src/theme/tokens.css` tek kanonik token
@@ -143,8 +143,17 @@ kanıtlandı) ama UI işi claude-free.
   `editor/tsconfig.webview.json` `paths` mapping** (react gibi → editor/node_modules;
   `traceResolution` ile kanıtlandı). **Develop `967fbe7` 3-job YEŞİL doğrulandı**
   (`gh run view conclusion=success`; watch exit'ine güvenme). Ders → [[gotcha]].
-- **SIRADAKİ: V5 iterate-to-9** — gerçek Devin.ai UI ekran-görüntüleriyle YAN YANA;
-  her yüzey için öz-eleştiri → kalan boşlukları kapat (density/balance, empty-state
-  craft, tooltip, hover/active ince ayar) → DÜRÜST 9/10 okuyana kadar iterate.
-  **Bitiş = ekran-görüntüsünde "Devin gibi" diyebilmem + KULLANICI ONAYI.** Her
-  iterasyon Playwright-canlı KENDİM. Cockpit şu an ~8.5/10.
+- **V5 ✅ (develop `f4165db`, CI yeşil)**: öz-eleştiri turu → en yüksek-etkili kalan
+  boşluk = **sign-in (TokenGate)** (tek kalan inline-styled user-facing yüzey, İLK
+  izlenim). Token'a taşındı (`auth.css`): yükseltilmiş gradient kart + Conductor
+  brand-mark + wordmark lockup + uppercase token label + focus-ring field + tam-en
+  `<Button primary>` (loading spinner). smoke.spec heading→yeni lockup. Canlı KENDİM
+  (premium ilk izlenim, 0 err); gate tsc+eslint+vitest 151/151+e2e 14/14.
+  **TÜM yüzeyler artık sistemde: sign-in · board · session · intake · ⌘K · fleet ·
+  confirm/notice. Cockpit ~9/10** (öz-değerlendirme: refined type ✓ 8px ritim ✓
+  semantic renk ✓ katmanlı elevation ✓ motion ✓ tüm durumlar ✓ tutarlı component ✓
+  lucide ikon ✓ a11y ✓).
+- **BİTİŞ GATE'İ: KULLANICI ONAYI bekliyor.** Plan gereği son söz kullanıcının:
+  9/10 onaylanırsa BİTTİ; aksi halde belirtilen yüzey(ler) hedefli iterate edilir
+  (V5 devam). Kalan opsiyonel cila (kullanıcı isterse): tooltip primitive, board
+  empty-state craft, density ince-ayarı, fork-runtime webview görsel doğrulama.
