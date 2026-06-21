@@ -110,9 +110,9 @@
 
 /* --- panels + tables --- */
 .fleet-panel {
-  border: 1px solid #2a2f37;
-  border-radius: 0.5rem;
-  background: #1b1e24;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
   overflow: hidden;
 }
 
@@ -120,13 +120,15 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.6rem 0.9rem;
-  border-bottom: 1px solid #2a2f37;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
 }
 
 .fleet-panel-head h2 {
   margin: 0;
-  font-size: 0.95rem;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
 }
 
 .fleet-panel-body {
@@ -136,125 +138,137 @@
 table.fleet-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
 }
 
 .fleet-table th,
 .fleet-table td {
   text-align: left;
-  padding: 0.45rem 0.9rem;
-  border-bottom: 1px solid #23272f;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
   white-space: nowrap;
 }
 
 .fleet-table th {
-  color: #9aa4b2;
-  font-weight: 600;
-  font-size: 0.72rem;
+  color: var(--text-3);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-2xs);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: var(--tracking-wide);
 }
 
 .fleet-table tbody tr.selectable {
   cursor: pointer;
 }
 .fleet-table tbody tr.selectable:hover {
-  background: #21252d;
+  background: var(--surface-3);
 }
 .fleet-table tbody tr.selected {
-  background: #233044;
+  background: var(--brand-soft);
 }
 
 .fleet-empty {
-  padding: 0.9rem;
-  color: #9aa4b2;
-  font-size: 0.85rem;
+  padding: var(--space-4);
+  color: var(--text-3);
+  font-size: var(--text-sm);
 }
 
 .fleet-error {
   margin: 0;
-  padding: 0.6rem 0.9rem;
-  color: #fca5a5;
-  font-size: 0.85rem;
+  padding: var(--space-3) var(--space-4);
+  color: var(--danger-text);
+  font-size: var(--text-sm);
 }
 
 .mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.78rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
 }
 
 .muted {
-  color: #9aa4b2;
+  color: var(--text-3);
 }
 
 /* --- chips + badges --- */
 .chip {
   display: inline-block;
-  padding: 0.05rem 0.4rem;
+  padding: 0.08rem 0.45rem;
   margin: 0.05rem 0.2rem 0.05rem 0;
-  border-radius: 0.3rem;
-  background: #2a2f37;
-  color: #cbd5e1;
-  font-size: 0.72rem;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-2);
+  font-size: var(--text-xs);
 }
 
 .badge {
   display: inline-block;
-  padding: 0.05rem 0.4rem;
-  border-radius: 0.3rem;
-  font-size: 0.7rem;
-  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  border: 1px solid transparent;
 }
 .badge.paused {
-  background: #78350f;
-  color: #fde68a;
+  background: var(--warn-soft);
+  border-color: var(--warn-border);
+  color: var(--warn-text);
 }
 .badge.approved {
-  background: #064e3b;
-  color: #6ee7b7;
+  background: var(--success-soft);
+  border-color: var(--success-border);
+  color: var(--success-text);
 }
 .badge.abort {
-  background: #7f1d1d;
-  color: #fca5a5;
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+  color: var(--danger-text);
 }
 .badge.awaiting {
-  background: #422006;
-  color: #fbbf24;
+  background: var(--warn-soft);
+  border-color: var(--warn-border);
+  color: var(--warn-text);
 }
 
-/* --- control buttons (3B-3) --- */
+/* --- control buttons (3B-3); tuned to match the <Button> primitive --- */
 .fleet-btn {
-  font-size: 0.74rem;
-  padding: 0.2rem 0.55rem;
-  border-radius: 0.3rem;
-  border: 1px solid #2a2f37;
-  background: transparent;
-  color: #e6e6e6;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface-3);
+  color: var(--text-1);
   cursor: pointer;
   white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    filter var(--dur-fast) var(--ease-out);
 }
 .fleet-btn:hover:not(:disabled) {
-  background: #21252d;
+  background: var(--surface-4);
+  border-color: var(--border-strong);
 }
 .fleet-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.55;
   cursor: not-allowed;
 }
 .fleet-btn.primary {
-  background: #1d4ed8;
-  border-color: #1d4ed8;
-  color: #eff6ff;
+  background: var(--brand-gradient);
+  border-color: transparent;
+  color: var(--text-on-accent);
+  box-shadow: var(--shadow-brand);
 }
 .fleet-btn.primary:hover:not(:disabled) {
-  background: #2563eb;
+  filter: brightness(1.06);
 }
 .fleet-btn.danger {
-  background: #7f1d1d;
-  border-color: #7f1d1d;
-  color: #fecaca;
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+  color: var(--danger-text);
 }
 .fleet-btn.danger:hover:not(:disabled) {
-  background: #991b1b;
+  background: rgba(248, 113, 113, 0.18);
+  border-color: var(--danger);
 }
 
 .fleet-actions {
@@ -270,39 +284,40 @@ table.fleet-table {
 }
 
 .fleet-table tbody tr.awaiting {
-  background: #2a210d;
+  background: var(--warn-soft);
 }
 
 /* --- notices (toasts) --- */
 .fleet-notices {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: var(--space-2);
 }
 .fleet-notice {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.5rem 0.85rem;
-  border-radius: 0.4rem;
-  font-size: 0.83rem;
-  border: 1px solid #2a2f37;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-1);
 }
 .fleet-notice.ok {
-  background: #052e2b;
-  border-color: #065f46;
-  color: #6ee7b7;
+  background: var(--success-soft);
+  border-color: var(--success-border);
+  color: var(--success-text);
 }
 .fleet-notice.warn {
-  background: #2a210d;
-  border-color: #78350f;
-  color: #fcd34d;
+  background: var(--warn-soft);
+  border-color: var(--warn-border);
+  color: var(--warn-text);
 }
 .fleet-notice.error {
-  background: #2a1212;
-  border-color: #7f1d1d;
-  color: #fca5a5;
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+  color: var(--danger-text);
 }
 .fleet-notice-dismiss {
   background: transparent;
@@ -316,22 +331,22 @@ table.fleet-table {
 
 /* --- pending-intervention banner --- */
 .fleet-intervention {
-  border: 1px solid #7f1d1d;
-  border-left: 4px solid #f87171;
-  border-radius: 0.5rem;
-  background: #2a1212;
-  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--danger-border);
+  border-left: 4px solid var(--danger);
+  border-radius: var(--radius-lg);
+  background: var(--danger-soft);
+  padding: var(--space-3) var(--space-4);
 }
 .fleet-intervention-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 0.5rem;
+  margin-bottom: var(--space-2);
 }
 .fleet-intervention-mark {
-  color: #fca5a5;
-  font-weight: 700;
-  font-size: 0.85rem;
+  color: var(--danger-text);
+  font-weight: var(--weight-bold);
+  font-size: var(--text-sm);
 }
 .fleet-intervention-list {
   list-style: none;
@@ -351,7 +366,7 @@ table.fleet-table {
 .fleet-intervention-loc {
   background: transparent;
   border: none;
-  color: #fecaca;
+  color: var(--danger-text);
   cursor: pointer;
   padding: 0;
   text-decoration: underline;
@@ -365,52 +380,51 @@ table.fleet-table {
 .fleet-modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(8, 9, 13, 0.6);
+  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 50;
+  z-index: var(--z-modal);
 }
 .fleet-modal {
-  background: #1b1e24;
-  border: 1px solid #2a2f37;
-  border-radius: 0.6rem;
-  padding: 1.1rem 1.2rem;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  padding: var(--space-5) var(--space-5);
   max-width: 26rem;
   width: calc(100% - 2rem);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-pop);
 }
 .fleet-modal-title {
-  margin: 0 0 0.5rem;
-  font-size: 1rem;
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
 }
 .fleet-modal-body {
-  margin: 0 0 1rem;
-  font-size: 0.85rem;
-  color: #cbd5e1;
-  line-height: 1.45;
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text-2);
+  line-height: var(--leading-snug);
 }
 .fleet-modal-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 0.5rem;
-}
-.fleet-modal-actions .fleet-btn {
-  font-size: 0.82rem;
-  padding: 0.35rem 0.8rem;
+  gap: var(--space-2);
 }
 
 .hb {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 .hb.fresh {
-  color: #6ee7b7;
+  color: var(--success-text);
 }
 .hb.stale {
-  color: #fbbf24;
+  color: var(--warn);
 }
 .hb.never {
-  color: #f87171;
+  color: var(--danger);
 }
 
 /* --- event ticker --- */
@@ -420,22 +434,22 @@ table.fleet-table {
 }
 .fleet-ticker-row {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-2);
   align-items: baseline;
-  padding: 0.35rem 0.9rem;
-  border-bottom: 1px solid #23272f;
-  font-size: 0.78rem;
+  padding: var(--space-1) var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+  font-size: var(--text-xs);
 }
 .fleet-ticker-row.intervention {
-  background: #3b1d1d;
+  background: var(--danger-soft);
 }
 .fleet-ticker-kind {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 .fleet-ticker-kind.intervention {
-  color: #fca5a5;
+  color: var(--danger-text);
 }
 .fleet-ticker-time {
-  color: #9aa4b2;
+  color: var(--text-3);
   margin-left: auto;
 }

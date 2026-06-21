@@ -5,6 +5,7 @@
 // the backdrop cancel; the confirm button is auto-focused so Enter confirms.
 import { useEffect, useRef } from "react";
 import type { PendingConfirm } from "./useFleetControls.ts";
+import { Button } from "../ui/index.ts";
 
 export interface ConfirmDialogProps {
   pending: PendingConfirm | null;
@@ -52,17 +53,16 @@ export function ConfirmDialog({ pending, onConfirm, onCancel }: ConfirmDialogPro
         <h3 className="fleet-modal-title">{pending.title}</h3>
         <p className="fleet-modal-body">{pending.body}</p>
         <div className="fleet-modal-actions">
-          <button type="button" className="fleet-btn" onClick={onCancel}>
+          <Button variant="ghost" onClick={onCancel}>
             Cancel
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
             ref={confirmRef}
-            className={`fleet-btn ${pending.tone === "danger" ? "danger" : "primary"}`}
+            variant={pending.tone === "danger" ? "danger" : "primary"}
             onClick={onConfirm}
           >
             {pending.confirmLabel}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

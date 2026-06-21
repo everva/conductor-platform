@@ -19,8 +19,25 @@ import { useEventFeed } from "../events/useEventFeed.ts";
 import type { HistoryLoader } from "../events/useEventFeed.ts";
 import { isAwaitingApproval } from "../fleet/controls.ts";
 import type { FleetControls } from "../fleet/useFleetControls.ts";
+import { Badge, Button, Chip, StatusDot } from "../ui/index.ts";
+import type { BadgeTone } from "../ui/index.ts";
 import { buildTimeline, parseDiff, parseVerdict } from "./session.ts";
 import "./session.css";
+
+const BackIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <path d="M10 3L5 8l5 5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+// Map a task's lifecycle status to a Badge tone for the header chip.
+function statusTone(status: string, held: boolean): BadgeTone {
+  if (held) return "warn";
+  if (status === "blocked") return "danger";
+  if (status === "done") return "success";
+  if (status === "running") return "info";
+  return "neutral";
+}
 
 // ScenarioClient is the single read the session needs for the spec.
 export interface ScenarioClient {
@@ -124,19 +141,19 @@ export function SessionView({
   return (
     <section className="sv" aria-label="Session">
       <div className="sv-head">
-        <button type="button" className="sv-back" onClick={onBack}>
-          ◂ Command Center
-        </button>
+        <Button variant="ghost" size="sm" leftIcon={<BackIcon />} onClick={onBack}>
+          Command Center
+        </Button>
         <div className="sv-head-main">
-          <span className="mono sv-head-id">{task.project_id} / {task.id}</span>
+          <span className="sv-head-id">{task.project_id} / {task.id}</span>
           <h2 className="sv-head-title">{title}</h2>
         </div>
         <div className="sv-head-meta">
-          {task.tier && <span className="sv-tag">{task.tier}</span>}
-          {task.lane && <span className="sv-tag">{task.lane}</span>}
-          <span className={`sv-tag sv-status sv-status-${held ? "review" : task.status}`}>
+          {task.tier && <Badge tone="neutral">{task.tier}</Badge>}
+          {task.lane && <Chip>{task.lane}</Chip>}
+          <Badge tone={statusTone(task.status, held)}>
             {held ? "awaiting-approval" : task.status}
-          </span>
+          </Badge>
         </div>
       </div>
 
@@ -203,7 +220,7 @@ export function SessionView({
                   className="sv-replay-live"
                   onClick={() => setReplayTs(null)}
                 >
-                  ● Return to live
+                  <StatusDot tone="success" pulse /> Return to live
                 </button>
               )}
             </h3>
@@ -291,22 +308,20 @@ export function SessionView({
       {(held || task.status === "running") && controls && (
         <div className="sv-actions">
           {held && (
-            <button
-              type="button"
-              className="cc-btn cc-btn-approve"
+            <Button
+              variant="success"
               disabled={busy}
               onClick={() => controls.requestApprove(task.project_id, task.id)}
             >
               {busy ? "Approving…" : "Approve & merge"}
-            </button>
+            </Button>
           )}
-          <button
-            type="button"
-            className="cc-btn"
+          <Button
+            variant="danger"
             onClick={() => controls.requestAbort(task.project_id)}
           >
             Abort
-          </button>
+          </Button>
         </div>
       )}
 

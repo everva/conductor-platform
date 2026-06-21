@@ -6,7 +6,7 @@
 .cmdk-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: var(--z-modal);
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -20,27 +20,25 @@
   max-height: 70vh;
   display: flex;
   flex-direction: column;
-  background: #15181f;
-  border: 1px solid rgba(139, 92, 246, 0.28);
-  border-radius: 0.9rem;
-  box-shadow:
-    0 24px 70px rgba(0, 0, 0, 0.55),
-    0 0 0 1px rgba(255, 255, 255, 0.02) inset;
+  background: var(--surface-3);
+  border: 1px solid var(--brand-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-pop), 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
   overflow: hidden;
 }
 
 .cmdk-input {
   appearance: none;
   border: none;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  border-bottom: 1px solid var(--border);
   background: transparent;
-  color: #eef1f7;
-  font-size: 1rem;
+  color: var(--text-1);
+  font-size: var(--text-md);
   font-family: inherit;
-  padding: 0.95rem 1.1rem;
+  padding: var(--space-3) var(--space-4);
 }
 .cmdk-input::placeholder {
-  color: #79828f;
+  color: var(--text-faint);
 }
 .cmdk-input:focus {
   outline: none;
@@ -49,75 +47,79 @@
 .cmdk-list {
   list-style: none;
   margin: 0;
-  padding: 0.35rem;
+  padding: var(--space-1);
   overflow-y: auto;
 }
 
 .cmdk-group {
-  padding: 0.5rem 0.7rem 0.25rem;
-  font-size: 0.66rem;
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: var(--text-2xs);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: #79828f;
+  letter-spacing: var(--tracking-wide);
+  color: var(--text-faint);
 }
 
 .cmdk-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.55rem 0.7rem;
-  border-radius: 0.55rem;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
   cursor: pointer;
-  color: #d7dce6;
+  color: var(--text-2);
 }
 .cmdk-item.active {
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.22), rgba(139, 92, 246, 0.22));
-  box-shadow: inset 0 0 0 1px rgba(139, 92, 246, 0.35);
-  color: #fff;
+  background: linear-gradient(
+    135deg,
+    rgba(99, 102, 241, 0.22),
+    rgba(139, 92, 246, 0.22)
+  );
+  box-shadow: inset 0 0 0 1px var(--brand-border);
+  color: var(--text-1);
 }
 .cmdk-item-label {
-  font-size: 0.9rem;
-  font-weight: 500;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
 }
 .cmdk-item-hint {
-  font-size: 0.76rem;
-  color: #9aa4b2;
+  font-size: var(--text-xs);
+  color: var(--text-3);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .cmdk-item.active .cmdk-item-hint {
-  color: #c7b8f5;
+  color: var(--brand-text);
 }
 
 .cmdk-empty {
   margin: 0;
-  padding: 1.4rem 1.1rem;
-  color: #79828f;
-  font-size: 0.88rem;
+  padding: var(--space-6) var(--space-4);
+  color: var(--text-faint);
+  font-size: var(--text-base);
 }
 
 .cmdk-foot {
   display: flex;
-  gap: 1.1rem;
-  padding: 0.5rem 0.85rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  gap: var(--space-5);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.015);
-  font-size: 0.72rem;
-  color: #79828f;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
 }
 .cmdk-foot kbd {
   display: inline-block;
   min-width: 1.1em;
   margin-right: 0.15rem;
   padding: 0.05rem 0.35rem;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 0.3rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
   background: rgba(255, 255, 255, 0.04);
-  font-family: inherit;
-  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
   text-align: center;
-  color: #aab2c0;
+  color: var(--text-2);
 }
 
 /* The tab-bar trigger pill (the discoverable entry point; ⌘K works everywhere). */
