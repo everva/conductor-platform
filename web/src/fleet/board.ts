@@ -153,6 +153,26 @@ function columnFor(task: Task, leased: boolean): BoardColumnKey {
   }
 }
 
+// needsReviewCount returns how many tasks sit in the director's Needs-Review lane
+// (awaiting-approval or blocked, and not currently running on a lease) — reusing
+// the SAME bucketing buildBoard uses (leaseHostByTask + columnFor), so the shell's
+// persistent review badge always matches the board's Needs-Review column exactly.
+export function needsReviewCount(
+  tasksByProject: Record<string, Task[]>,
+  leasesByProject: Record<string, Lease[]>,
+): number {
+  const hostByTask = leaseHostByTask(leasesByProject);
+  let n = 0;
+  for (const tasks of Object.values(tasksByProject)) {
+    for (const t of tasks) {
+      if (columnFor(t, hostByTask.has(t.id)) === "needs-review") {
+        n++;
+      }
+    }
+  }
+  return n;
+}
+
 // buildBoard composes the renderable board model from the useFleet snapshot slices.
 // Cards within a column are ordered by project then task id for a stable layout.
 export function buildBoard(

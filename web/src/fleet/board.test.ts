@@ -4,7 +4,7 @@
 // lane (awaiting-approval + blocked), the top-strip counts, and the per-card
 // enrichment (live phase + summed diff) derived from the WS event buffer.
 import { describe, expect, it } from "vitest";
-import { buildBoard } from "./board.ts";
+import { buildBoard, needsReviewCount } from "./board.ts";
 import type { Event, Lease, Task } from "../api/types.ts";
 
 function task(partial: Partial<Task> & Pick<Task, "id" | "project_id" | "status">): Task {
@@ -75,6 +75,37 @@ describe("buildBoard bucketing", () => {
     };
     const board = buildBoard(tasks, {}, []);
     expect(board.counts).toEqual({ running: 1, needsReview: 2, blocked: 1 });
+  });
+});
+
+describe("needsReviewCount", () => {
+  it("counts awaiting-approval + blocked tasks across projects (the badge truth)", () => {
+    const tasks = {
+      web: [
+        task({ id: "W-await", project_id: "web", status: "awaiting-approval" }),
+        task({ id: "W-run", project_id: "web", status: "running" }),
+      ],
+      ios: [
+        task({ id: "I-block", project_id: "ios", status: "blocked" }),
+        task({ id: "I-done", project_id: "ios", status: "done" }),
+      ],
+    };
+    expect(needsReviewCount(tasks, {})).toBe(2);
+  });
+
+  it("excludes a task that is actually running on a lease (live truth wins)", () => {
+    // A leased task is RUNNING regardless of a stale awaiting-approval status, so it
+    // must NOT inflate the review badge — matching the board's column exactly.
+    const tasks = { p: [task({ id: "T-1", project_id: "p", status: "awaiting-approval" })] };
+    const leases: Record<string, Lease[]> = {
+      p: [{ project_id: "p", host_id: "host-1", task_id: "T-1", acquired_at: "x" }],
+    };
+    expect(needsReviewCount(tasks, leases)).toBe(0);
+  });
+
+  it("is zero when nothing needs review", () => {
+    const tasks = { p: [task({ id: "T-1", project_id: "p", status: "running" })] };
+    expect(needsReviewCount(tasks, {})).toBe(0);
   });
 });
 

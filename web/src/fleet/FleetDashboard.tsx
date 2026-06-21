@@ -10,7 +10,7 @@
 //     held tasks (and a project-level auto-resolve approve);
 //   * Abort/Approve are confirm-gated (ConfirmDialog); actions are optimistic and
 //     reconcile via useFleet.refresh(); errors surface as non-fatal notices.
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useFleet } from "./useFleet.ts";
 import type { FleetClient } from "./useFleet.ts";
 import { useFleetControls } from "./useFleetControls.ts";
@@ -19,6 +19,8 @@ import { FleetStatusBar } from "./FleetStatusBar.tsx";
 import { CommandCenter } from "./CommandCenter.tsx";
 import { CommandPalette } from "./CommandPalette.tsx";
 import type { PaletteAction } from "./palette.ts";
+import { NeedsReviewBadge } from "./NeedsReviewBadge.tsx";
+import { needsReviewCount } from "./board.ts";
 import { ProjectsTable } from "./ProjectsTable.tsx";
 import { HostsPanel } from "./HostsPanel.tsx";
 import { TasksView } from "./TasksView.tsx";
@@ -168,6 +170,19 @@ export function FleetDashboard({
     }
   };
 
+  // The persistent review signal (redesign E4): how many tasks await the director
+  // right now, by the SAME bucketing the board's Needs-Review column uses. Surfaced
+  // shell-wide (every surface, incl. inside a session) so review work is never out
+  // of sight; the badge routes back to the board's review lane in one click.
+  const reviewCount = useMemo(
+    () => needsReviewCount(fleet.tasksByProject, fleet.leasesByProject),
+    [fleet.tasksByProject, fleet.leasesByProject],
+  );
+  const goReview = () => {
+    setSelectedTask(null);
+    setTab("board");
+  };
+
   return (
     <div className="fleet">
       <FleetStatusBar
@@ -178,6 +193,8 @@ export function FleetDashboard({
       />
 
       <NoticeStack notices={controls.notices} onDismiss={controls.dismissNotice} />
+
+      <NeedsReviewBadge count={reviewCount} onReview={goReview} />
 
       {fleet.error !== null && (
         <p role="alert" className="fleet-error">

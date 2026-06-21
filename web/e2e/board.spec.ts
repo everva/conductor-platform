@@ -104,3 +104,18 @@ test("awaiting-approval card exposes Approve; a card click drills into its sessi
   await review.getByText("I-await").click();
   await expect(page.getByRole("region", { name: /^session$/i })).toBeVisible();
 });
+
+test("the shell's needs-review signal persists across surfaces and routes back to the board (E4)", async ({ page }) => {
+  await signInToBoard(page);
+
+  // The shell badge counts the Needs-Review lane (I-await + I-block = 2) and stays
+  // visible from ANY surface — switch to Events and it persists.
+  await page.getByRole("tab", { name: /^events$/i }).click();
+  const badge = page.locator(".needs-review");
+  await expect(badge).toContainText("2 tasks need your review");
+
+  // One click routes back to the review queue (the board's Needs-Review lane).
+  await badge.getByRole("button", { name: /review/i }).click();
+  await expect(page.getByRole("region", { name: /command center/i })).toBeVisible();
+  await expect(column(page, "Needs Review").getByText("I-await")).toBeVisible();
+});
