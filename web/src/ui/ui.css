@@ -1,0 +1,372 @@
+/* ============================================================================
+   Conductor UI primitives (V1) — token-driven, zero literals.
+   Every value resolves to a theme/tokens.css custom property. Surfaces (V2+)
+   re-skin onto these classes instead of hand-rolling buttons/cards/badges.
+   ========================================================================== */
+
+/* ---- Button ------------------------------------------------------------- */
+.ui-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-family: var(--font-sans);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    filter var(--dur-fast) var(--ease-out);
+}
+.ui-btn:disabled,
+.ui-btn[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+/* sizes */
+.ui-btn-sm {
+  height: 1.75rem;
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+}
+.ui-btn-md {
+  height: 2.125rem;
+  padding: 0 var(--space-4);
+  font-size: var(--text-base);
+}
+/* variants */
+.ui-btn-primary {
+  background: var(--brand-gradient);
+  color: var(--text-on-accent);
+  box-shadow: var(--shadow-brand);
+}
+.ui-btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow: 0 6px 18px rgba(99, 102, 241, 0.5);
+}
+.ui-btn-primary:active:not(:disabled) {
+  transform: translateY(0);
+}
+.ui-btn-secondary {
+  background: var(--surface-3);
+  color: var(--text-1);
+  border-color: var(--border);
+}
+.ui-btn-secondary:hover:not(:disabled) {
+  background: var(--surface-4);
+  border-color: var(--border-strong);
+}
+.ui-btn-ghost {
+  background: transparent;
+  color: var(--text-2);
+}
+.ui-btn-ghost:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text-1);
+}
+.ui-btn-success {
+  background: linear-gradient(135deg, var(--emerald-400), var(--emerald-500));
+  color: #052e1f;
+}
+.ui-btn-success:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+}
+.ui-btn-danger {
+  background: var(--danger-soft);
+  color: var(--danger-text);
+  border-color: var(--danger-border);
+}
+.ui-btn-danger:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.18);
+  border-color: var(--danger);
+}
+
+/* spinner shown in the loading state (replaces the left slot) */
+.ui-btn-spinner {
+  width: 0.85em;
+  height: 0.85em;
+  border-radius: var(--radius-full);
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: ui-spin 0.6s linear infinite;
+  flex: none;
+}
+@keyframes ui-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- IconButton --------------------------------------------------------- */
+.ui-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.ui-iconbtn:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text-1);
+}
+.ui-iconbtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ui-iconbtn-sm {
+  width: 1.75rem;
+  height: 1.75rem;
+}
+.ui-iconbtn-md {
+  width: 2.125rem;
+  height: 2.125rem;
+}
+.ui-iconbtn-bordered {
+  border-color: var(--border);
+  background: var(--surface-3);
+}
+
+/* ---- Badge (status) ----------------------------------------------------- */
+.ui-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0.1rem 0.45rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wide);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.ui-badge-neutral {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-2);
+  border-color: var(--border);
+}
+.ui-badge-brand {
+  background: var(--brand-soft);
+  color: var(--brand-text);
+  border-color: var(--brand-border);
+}
+.ui-badge-success {
+  background: var(--success-soft);
+  color: var(--success-text);
+  border-color: var(--success-border);
+}
+.ui-badge-warn {
+  background: var(--warn-soft);
+  color: var(--warn-text);
+  border-color: var(--warn-border);
+}
+.ui-badge-danger {
+  background: var(--danger-soft);
+  color: var(--danger-text);
+  border-color: var(--danger-border);
+}
+.ui-badge-info {
+  background: var(--info-soft);
+  color: var(--info-text);
+  border-color: var(--info-border);
+}
+
+/* ---- Chip (neutral metadata tag) ---------------------------------------- */
+.ui-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0.08rem 0.4rem;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.ui-chip-mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0;
+}
+
+/* ---- Card --------------------------------------------------------------- */
+.ui-card {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, var(--surface-3), var(--surface-2));
+  box-shadow: var(--shadow-1);
+}
+.ui-card-pad {
+  padding: var(--space-3) var(--space-4);
+}
+.ui-card-interactive {
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+.ui-card-interactive:hover {
+  transform: translateY(-2px);
+  border-color: var(--brand-border);
+  box-shadow: var(--shadow-2);
+}
+.ui-card-selected {
+  border-color: var(--brand);
+  box-shadow: inset 0 0 0 1px var(--brand), var(--shadow-2);
+}
+/* left status accent rail */
+.ui-card-accent::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: var(--space-2);
+  bottom: var(--space-2);
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--text-faint);
+}
+.ui-card-accent-info::before {
+  background: linear-gradient(var(--info), var(--blue-500));
+}
+.ui-card-accent-warn::before {
+  background: linear-gradient(var(--warn), var(--amber-500));
+}
+.ui-card-accent-danger::before {
+  background: linear-gradient(var(--danger), var(--red-500));
+}
+.ui-card-accent-success::before {
+  background: linear-gradient(var(--success), var(--emerald-500));
+}
+
+/* ---- Panel -------------------------------------------------------------- */
+.ui-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.ui-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.ui-panel-title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text-1);
+  letter-spacing: var(--tracking-tight);
+}
+.ui-panel-body {
+  display: block;
+}
+
+/* ---- Skeleton (loading shimmer) ----------------------------------------- */
+.ui-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-sm);
+}
+.ui-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.07),
+    transparent
+  );
+  animation: ui-shimmer 1.4s var(--ease-in-out) infinite;
+}
+.ui-skeleton-line {
+  height: 0.7rem;
+}
+.ui-skeleton-circle {
+  border-radius: var(--radius-full);
+}
+@keyframes ui-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-skeleton::after {
+    animation: none;
+  }
+}
+
+/* ---- StatusDot ---------------------------------------------------------- */
+.ui-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--text-faint);
+  flex: none;
+}
+.ui-dot-success {
+  background: var(--success);
+}
+.ui-dot-warn {
+  background: var(--warn);
+}
+.ui-dot-danger {
+  background: var(--danger);
+}
+.ui-dot-info {
+  background: var(--info);
+}
+.ui-dot-brand {
+  background: var(--brand);
+}
+.ui-dot-pulse {
+  box-shadow: 0 0 0 0 currentColor;
+  animation: ui-pulse 1.9s var(--ease-out) infinite;
+}
+/* the pulse halo uses the dot's own color via a tinted shadow */
+.ui-dot-pulse.ui-dot-success {
+  color: var(--success);
+}
+.ui-dot-pulse.ui-dot-info {
+  color: var(--info);
+}
+.ui-dot-pulse.ui-dot-warn {
+  color: var(--warn);
+}
+@keyframes ui-pulse {
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-dot-pulse {
+    animation: none;
+  }
+}

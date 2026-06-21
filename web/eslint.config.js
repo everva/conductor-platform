@@ -44,6 +44,15 @@ export default tseslint.config(
     },
   },
   {
+    // Dev-only harness entries (the UI primitive gallery) define + mount their own
+    // components inline like a bootstrap entry; they are not part of the HMR-able
+    // app tree, so the react-refresh "must export components" rule doesn't apply.
+    files: ["src/dev/**/*.{ts,tsx}"],
+    rules: {
+      "react-refresh/only-export-components": "off",
+    },
+  },
+  {
     // Boundary lock (ADR-0028): the shared cockpit UI surface (exposed via
     // src/cockpit.ts and consumed by both the web App and the 4B fork webview) must
     // stay web-bootstrap-agnostic. Forbid these modules from importing auth/session/
@@ -54,6 +63,7 @@ export default tseslint.config(
       "src/events/**/*.{ts,tsx}",
       "src/intake/**/*.{ts,tsx}",
       "src/api/**/*.{ts,tsx}",
+      "src/ui/**/*.{ts,tsx}",
     ],
     rules: {
       "no-restricted-imports": ["error", {
