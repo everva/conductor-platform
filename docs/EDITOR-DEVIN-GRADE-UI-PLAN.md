@@ -73,7 +73,7 @@ alias). Token disiplini (webview/log/test'e ASLA). Canlı optiway/xirigo'ya DOKU
 isolation:"worktree" KULLANMA. NOT: `claude -p` bu makinede ÇALIŞIYOR (bu oturumda
 kanıtlandı) ama UI işi claude-free.
 
-## DURUM (2026-06-21) — V0 TAMAM, SIRADAKİ V1
+## DURUM (2026-06-21) — V0+V1 TAMAM, SIRADAKİ V2
 - Önkoşul: agent-native FEATURE planı E1–E4 ✅; k8s GitOps deploy ✅ (ayrı iş).
   Cockpit `:5173` dev + seeded gateway `:8080` AYAKTA (görsel doğrulama yüzeyi).
 - **V0 ✅ (develop `6f26a1f`)**: `web/src/theme/tokens.css` tek kanonik token
@@ -86,8 +86,21 @@ kanıtlandı) ama UI işi claude-free.
   ('Geist Variable')=true`, body/label=Geist, --bg/--brand çözülüyor, 0 console
   error). Gate: tsc+eslint+vitest 135/135. NOT: V0 görünür deltası KASITLI ufak
   (yalnız tip+base); yüzey re-skin V2+. Board hâlâ ~3.5/10 — TEMEL kuruldu.
-- **SIRADAKİ: V1 component primitives** (`web/src/ui/` Button/IconButton/Input/
-  Select/Card/Badge/Panel/Dialog/Tooltip/Tabs/Segmented/Skeleton/Toast; a11y-
-  kritik için Radix değerlendir; token-driven plain CSS; ad-hoc CSS'i buraya çek)
-  → V2 board → V3 session/intake/⌘K → V4 motion+lucide → V5 iterate-to-9. Her
-  faz Playwright-canlı KENDİM.
+- **V1 ✅ (develop `d1c8e74`)**: `web/src/ui/` token-driven primitive katmanı —
+  Button (5 variant × 2 size + loading + icon slots) · IconButton (zorunlu a11y
+  label) · Badge (6 semantic ton) · Chip (neutral/mono) · Card (interactive
+  hover-lift / selected ring / status accent rail) · Panel (opsiyonel header) ·
+  Skeleton (shimmer, reduced-motion) · StatusDot (ton + live pulse). Barrel
+  `index.ts` (ui.css yükler). Boundary-lock (ADR-0028) `src/ui/**` eklendi.
+  **Dev gallery** `src/dev/ui-gallery.tsx` + `ui.html` (dev'de `/ui.html`; prod
+  build'de DEĞİL) = her re-skin dalgasının screenshot yüzeyi. Canlı doğruladım
+  (Playwright `/ui.html`, Geist yüklü, 0 err; primitives izole ~8/10 — in-context
+  tuning V2). Gate: tsc+eslint(0 warn)+vitest 151/151 (16 yeni). Henüz yüzey
+  re-skin YOK (V2). Overlay primitives (Dialog/Tooltip/Tabs/Toast/Select + Radix
+  değerlendirmesi) tüketen dalgada (V3) gelecek — KASITLI scoping.
+- **SIRADAKİ: V2 shell + board re-skin** — app-bar/nav + Command Center board'u
+  `src/ui` primitive'lerine geçir (literal→token): density, hiyerarşi, kart craft
+  (status semantic, canlı pulse, hover-lift), empty/loading state. İLK gerçek
+  "9/10 mu?" board ekran-görüntüsü öz-değerlendirmesi (before = V0 baseline).
+  → V3 session/intake/⌘K → V4 motion+lucide → V5 iterate-to-9. Her faz
+  Playwright-canlı KENDİM.
