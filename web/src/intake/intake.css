@@ -48,11 +48,11 @@
 
 .intake-select,
 .intake-textarea {
-  background: #14171c;
+  background: #16191e;
   color: #e6e6e6;
-  border: 1px solid #2a2f37;
-  border-radius: 0.4rem;
-  padding: 0.5rem 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.65rem;
   font-size: 0.85rem;
   font-family: inherit;
 }
@@ -69,13 +69,19 @@
 .intake-select:focus,
 .intake-textarea:focus {
   outline: none;
-  border-color: #2f4a6b;
+  border-color: #8b5cf6;
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
 }
 
 .intake-actions {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.intake-or {
+  color: #79828f;
+  font-size: 0.8rem;
 }
 
 .intake-spinner {
@@ -148,13 +154,18 @@
 }
 
 .intake-scenario {
-  border: 1px solid #2a2f37;
-  border-radius: 0.5rem;
-  background: #14171c;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.6rem;
+  background: linear-gradient(180deg, #1e2230, #1a1d26);
   padding: 0.75rem 0.9rem;
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.intake-scenario:hover {
+  border-color: rgba(139, 92, 246, 0.45);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
 }
 .intake-scenario-head {
   display: flex;
@@ -163,7 +174,7 @@
 }
 .intake-scenario-id {
   font-weight: 600;
-  color: #93c5fd;
+  color: #a78bfa;
 }
 .intake-scenario-title {
   font-size: 0.9rem;

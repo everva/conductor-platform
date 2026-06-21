@@ -190,4 +190,26 @@ describe("IntakeChat", () => {
 
     await vi.waitFor(() => expect(onUnauthorized).toHaveBeenCalledTimes(1));
   });
+
+  it("Write spec directly opens the YAML editor (no distill) and dispatches the authored spec", async () => {
+    const user = userEvent.setup({ delay: null });
+    const client = fakeClient();
+    render(
+      <IntakeChat projects={[project()]} client={client} onUnauthorized={vi.fn()} />,
+    );
+
+    // The claude-free path: author straight into the authoritative editor.
+    await user.click(screen.getByRole("button", { name: "Write spec directly" }));
+    const yaml = screen.getByLabelText("Intake YAML") as HTMLTextAreaElement;
+    expect(yaml.value).toContain("id: NEW-1");
+    expect(client.distill).not.toHaveBeenCalled();
+
+    // Approve dispatches the EXACT authored YAML to /intake (confirm-gated).
+    await user.click(screen.getByRole("button", { name: "Approve & add to ledger" }));
+    await user.click(screen.getByRole("button", { name: "Approve & add" }));
+    expect(client.intake).toHaveBeenCalledWith(
+      "proj-x",
+      expect.stringContaining("id: NEW-1"),
+    );
+  });
 });

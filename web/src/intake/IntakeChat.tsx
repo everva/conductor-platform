@@ -51,6 +51,19 @@ interface Notice {
   message: string;
 }
 
+// SPEC_TEMPLATE seeds the "Write spec directly" path — an operator who already knows
+// the work (or has no claude-assisted distiller available) authors the scenario YAML
+// straight into the authoritative editor and dispatches it. It is a valid one-scenario
+// shape (ADR-0012): id/title/lane/tier + ≥1 acceptance + a repo-EXTERNAL holdout ref.
+const SPEC_TEMPLATE = `id: NEW-1
+title: Describe the work in one line
+lane: backend
+tier: T2
+acceptance:
+  - A concrete, checkable acceptance criterion
+hidden_holdout_ref: store://holdouts/NEW-1/holdout_test.go
+`;
+
 export function IntakeChat({
   projects,
   client,
@@ -71,10 +84,28 @@ export function IntakeChat({
   const [yamlError, setYamlError] = useState<string | null>(null);
   const [result, setResult] = useState<IntakeResult | null>(null);
   const [pending, setPending] = useState<PendingConfirm | null>(null);
+  // directMode shows the authoritative YAML editor + Dispatch WITHOUT a distill
+  // proposal — the "Write spec directly" path (no claude-assisted distiller needed).
+  const [directMode, setDirectMode] = useState<boolean>(false);
 
   const hasProjects = projects.length > 0;
   const canDistill =
     hasProjects && projectId !== "" && conversation.trim() !== "" && !distilling;
+  const canPickProject = hasProjects && projectId !== "";
+  // The authoritative YAML editor + Dispatch show for EITHER path: an assisted
+  // proposal, or a direct-authored spec.
+  const showEditor = proposal !== null || directMode;
+
+  // writeSpecDirectly opens the YAML editor with a starter template (or keeps the
+  // current edits) so an operator can author + dispatch a spec without distilling.
+  function writeSpecDirectly() {
+    setProposal(null);
+    setResult(null);
+    setNotice(null);
+    setYamlError(null);
+    setDirectMode(true);
+    setEditedYaml((cur) => (cur.trim() === "" ? SPEC_TEMPLATE : cur));
+  }
 
   async function runDistill() {
     if (!canDistill) {
@@ -235,6 +266,15 @@ export function IntakeChat({
                       ? "Re-distill"
                       : "Distill"}
                 </button>
+                <span className="intake-or">or</span>
+                <button
+                  type="button"
+                  className="fleet-btn"
+                  disabled={!canPickProject}
+                  onClick={writeSpecDirectly}
+                >
+                  Write spec directly
+                </button>
                 {distilling && (
                   <span className="intake-spinner" role="status" aria-live="polite">
                     Distilling…
@@ -293,18 +333,19 @@ export function IntakeChat({
                 {onViewTasks !== undefined && (
                   <button
                     type="button"
-                    className="fleet-btn"
+                    className="fleet-btn primary"
                     onClick={() => onViewTasks(projectId)}
                   >
-                    View tasks for {projectId}
+                    View on board →
                   </button>
                 )}
               </div>
             </div>
           )}
 
-          {proposal !== null && (
+          {showEditor && (
             <div className="intake-proposal">
+              {proposal !== null && (
               <div className="fleet-panel">
                 <div className="fleet-panel-head">
                   <h2>Proposed scenarios — review before approving</h2>
@@ -323,6 +364,7 @@ export function IntakeChat({
                   )}
                 </div>
               </div>
+              )}
 
               <div className="fleet-panel">
                 <div className="fleet-panel-head">

@@ -255,7 +255,7 @@ export function FleetDashboard({
           projects={fleet.projects}
           client={intakeClient}
           onUnauthorized={onUnauthorized}
-          onViewTasks={focusProject}
+          onViewTasks={() => setTab("board")}
         />
       )}
         </>
