@@ -45,7 +45,12 @@
       "react": ["./node_modules/@types/react"],
       "react/*": ["./node_modules/@types/react/*"],
       "react-dom": ["./node_modules/@types/react-dom"],
-      "react-dom/*": ["./node_modules/@types/react-dom/*"]
+      "react-dom/*": ["./node_modules/@types/react-dom/*"],
+      // lucide-react (V4 cockpit icons) ships its OWN types, so map straight to the
+      // package in EDITOR's node_modules — same self-containment as react above, so
+      // the webview typecheck never reaches web/node_modules (absent in editor CI).
+      "lucide-react": ["./node_modules/lucide-react"],
+      "lucide-react/*": ["./node_modules/lucide-react/*"]
     }
   },
   "include": ["webview/**/*.ts", "webview/**/*.tsx", "webview/types.d.ts"]
