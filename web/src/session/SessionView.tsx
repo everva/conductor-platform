@@ -19,16 +19,11 @@ import { useEventFeed } from "../events/useEventFeed.ts";
 import type { HistoryLoader } from "../events/useEventFeed.ts";
 import { isAwaitingApproval } from "../fleet/controls.ts";
 import type { FleetControls } from "../fleet/useFleetControls.ts";
+import { Check, ChevronLeft, X } from "lucide-react";
 import { Badge, Button, Chip, StatusDot } from "../ui/index.ts";
 import type { BadgeTone } from "../ui/index.ts";
 import { buildTimeline, parseDiff, parseVerdict } from "./session.ts";
 import "./session.css";
-
-const BackIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-    <path d="M10 3L5 8l5 5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
 
 // Map a task's lifecycle status to a Badge tone for the header chip.
 function statusTone(status: string, held: boolean): BadgeTone {
@@ -141,7 +136,12 @@ export function SessionView({
   return (
     <section className="sv" aria-label="Session">
       <div className="sv-head">
-        <Button variant="ghost" size="sm" leftIcon={<BackIcon />} onClick={onBack}>
+        <Button
+          variant="ghost"
+          size="sm"
+          leftIcon={<ChevronLeft size={15} strokeWidth={2.2} />}
+          onClick={onBack}
+        >
           Command Center
         </Button>
         <div className="sv-head-main">
@@ -190,7 +190,13 @@ export function SessionView({
                 <ul className="sv-checks">
                   {verdict.checks.map((c, i) => (
                     <li key={i} className={c.result === "pass" ? "sv-check-pass" : "sv-check-fail"}>
-                      <span className="sv-check-icon">{c.result === "pass" ? "✓" : "✗"}</span>
+                      <span className="sv-check-icon" aria-hidden="true">
+                        {c.result === "pass" ? (
+                          <Check size={14} strokeWidth={2.6} />
+                        ) : (
+                          <X size={14} strokeWidth={2.6} />
+                        )}
+                      </span>
                       <span className="sv-check-name">{c.name}</span>
                       <span className="sv-check-evidence mono">{c.evidence}</span>
                     </li>

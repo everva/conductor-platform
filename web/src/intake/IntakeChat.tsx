@@ -16,6 +16,7 @@
 // approvable) renders as "add more detail" GUIDANCE, not a crash or fake scenario.
 // A 401 anywhere bubbles to onUnauthorized. The conversation/token are never logged.
 import { useState } from "react";
+import { ArrowRight, X } from "lucide-react";
 import { ApiError, DistillNoScenariosError } from "../api/client.ts";
 import type { DistillResult, IntakeResult, Project } from "../api/types.ts";
 import { ConfirmDialog } from "../fleet/ConfirmDialog.tsx";
@@ -297,7 +298,7 @@ export function IntakeChat({
                 aria-label="Dismiss"
                 onClick={() => setNotice(null)}
               >
-                ×
+                <X size={15} strokeWidth={2.4} />
               </button>
             </div>
           )}
@@ -336,7 +337,7 @@ export function IntakeChat({
                     className="fleet-btn primary"
                     onClick={() => onViewTasks(projectId)}
                   >
-                    View on board →
+                    View on board <ArrowRight size={14} strokeWidth={2.2} />
                   </button>
                 )}
               </div>

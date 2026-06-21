@@ -47,6 +47,53 @@ a {
   color: var(--text-1);
 }
 
+/* --- refined scrollbars (subtle, themed) --- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--gray-700) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--gray-700);
+  border-radius: var(--radius-full);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--gray-600);
+  background-clip: padding-box;
+}
+
+/* --- motion: enter animations (durations come from tokens, so reduced-motion
+   collapses them to instant). ui-card-in for list items, ui-surface-in for a
+   whole surface fading in on mount / tab switch. --- */
+@keyframes ui-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes ui-surface-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 /* --- app chrome (shell): a sticky brand bar (V2 re-skin, token-driven) --- */
 .app-bar {
   display: flex;

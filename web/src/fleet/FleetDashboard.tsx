@@ -37,6 +37,8 @@ import type { ScenarioClient } from "../session/SessionView.tsx";
 import { ApiClient } from "../api/client.ts";
 import type { Task } from "../api/types.ts";
 import type { EventTransport } from "../api/useEventStream.ts";
+import { Activity, Inbox, LayoutGrid, Search, Server } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import "./fleet.css";
 
 export interface FleetDashboardProps {
@@ -77,6 +79,13 @@ export interface FleetDashboardProps {
 // per-project detail (the 3B overview, kept as a drill-in), "events" the full
 // filterable feed (3B-2), "intake" the spec/distill flow.
 type DashboardTab = "board" | "fleet" | "events" | "intake";
+
+const TABS: { key: DashboardTab; label: string; Icon: LucideIcon }[] = [
+  { key: "board", label: "Board", Icon: LayoutGrid },
+  { key: "fleet", label: "Fleet", Icon: Server },
+  { key: "events", label: "Events", Icon: Activity },
+  { key: "intake", label: "Intake", Icon: Inbox },
+];
 
 export function FleetDashboard({
   token,
@@ -220,42 +229,19 @@ export function FleetDashboard({
         <>
       <div className="fleet-tabbar">
       <div className="fleet-tabs" role="tablist" aria-label="Dashboard view">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "board"}
-          className={tab === "board" ? "fleet-tab active" : "fleet-tab"}
-          onClick={() => setTab("board")}
-        >
-          Board
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "fleet"}
-          className={tab === "fleet" ? "fleet-tab active" : "fleet-tab"}
-          onClick={() => setTab("fleet")}
-        >
-          Fleet
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "events"}
-          className={tab === "events" ? "fleet-tab active" : "fleet-tab"}
-          onClick={() => setTab("events")}
-        >
-          Events
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "intake"}
-          className={tab === "intake" ? "fleet-tab active" : "fleet-tab"}
-          onClick={() => setTab("intake")}
-        >
-          Intake
-        </button>
+        {TABS.map(({ key, label, Icon }) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={tab === key}
+            className={tab === key ? "fleet-tab active" : "fleet-tab"}
+            onClick={() => setTab(key)}
+          >
+            <Icon size={14} strokeWidth={2.2} aria-hidden="true" />
+            {label}
+          </button>
+        ))}
       </div>
       <button
         type="button"
@@ -263,6 +249,7 @@ export function FleetDashboard({
         aria-keyshortcuts="Meta+K Control+K"
         onClick={() => setPaletteOpen(true)}
       >
+        <Search size={14} strokeWidth={2.2} aria-hidden="true" />
         <span>Search &amp; jump</span>
         <kbd>⌘K</kbd>
       </button>
@@ -277,6 +264,7 @@ export function FleetDashboard({
           controls={controls}
           onOpenSession={setSelectedTask}
           onNewWork={() => setTab("intake")}
+          loading={fleet.loading}
         />
       ) : tab === "fleet" ? (
         <>

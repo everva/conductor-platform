@@ -3,6 +3,7 @@
 // (benign 409 carrying the gateway {error}, e.g. "no task running to abort"), or
 // "error" (unexpected failure). It is presentation-only — the parent owns the queue
 // (useFleetControls) and dismissal. role="status" keeps it polite for screen readers.
+import { X } from "lucide-react";
 import type { ControlNotice } from "./controls.ts";
 
 export interface NoticeStackProps {
@@ -25,7 +26,7 @@ export function NoticeStack({ notices, onDismiss }: NoticeStackProps) {
             aria-label="Dismiss"
             onClick={() => onDismiss(n.id)}
           >
-            ×
+            <X size={15} strokeWidth={2.4} />
           </button>
         </div>
       ))}

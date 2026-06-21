@@ -9,6 +9,7 @@
   flex-direction: column;
   gap: var(--space-4);
   color: var(--text-1);
+  animation: ui-surface-in var(--dur-base) var(--ease-out) both;
 }
 
 /* --- header --- */
@@ -129,12 +130,14 @@
 .sv-checks li {
   display: grid;
   grid-template-columns: 1rem auto 1fr;
-  align-items: baseline;
+  align-items: center;
   gap: var(--space-2);
   font-size: var(--text-base);
 }
 .sv-check-icon {
-  font-weight: var(--weight-bold);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .sv-check-pass .sv-check-icon {
   color: var(--success);

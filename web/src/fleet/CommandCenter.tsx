@@ -16,17 +16,21 @@ import { buildBoard, BOARD_COLUMNS } from "./board.ts";
 import type { BoardCard } from "./board.ts";
 import { isAwaitingApproval } from "./controls.ts";
 import type { FleetControls } from "./useFleetControls.ts";
-import { Badge, Button, Card, Chip, StatusDot } from "../ui/index.ts";
+import { Plus, ChevronRight } from "lucide-react";
+import { Badge, Button, Card, Chip, Skeleton, StatusDot } from "../ui/index.ts";
 import type { CardAccent } from "../ui/index.ts";
 import "./board.css";
 
-// PlusIcon — the only board glyph kept inline (the primary CTA); the rest of the
-// emoji/text glyphs are retired in V2. Real icon set (lucide) lands in V4.
-const PlusIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-    <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-  </svg>
-);
+// SkeletonCard — the board's initial-load placeholder (before the first /status +
+// task fetch lands). Shown only while loading AND the board is still empty.
+function SkeletonCard() {
+  return (
+    <Card className="cc-card" aria-hidden="true">
+      <Skeleton width="58%" />
+      <Skeleton width="38%" />
+    </Card>
+  );
+}
 
 // selKey identifies a selected task across projects (project:id).
 function selKey(projectId: string, taskId: string): string {
@@ -44,6 +48,8 @@ export interface CommandCenterProps {
   onOpenSession?: (task: Task) => void;
   // onNewWork opens the intake flow ("+ New work").
   onNewWork?: () => void;
+  // loading drives the initial-load skeleton (before the first data lands).
+  loading?: boolean;
 }
 
 export function CommandCenter({
@@ -54,8 +60,12 @@ export function CommandCenter({
   controls,
   onOpenSession,
   onNewWork,
+  loading = false,
 }: CommandCenterProps) {
   const board = buildBoard(tasksByProject, leasesByProject, recentEvents);
+  // Show placeholders only on the very first load (still fetching, nothing yet).
+  const boardEmpty = BOARD_COLUMNS.every((c) => board.columns[c.key].length === 0);
+  const showSkeleton = loading && boardEmpty;
 
   // Multi-select bulk approve (redesign E4): a director can select several gate-green
   // (awaiting-approval) tasks and clear the review queue in one confirm. Only held
@@ -134,7 +144,12 @@ export function CommandCenter({
             </Chip>
           ))}
           {onNewWork && (
-            <Button variant="primary" size="sm" leftIcon={<PlusIcon />} onClick={onNewWork}>
+            <Button
+              variant="primary"
+              size="sm"
+              leftIcon={<Plus size={14} strokeWidth={2.2} />}
+              onClick={onNewWork}
+            >
               New work
             </Button>
           )}
@@ -176,7 +191,12 @@ export function CommandCenter({
                 <span className="cc-col-count">{cards.length}</span>
               </div>
               <div className="cc-col-body">
-                {cards.length === 0 ? (
+                {showSkeleton ? (
+                  <>
+                    <SkeletonCard />
+                    <SkeletonCard />
+                  </>
+                ) : cards.length === 0 ? (
                   <p className="cc-col-empty">—</p>
                 ) : (
                   cards.map((card) => (
@@ -304,7 +324,12 @@ function BoardCardView({
             </Button>
           )}
           {onOpenSession && (
-            <Button variant="secondary" size="sm" onClick={select}>
+            <Button
+              variant="secondary"
+              size="sm"
+              rightIcon={<ChevronRight size={13} strokeWidth={2.2} />}
+              onClick={select}
+            >
               Review
             </Button>
           )}

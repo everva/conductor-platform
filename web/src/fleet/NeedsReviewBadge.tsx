@@ -6,6 +6,7 @@
 // count comes from needsReviewCount — the SAME bucketing the board's Needs-Review
 // column uses — so the shell badge and the column never disagree. role="status"
 // + aria-live makes it announce when review work appears (an accessible nudge).
+import { ArrowRight } from "lucide-react";
 import { StatusDot } from "../ui/index.ts";
 import "./needsReview.css";
 
@@ -26,7 +27,7 @@ export function NeedsReviewBadge({ count, onReview }: NeedsReviewBadgeProps) {
       <StatusDot tone="warn" pulse className="needs-review-dot" />
       <span className="needs-review-label">{label}</span>
       <button type="button" className="needs-review-btn" onClick={onReview}>
-        Review →
+        Review <ArrowRight size={13} strokeWidth={2.4} />
       </button>
     </div>
   );
