@@ -73,7 +73,7 @@ alias). Token disiplini (webview/log/test'e ASLA). Canlı optiway/xirigo'ya DOKU
 isolation:"worktree" KULLANMA. NOT: `claude -p` bu makinede ÇALIŞIYOR (bu oturumda
 kanıtlandı) ama UI işi claude-free.
 
-## DURUM (2026-06-22) — V0+V1+V2 TAMAM, SIRADAKİ V3
+## DURUM (2026-06-22) — V0→V3 TAMAM, SIRADAKİ V4
 - Önkoşul: agent-native FEATURE planı E1–E4 ✅; k8s GitOps deploy ✅ (ayrı iş).
   Cockpit `:5173` dev + seeded gateway `:8080` AYAKTA (görsel doğrulama yüzeyi).
 - **V0 ✅ (develop `6f26a1f`)**: `web/src/theme/tokens.css` tek kanonik token
@@ -113,8 +113,22 @@ kanıtlandı) ama UI işi claude-free.
   work" selector; + artık dekoratif aria-hidden icon). NOT: Fleet/Events tab
   detay CSS'i (panel/tablo/notice/intervention/ticker/modal `fleet.css`) board
   yüzeyinde DEĞİL → o yüzeylerle birlikte sonra re-skin (literal kaldı, dürüst).
-- **SIRADAKİ: V3 session + intake + ⌘K** — SessionView (verdict-hero + inline
-  diff + timeline/replay), IntakeChat (spec editor), CommandPalette'i `src/ui`
-  primitive'lerine + premium craft + micro-interaction. (Overlay primitives —
-  Dialog/Tooltip/Tabs/Toast + Radix değerlendirmesi — BURADA, tüketen yüzeyle.)
-  → V4 motion+states+lucide → V5 iterate-to-9. Her faz Playwright-canlı KENDİM.
+- **V3 ✅ (develop `1926033`)**: tüm kalan yüzeyler sisteme geçti = bütün cockpit
+  tek tutarlı premium dil. SessionView (ghost back + Badge/Chip header + verdict-
+  hero + timeline-replay + inline-diff token; Approve→`<Button success>`/Abort→
+  `<Button danger>` — V2'nin `.cc-btn` regresyonunu DÜZELTTİ; `--sv-*` emekli).
+  ConfirmDialog→`<Button>` (forwardRef focus). ⌘K CommandPalette (palette.css)
+  token spotlight (Raycast-tarzı). IntakeChat (intake.css) + **paylaşılan fleet.css
+  TÜM sınıfları** (panel/btn/chip/badge/muted/mono/modal/notice/table/intervention/
+  ticker) token-migrate → Fleet/Events detay component'leri de tek geçişte yükseldi.
+  Divergent literal KALMADI. **Radix: DEĞERLENDİRİLDİ, ALINMADI** (mevcut overlay'ler
+  el-yapımı ama TEST'li + erişilebilir: role=dialog/aria-modal/Escape/focus-mgmt,
+  role=listbox/option; Radix migrasyonu marjinal kazanç için büyük churn — a11y
+  boşluğu çıkarsa revisit). Canlı KENDİM (session/palette/intake/confirm hepsi
+  premium, 0 err). Gate: tsc+eslint+vitest 151/151+**e2e 14/14** (intake selector
+  fix dahil).
+- **SIRADAKİ: V4 motion + states + lucide** — surface/list/state geçiş animasyonları
+  (CSS veya framer-motion-lite), skeleton shimmer'ı board/session loading'e bağla,
+  focus craft + rafine scrollbar + tooltip, **lucide** ikon seti (kalan emoji/glyph/
+  inline-SVG'leri değiştir: ✓/✗ verdict, ▸ chevron'lar, tab ikonları, vb.) → V5
+  Devin-referans iterate-to-9. Her faz Playwright-canlı KENDİM.
