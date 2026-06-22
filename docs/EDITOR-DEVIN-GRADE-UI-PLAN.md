@@ -153,7 +153,14 @@ kanıtlandı) ama UI işi claude-free.
   confirm/notice. Cockpit ~9/10** (öz-değerlendirme: refined type ✓ 8px ritim ✓
   semantic renk ✓ katmanlı elevation ✓ motion ✓ tüm durumlar ✓ tutarlı component ✓
   lucide ikon ✓ a11y ✓).
-- **BİTİŞ GATE'İ: KULLANICI ONAYI bekliyor.** Plan gereği son söz kullanıcının:
-  9/10 onaylanırsa BİTTİ; aksi halde belirtilen yüzey(ler) hedefli iterate edilir
-  (V5 devam). Kalan opsiyonel cila (kullanıcı isterse): tooltip primitive, board
-  empty-state craft, density ince-ayarı, fork-runtime webview görsel doğrulama.
+- **V5b ✅ (develop `c347054`, CI yeşil) — kullanıcı "opsiyonel cila ekle" dedi**
+  (9→9.5): **Tooltip primitive** (`web/src/ui/Tooltip.tsx` token-driven, dependency-
+  free, hover+klavye-focus, `role=tooltip`+aria-describedby) → board host pill'lerine
+  bağlandı (hover→capabilities; native title kalktı) + gallery + unit test. **Board
+  empty-state** craft (bare "—" → faint `CircleDashed`+"No tasks", ortalı). **Staggered
+  card-enter** (sütun kartları cascade; capped delay; stable-key→mount'ta bir kez).
+  CircleDashed lucide-paths kapsamında→editör etkilenmez. Canlı KENDİM (tooltip hover
+  doğrulandı, 0 err); gate tsc+eslint+vitest **152/152**+e2e 14/14. **Cockpit ~9.5/10.**
+- **BİTİŞ GATE'İ: KULLANICI SON ONAYI bekliyor (tekrar sunuldu).** Onaylanırsa BİTTİ;
+  aksi halde hedefli iterate. Kalan opsiyonel: fork-runtime webview görsel doğrulama
+  (kullanıcı host'unda, take-over).
