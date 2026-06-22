@@ -29,6 +29,8 @@ import { wsConnector } from "./bridge/wsConnector";
 import { ControlClient, ControlListError, type ControlAction } from "./controlClient";
 import { InterventionNotifier, type Intervention } from "./notifier";
 import { DiffObserver, type TaskDiff } from "./diffObserver";
+import { FleetReadClient } from "./fleetReadClient";
+import { SessionsTreeProvider, SESSIONS_VIEW_ID } from "./sessionsTree";
 
 /** Command id for the gateway-connect action. */
 export const CONNECT_COMMAND = "conductor.connect";
@@ -57,6 +59,10 @@ export const SHOW_DIFF_COMMAND = "conductor.showDiff";
  * not only the activity-bar sidebar. N0 ships the command + panel; the sidebar Fleet view
  * stays during the transition, and the startup auto-open is deferred to N1. */
 export const OPEN_COMMAND = "conductor.open";
+
+/** Command id that refetches the native "Conductors" sessions tree (N2). Surfaced as the
+ * view's title refresh button + the command palette. */
+export const REFRESH_SESSIONS_COMMAND = "conductor.refreshSessions";
 
 /** Custom URI scheme for the read-only diff virtual documents (4C-1b). Registered with a
  * TextDocumentContentProvider; the diff body is served from a bounded in-memory store. */
@@ -1214,6 +1220,14 @@ export function activate(context: vscode.ExtensionContext): void {
     onDiff: (taskDiff) => handleDiff(diffStore, diffBar, taskDiff),
   });
 
+  // N2: the native "Conductors" sessions tree. A host-side authed read client feeds it (the
+  // token rides ONLY in the read client's Authorization header — never into the provider or a
+  // TreeItem). Created before the ConnectionManager so onStateChange can refresh it on connect.
+  const fleetReader = new FleetReadClient(normalizeBaseUrl(gatewayUrl), {
+    getToken: () => Promise.resolve(context.secrets.get(GATEWAY_TOKEN_KEY)),
+  });
+  const sessionsProvider = new SessionsTreeProvider(fleetReader, OPEN_COMMAND);
+
   const manager = new ConnectionManager({
     secrets: context.secrets,
     gateway: makeGatewayProbe(gatewayUrl),
@@ -1230,6 +1244,9 @@ export function activate(context: vscode.ExtensionContext): void {
         notifier.stop();
         diffObserver.stop();
       }
+      // N2: refetch the sessions tree on any link change (connected → projects/tasks appear;
+      // otherwise it empties to the welcome view). The read client no-ops without a token.
+      sessionsProvider.refresh();
     },
   });
   statusBar.text = statusBarText(manager.state);
@@ -1252,14 +1269,29 @@ export function activate(context: vscode.ExtensionContext): void {
     gatewayUrl,
     extensionUri: context.extensionUri,
   });
+
+  // N2: register the native "Conductors" sessions TreeView + its refresh command (kept here, not
+  // in registerConductor, so the tree's read client + refresh-on-connect wiring stay together).
+  // createTreeView attaches to the package.json-contributed view.
+  const sessionsView = vscode.window.createTreeView(SESSIONS_VIEW_ID, {
+    treeDataProvider: sessionsProvider,
+  });
+  const refreshSessions = vscode.commands.registerCommand(REFRESH_SESSIONS_COMMAND, () => {
+    sessionsProvider.refresh();
+  });
+
   // Push the intervention + diff status-bar items + dispose-wrappers that stop the host WS
-  // subscriptions on deactivate (so the host sockets are torn down with the extension).
+  // subscriptions on deactivate (so the host sockets are torn down with the extension), plus the
+  // N2 sessions tree (view + refresh command + the provider's change emitter).
   context.subscriptions.push(
     statusBar,
     interventionBar,
     diffBar,
     { dispose: () => notifier.stop() },
     { dispose: () => diffObserver.stop() },
+    sessionsView,
+    refreshSessions,
+    sessionsProvider,
     ...disposables,
   );
 

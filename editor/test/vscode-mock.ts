@@ -70,6 +70,66 @@ export interface WebviewPanelLike {
  * editor area); only the members the extension references are provided. */
 export const ViewColumn = { Active: -1, Beside: -2, One: 1, Two: 2, Three: 3 } as const;
 
+// ── N2 native TreeView primitives ──────────────────────────────────────────────────────
+
+/** Minimal vscode.EventEmitter stand-in: `event` registers a listener (returns a disposable);
+ * `fire` invokes all current listeners. Enough for the tree's onDidChangeTreeData. */
+export class EventEmitter<T> {
+  #listeners: ((e: T) => void)[] = [];
+  readonly event = (listener: (e: T) => void): Disposable => {
+    this.#listeners.push(listener);
+    return {
+      dispose: () => {
+        this.#listeners = this.#listeners.filter((l) => l !== listener);
+      },
+    };
+  };
+  fire(data: T): void {
+    for (const l of this.#listeners) {
+      l(data);
+    }
+  }
+  dispose(): void {
+    this.#listeners = [];
+  }
+}
+
+/** vscode.ThemeColor stand-in: just the id (a test reads `.id`). */
+export class ThemeColor {
+  readonly id: string;
+  constructor(id: string) {
+    this.id = id;
+  }
+}
+
+/** vscode.ThemeIcon stand-in: the codicon id + optional color (a test reads both). */
+export class ThemeIcon {
+  readonly id: string;
+  readonly color?: ThemeColor | undefined;
+  constructor(id: string, color?: ThemeColor) {
+    this.id = id;
+    this.color = color;
+  }
+}
+
+/** vscode.TreeItemCollapsibleState stand-in (numeric enum). */
+export const TreeItemCollapsibleState = { None: 0, Collapsed: 1, Expanded: 2 } as const;
+
+/** vscode.TreeItem stand-in: the settable fields the SessionsTreeProvider assigns. */
+export class TreeItem {
+  label: string;
+  collapsibleState: number;
+  iconPath?: ThemeIcon;
+  description?: string;
+  tooltip?: string;
+  contextValue?: string;
+  command?: { command: string; title: string };
+  constructor(label: string, collapsibleState: number = TreeItemCollapsibleState.None) {
+    this.label = label;
+    this.collapsibleState = collapsibleState;
+  }
+}
+
 /** A no-op disposable used as the return value of registration calls. */
 function makeDisposable(): Disposable {
   return { dispose: vi.fn() };
@@ -133,6 +193,11 @@ export const window = {
       (viewType: string, title: string, showOptions: unknown, options?: unknown) => WebviewPanelLike
     >()
     .mockImplementation(() => __makeWebviewPanel()),
+  // N2: registers the native "Conductors" sessions TreeView. Records the call so a test asserts
+  // the viewId + provider; returns a disposable (the real TreeView is disposable).
+  createTreeView: vi
+    .fn<(viewId: string, options: { treeDataProvider: unknown }) => { dispose(): void }>()
+    .mockImplementation(() => ({ dispose: vi.fn() })),
   createStatusBarItem: vi
     .fn<(...args: unknown[]) => StatusBarItem>()
     .mockImplementation(makeStatusBarItem),
@@ -278,6 +343,7 @@ export function __reset(): void {
   window.showWarningMessage.mockClear();
   window.registerWebviewViewProvider.mockClear();
   window.createWebviewPanel.mockClear();
+  window.createTreeView.mockClear();
   window.createStatusBarItem.mockClear();
   window.showTextDocument.mockClear();
   workspace.getConfiguration.mockClear();
@@ -372,4 +438,16 @@ export function __makeWebviewPanel(cspSource = "vscode-resource:"): WebviewPanel
   };
 }
 
-export default { commands, window, workspace, languages, Uri, ViewColumn };
+export default {
+  commands,
+  window,
+  workspace,
+  languages,
+  Uri,
+  ViewColumn,
+  EventEmitter,
+  ThemeColor,
+  ThemeIcon,
+  TreeItem,
+  TreeItemCollapsibleState,
+};

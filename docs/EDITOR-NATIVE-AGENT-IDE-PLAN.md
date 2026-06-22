@@ -115,13 +115,21 @@ Canlı optiway/xirigo'ya DOKUNMA. isolation:"worktree" KULLANMA.
   180/3 + esbuild) yeşil + **GERÇEK runtime electron smoke YEŞİL** (VS Code 1.125.1: `tabs after
   conductor.open: ["Conductor"]` → panel editör-alanına indi; singleton doğrulandı). `editor/`
   only — backend/Go DOKUNULMADI (ADR-0021).
-- **N1 ✅ (bu commit) — default-surface flip (ADR-0032 UYGULANDI).** `activate` (`onStartupFinished`)
+- **N1 ✅ (`0799eaf`) — default-surface flip (ADR-0032 UYGULANDI).** `activate` (`onStartupFinished`)
   startup'ta `conductor.open`'ı çalıştırır → Command Center editör-alanında OTOMATİK açılır (Devin
   "ilk gördüğün yüzey" modeli; singleton; sidebar coexist). Editör gate yeşil + **GERÇEK runtime
   electron smoke YEŞİL** (`tabs after activate (N1 startup): ["Conductor"]` — komut çalıştırmadan,
   startup'ta açıldı). `editor/` only (backend dokunulmadı). (Not: koşulsuz auto-open; "kullanıcı
   kapatınca hatırla" / setting ileride opsiyonel cila.)
-- **SIRADAKİ: N2** — native sessions sidebar TreeView ("Conductors": projeler→tasks, status-codicon,
-  "Your Devins" analog; click → Command Center'ı o session'a odakla/aç) → N3 session-workspace
-  (detail webview + native diff split) → N4 native-etkileşim (keybinding + ok-tuşu time-travel) →
-  N5 fork layout-default + imzalı rebuild + capstone (KULLANICI ONAYI). Her faz GERÇEK runtime KENDİM.
+- **N2 ✅ (bu commit) — native "Conductors" sessions TreeView (ADR-0037).** `conductor.sessions`
+  `TreeDataProvider`: projeler→tasks, status codicon'lar (board.ts sözlüğüne dayalı; UYDURMA YOK).
+  Veri = host-side authed `FleetReadClient` (vscode-free, ControlClient READ kardeşi; token header-only,
+  leak-guard). Click → editör-alanı CC reveal (`conductor.open`; deep session-link N3). Refresh: connect +
+  manuel komut + view-title `$(refresh)` + viewsWelcome. Sidebar webview `collapsed` coexist (tam kaldırma =
+  kullanıcı-onayı sonrası follow-up). Editör gate (vitest 196/3) + **GERÇEK runtime electron smoke YEŞİL**
+  (view contributed + createTreeView attach + refresh komutu register/execute throw-suz; N0/N1 hâlâ yeşil).
+  `editor/` only.
+- **SIRADAKİ: N3** — session = workspace layout: tree tıklama o session'ı açar → session detail (webview) YANINDA
+  native diff (4C-1) split editör grubunda (resizable). Native editör = diff workspace. → N4 native-etkileşim
+  (keybinding + ok-tuşu time-travel) → N5 fork layout-default + imzalı rebuild + capstone (KULLANICI ONAYI). Her
+  faz GERÇEK runtime KENDİM.

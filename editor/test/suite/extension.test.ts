@@ -12,6 +12,7 @@ const EXTENSION_ID = "everva.conductor-editor";
 const CONNECT_COMMAND = "conductor.connect";
 const SHOW_DIFF_COMMAND = "conductor.showDiff";
 const OPEN_COMMAND = "conductor.open";
+const REFRESH_SESSIONS_COMMAND = "conductor.refreshSessions";
 const COMMAND_CENTER_TITLE = "Conductor";
 const DIFF_SCHEME = "conductor-diff";
 // The user-facing body the diff content provider serves for a URI not in the bounded
@@ -71,6 +72,11 @@ export async function smoke(): Promise<void> {
     allCommands.includes(OPEN_COMMAND),
     `command ${OPEN_COMMAND} should be registered`,
   );
+  // N2: the native sessions tree refresh command must be registered.
+  assert.ok(
+    allCommands.includes(REFRESH_SESSIONS_COMMAND),
+    `command ${REFRESH_SESSIONS_COMMAND} should be registered`,
+  );
 
   // 4C-1b — NATIVE DIFF RENDER proof in a REAL VS Code host. The activated extension
   // registered the `conductor-diff` read-only TextDocumentContentProvider, so opening a
@@ -123,4 +129,10 @@ export async function smoke(): Promise<void> {
       collectTabLabels(),
     )}`,
   );
+
+  // N2: the native sessions tree's refresh command runs cleanly in a real host (no gateway →
+  // the read client no-ops and the tree empties to its welcome view; the command path must not
+  // throw). The `conductor.sessions` view itself is package.json-contributed and createTreeView
+  // attached to it during activation (which already succeeded, above).
+  await vscode.commands.executeCommand(REFRESH_SESSIONS_COMMAND);
 }

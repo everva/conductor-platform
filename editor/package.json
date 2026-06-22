@@ -35,17 +35,34 @@
     "views": {
       "conductor": [
         {
+          "id": "conductor.sessions",
+          "name": "Conductors"
+        },
+        {
           "id": "conductor.fleet",
           "name": "Fleet",
-          "type": "webview"
+          "type": "webview",
+          "visibility": "collapsed"
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "conductor.sessions",
+        "contents": "No Conductors to show.\n[Connect to a gateway](command:conductor.connect)\nto see your projects and sessions."
+      }
+    ],
     "commands": [
       {
         "command": "conductor.open",
         "title": "Conductor: Open Command Center",
         "category": "Conductor"
+      },
+      {
+        "command": "conductor.refreshSessions",
+        "title": "Conductor: Refresh Conductors",
+        "category": "Conductor",
+        "icon": "$(refresh)"
       },
       {
         "command": "conductor.connect",
@@ -82,7 +99,16 @@
         "title": "Conductor: Show Task Diff",
         "category": "Conductor"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "conductor.refreshSessions",
+          "when": "view == conductor.sessions",
+          "group": "navigation"
+        }
+      ]
+    }
   },
   "scripts": {
     "typecheck": "tsc --noEmit && tsc -p tsconfig.webview.json --noEmit",

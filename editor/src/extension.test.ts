@@ -33,6 +33,7 @@ import {
   COMMAND_CENTER_VIEW_TYPE,
   COMMAND_CENTER_TITLE,
   OPEN_COMMAND,
+  REFRESH_SESSIONS_COMMAND,
   OPEN_CONDUCTOR_ACTION,
   APPROVE_ACTION,
   OPEN_DIFF_ACTION,
@@ -68,6 +69,7 @@ import {
 } from "./extension";
 import type { Intervention } from "./notifier";
 import type { TaskDiff } from "./diffObserver";
+import { SESSIONS_VIEW_ID } from "./sessionsTree";
 
 // The slice of the vscode API the diff flows use, assembled from the mock. Cast at the
 // seam because the headless mock is structurally (not nominally) the real `vscode` types.
@@ -917,11 +919,16 @@ describe("activate", () => {
     // tab appears after activate()).
     expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_COMMAND, expect.any(Function));
     expect(commands.executeCommand).toHaveBeenCalledWith(OPEN_COMMAND);
-    // connection bar + intervention bar (4C-3) + diff bar (4C-1b) + notifier-dispose (4C-3) +
-    // diff-observer-dispose (4C-1b) + connect + disconnect + pause + resume + abort + approve +
-    // diff-provider (4C-1b) + show-diff (4C-1b) + open (N0) + fleet view + Command Center
-    // panel (N0) = 16.
-    expect(subscriptions).toHaveLength(16);
+    // N2: the native sessions tree view + its refresh command are registered.
+    expect(window.createTreeView).toHaveBeenCalledWith(SESSIONS_VIEW_ID, {
+      treeDataProvider: expect.anything(),
+    });
+    expect(commands.registerCommand).toHaveBeenCalledWith(
+      REFRESH_SESSIONS_COMMAND,
+      expect.any(Function),
+    );
+    // …the 16 prior subscriptions + N2 sessions view + refresh command + tree provider = 19.
+    expect(subscriptions).toHaveLength(19);
   });
 });
 
