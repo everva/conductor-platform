@@ -108,7 +108,14 @@
           "group": "navigation"
         }
       ]
-    }
+    },
+    "keybindings": [
+      {
+        "command": "conductor.open",
+        "key": "ctrl+alt+c",
+        "mac": "cmd+alt+c"
+      }
+    ]
   },
   "scripts": {
     "typecheck": "tsc --noEmit && tsc -p tsconfig.webview.json --noEmit",

@@ -295,6 +295,15 @@
   font-size: var(--text-xs);
   color: var(--brand-text);
 }
+/* N4: the keyboard time-travel hint, pushed right like the live button it replaces. */
+.sv-replay-hint {
+  margin-left: auto;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text-3);
+}
 .sv-replay-tag {
   padding: 0.05rem var(--space-2);
   border-radius: var(--radius-xs);

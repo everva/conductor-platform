@@ -2,7 +2,7 @@
 // (B1 — per-gate checks, the trust differentiator), the bounded diff, and the
 // activity timeline — all derived from a task's event buffer.
 import { describe, expect, it } from "vitest";
-import { buildTimeline, parseDiff, parseVerdict } from "./session.ts";
+import { buildTimeline, parseDiff, parseVerdict, stepReplay } from "./session.ts";
 import type { Event } from "../api/types.ts";
 
 function ev(p: Partial<Event> & Pick<Event, "kind" | "phase">): Event {
@@ -147,5 +147,33 @@ describe("buildTimeline", () => {
     expect(t[1]!.summary).toMatch(/^2 files \+15\/.2$/);
     expect(t[2]!.summary).toBe("pass");
     expect(t[3]!.summary).toBe("");
+  });
+});
+
+describe("stepReplay (N4 arrow-key time-travel)", () => {
+  const tl = [{ ts: "t1" }, { ts: "t2" }, { ts: "t3" }];
+
+  it("back from live selects the newest entry; forward from live stays live", () => {
+    expect(stepReplay(tl, null, "back")).toBe("t3");
+    expect(stepReplay(tl, null, "forward")).toBe(null);
+  });
+
+  it("steps back to older entries and forward to newer ones", () => {
+    expect(stepReplay(tl, "t3", "back")).toBe("t2");
+    expect(stepReplay(tl, "t2", "back")).toBe("t1");
+    expect(stepReplay(tl, "t1", "forward")).toBe("t2");
+    expect(stepReplay(tl, "t2", "forward")).toBe("t3");
+  });
+
+  it("clamps at the oldest; forward past the newest returns to live", () => {
+    expect(stepReplay(tl, "t1", "back")).toBe("t1");
+    expect(stepReplay(tl, "t3", "forward")).toBe(null);
+  });
+
+  it("snaps a stale selection to the newest; an empty timeline is a no-op", () => {
+    expect(stepReplay(tl, "gone", "back")).toBe("t3");
+    expect(stepReplay(tl, "gone", "forward")).toBe("t3");
+    expect(stepReplay([], null, "back")).toBe(null);
+    expect(stepReplay([], "x", "forward")).toBe("x");
   });
 });

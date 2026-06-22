@@ -3,7 +3,7 @@
 // Verifier verdict (per-gate checks + MERGE-READY), the diff, the activity timeline,
 // and a confirm-gated Approve; the back button returns to the board.
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionView } from "./SessionView.tsx";
 import type { Event, Scenario, Task } from "../api/types.ts";
@@ -132,5 +132,47 @@ describe("SessionView", () => {
     await user.click(screen.getByRole("button", { name: /return to live/i }));
     expect(screen.getByText(/MERGE-READY/)).toBeInTheDocument();
     expect(screen.getByText("feature.go")).toBeInTheDocument();
+  });
+
+  it("steps the timeline with the ← / → arrow keys (N4 native time-travel)", async () => {
+    render(
+      <SessionView
+        task={TASK}
+        token="t"
+        onBack={vi.fn()}
+        onUnauthorized={() => {}}
+        makeScenarioClient={() => ({ listScenarios: async () => [SCENARIO] })}
+        makeHistory={() => ({ listEvents: async () => EVENTS })}
+        eventTransport={noopTransport}
+      />,
+    );
+
+    // Live: the keyboard hint is shown, no replay note.
+    expect(await screen.findByText(/MERGE-READY/)).toBeInTheDocument();
+    expect(screen.getByText("← → to replay")).toBeInTheDocument();
+
+    // ← enters replay at the NEWEST entry — the live button + replay note appear.
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(screen.getByRole("button", { name: /return to live/i })).toBeInTheDocument();
+    expect(screen.getByText(/Replaying as of/)).toBeInTheDocument();
+
+    // Keep stepping ← back to the first event (10:00, before the gate) — the panels replay the
+    // empty state (no verdict, no diff): proves the arrow actually moves through time.
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(screen.getByText(/Replaying as of 10:00:00/)).toBeInTheDocument();
+    expect(screen.queryByText(/MERGE-READY/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Awaiting the gate/)).toBeInTheDocument();
+
+    // → forward steps newer; stepping past the newest returns to LIVE (note + button gone,
+    // the latest verdict/diff back, the hint shown again).
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(screen.queryByText(/Replaying as of/)).not.toBeInTheDocument();
+    expect(screen.getByText("← → to replay")).toBeInTheDocument();
+    expect(screen.getByText(/MERGE-READY/)).toBeInTheDocument();
   });
 });

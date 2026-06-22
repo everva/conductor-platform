@@ -33,7 +33,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { Badge, Button, Chip, StatusDot } from "../ui/index.ts";
 import type { BadgeTone } from "../ui/index.ts";
-import { buildTimeline, parseDiff, parseVerdict } from "./session.ts";
+import { buildTimeline, parseDiff, parseVerdict, stepReplay } from "./session.ts";
 import "./session.css";
 
 // SvEmpty — a designed empty/placeholder state for a session panel (a faint icon
@@ -151,6 +151,27 @@ export function SessionView({
   const diff = useMemo(() => parseDiff(events, replayTs ?? undefined), [events, replayTs]);
   const timeline = useMemo(() => buildTimeline(events), [events]);
 
+  // N4 native time-travel: ←/→ step the Activity timeline (the SAME replay seam the timeline
+  // clicks use). When the session is focused the webview/window receives these keys, so the
+  // stepping works natively in the fork (webview-focused) and in the web app alike. Guarded so
+  // it never hijacks typing (inputs / the ⌘K palette search) or modified/already-handled chords.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.defaultPrevented) return;
+      const target = e.target as { tagName?: string; isContentEditable?: boolean } | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) {
+        return;
+      }
+      if (timeline.length === 0) return;
+      e.preventDefault();
+      setReplayTs((cur) => stepReplay(timeline, cur, e.key === "ArrowLeft" ? "back" : "forward"));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [timeline]);
+
   const held = isAwaitingApproval(task);
   const busy = controls?.isTaskBusy(task.project_id, task.id) ?? false;
   const title = scenario?.title || task.id;
@@ -264,6 +285,9 @@ export function SessionView({
           <section className="sv-panel" aria-label="Activity">
             <h3 className="sv-panel-head">
               Activity
+              {timeline.length > 0 && replayTs === null && (
+                <span className="sv-replay-hint">← → to replay</span>
+              )}
               {replayTs !== null && (
                 <button
                   type="button"

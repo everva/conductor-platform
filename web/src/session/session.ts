@@ -204,3 +204,32 @@ export function buildTimeline(events: readonly Event[]): TimelineEntry[] {
     summary: summarize(e),
   }));
 }
+
+/**
+ * stepReplay computes the next replay timestamp when stepping the Activity timeline with the
+ * arrow keys (native-IDE N4 time-travel; reuses the E4 replay seam). `timeline` is chronological
+ * (oldest first); `current` is the pinned ts or null (LIVE = following the newest). "back" moves
+ * to an older entry, "forward" to a newer one — and stepping forward past the newest returns to
+ * LIVE (null). Positions are [e0 … e(n-1), LIVE]: from LIVE, "back" selects the newest entry;
+ * from the oldest, "back" clamps; a `current` ts no longer in the window (stale) snaps to the
+ * newest. Pure (reads only `ts`) → unit-tested; the keydown handler just maps ←/→ onto it.
+ */
+export function stepReplay(
+  timeline: readonly { ts: string }[],
+  current: string | null,
+  direction: "back" | "forward",
+): string | null {
+  if (timeline.length === 0) {
+    return current;
+  }
+  const idx = current === null ? timeline.length : timeline.findIndex((e) => e.ts === current);
+  if (idx === -1) {
+    // Stale selection (the pinned entry aged out of the window) → snap to the newest.
+    return timeline[timeline.length - 1]?.ts ?? null;
+  }
+  if (direction === "back") {
+    return timeline[Math.max(0, idx - 1)]?.ts ?? null;
+  }
+  const next = idx + 1;
+  return next >= timeline.length ? null : (timeline[next]?.ts ?? null);
+}

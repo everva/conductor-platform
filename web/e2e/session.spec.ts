@@ -101,3 +101,44 @@ test("the session timeline replays the verdict + diff as of a selected entry (E4
   await expect(page.getByText(/MERGE-READY/)).toBeVisible();
   await expect(page.getByText("feature.go")).toBeVisible();
 });
+
+test("the ← / → arrow keys time-travel the session timeline (N4)", async ({ page }) => {
+  await mockWebSocket(page);
+  await page.route("**/status", (r) => r.fulfill(json(STATUS)));
+  await page.route("**/hosts", (r) => r.fulfill(json(HOSTS)));
+  await page.route("**/events*", (r) => r.fulfill(json(EVENTS)));
+  await page.route("**/projects/*/scenarios", (r) => r.fulfill(json(SCENARIOS)));
+  await page.route("**/projects/*/tasks", (r) => r.fulfill(json(TASKS)));
+  await page.route("**/projects", (r) => r.fulfill(json(PROJECTS)));
+
+  await page.goto("/");
+  await page.getByLabel(/api token/i).fill("test-token");
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page.getByRole("region", { name: /command center/i })).toBeVisible();
+  await page.getByText("W-1").click();
+
+  const session = page.getByRole("region", { name: /^session$/i });
+  await expect(session).toBeVisible();
+  await expect(page.getByText(/MERGE-READY/)).toBeVisible();
+  // Live: the keyboard hint is shown.
+  await expect(page.getByText("← → to replay")).toBeVisible();
+
+  // ← enters replay; keep pressing back to the first event (10:00, before the gate) — the
+  // panels replay the empty state, proving the arrow actually moves through time.
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.getByRole("button", { name: /return to live/i })).toBeVisible();
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.getByText(/Replaying as of 10:00:00/)).toBeVisible();
+  await expect(page.getByText(/Awaiting the gate/)).toBeVisible();
+  await expect(page.getByText(/MERGE-READY/)).toBeHidden();
+
+  // → steps forward; past the newest returns to live (the hint is back, latest verdict restored).
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByText("← → to replay")).toBeVisible();
+  await expect(page.getByText(/MERGE-READY/)).toBeVisible();
+});

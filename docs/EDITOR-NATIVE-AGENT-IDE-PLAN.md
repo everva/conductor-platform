@@ -136,11 +136,19 @@ Canlı optiway/xirigo'ya DOKUNMA. isolation:"worktree" KULLANMA.
   eklendi (deep-link'li SessionView spec'i bridge'den). Editör gate (vitest 201/3) + web gate (vitest 87 + **e2e
   14/14**; `cockpit.test.tsx` nav testi deep-link→SessionView kanıtlar) + electron smoke YEŞİL. GÖRSEL uçtan-uca
   (gerçek gateway verisiyle) = N5/kullanıcı-host (smoke'ta veri yok).
-- **N3b ✅ (bu commit) — native diff split (session = workspace TAMAM, ADR-0038).** `openSession` artık
+- **N3b ✅ (`072830e`) — native diff split (session = workspace TAMAM, ADR-0038).** `openSession` artık
   `navigateToSession` (CC, column One) + `openTaskDiffBeside` (o task'ın 4C-1 diff'ini `ViewColumn.Beside`'da =
   column Two) çağırır → session detail | native diff split (resizable native editör grupları). QUIET: diff yoksa
   no-op (deep-link nag etmez); `preview:true` tek diff sekmesini reuse eder. Editör gate (vitest 203/3) + electron
   smoke YEŞİL. `editor/` only. **→ N3 (session=workspace) TAMAM.**
-- **SIRADAKİ: N4** — native etkileşim: Conductor komutlarına keybinding (palette-native), session'da **ok-tuşu
-  (←→) timeline-stepping** (web replay'i native'e bağla), 3 status-bar entegre. → N5 fork layout-default + imzalı
-  rebuild + capstone (KULLANICI ONAYI). Her faz GERÇEK runtime KENDİM.
+- **N4 ✅ (bu commit) — native etkileşim.** (1) **ok-tuşu (←→) timeline time-travel**: SessionView'in Activity
+  timeline'ı ←/→ ile adımlanır (E4 replay seam'i reuse; pure `stepReplay` session.ts'de; pencere keydown,
+  typing/modifier-guard'lı; "← → to replay" ipucu). Fork'ta webview-focused arrow'lar = native his; web'de de çalışır.
+  (2) **native keybinding** `conductor.open` → `Ctrl/Cmd+Alt+C` (package.json contributes.keybindings). 3 status-bar
+  item zaten 4C'de entegreydi (yeniden yapılmadı; dürüst). Web gate (vitest 17/17 session + **Playwright e2e 15/15
+  incl. CANLI arrow-key testi `session.spec.ts:105` — KENDİM tarayıcıda klavyeyle doğruladım**) + editör gate
+  (203/3) + electron smoke (keybinding contribution parse + aktive) YEŞİL.
+- **SIRADAKİ: N5** — fork layout-default (Code-OSS overlay ince patch: ilk açılışta Conductor activity-bar +
+  Command Center editör-alanı default) + imzalı fork rebuild + **gerçek runtime capstone** (electron smoke + elle
+  take-over ekran-görüntüsü + Devin-referans + **KULLANICI ONAYI**). **N5 KULLANICIYA BAĞLI** (fork rebuild + imza
+  cert + onun host'u + görsel onay). Her faz GERÇEK runtime KENDİM.
