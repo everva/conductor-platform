@@ -7,6 +7,7 @@ import { SessionsTreeProvider, taskStatusPresentation, SESSIONS_VIEW_ID } from "
 import type { FleetReadClient, FleetProject, FleetTask } from "./fleetReadClient";
 
 const OPEN = "conductor.open";
+const OPEN_SESSION = "conductor.openSession";
 
 function fakeClient(
   over: {
@@ -37,7 +38,7 @@ describe("taskStatusPresentation", () => {
 describe("SessionsTreeProvider", () => {
   it("getChildren(root) lists projects as project nodes", async () => {
     const client = fakeClient({ projects: [{ id: "web-shop", readiness: "ready", paused: false }] });
-    const nodes = await new SessionsTreeProvider(client, OPEN).getChildren();
+    const nodes = await new SessionsTreeProvider(client, OPEN, OPEN_SESSION).getChildren();
     expect(nodes).toEqual([
       { kind: "project", project: { id: "web-shop", readiness: "ready", paused: false } },
     ]);
@@ -51,7 +52,7 @@ describe("SessionsTreeProvider", () => {
         ],
       },
     });
-    const provider = new SessionsTreeProvider(client, OPEN);
+    const provider = new SessionsTreeProvider(client, OPEN, OPEN_SESSION);
     const nodes = await provider.getChildren({
       kind: "project",
       project: { id: "web-shop", readiness: "ready", paused: false },
@@ -67,7 +68,7 @@ describe("SessionsTreeProvider", () => {
   });
 
   it("task nodes are leaves (getChildren returns [])", async () => {
-    const provider = new SessionsTreeProvider(fakeClient(), OPEN);
+    const provider = new SessionsTreeProvider(fakeClient(), OPEN, OPEN_SESSION);
     const node = {
       kind: "task",
       projectId: "p",
@@ -77,7 +78,7 @@ describe("SessionsTreeProvider", () => {
   });
 
   it("getTreeItem(project) → repo icon, collapsible, readiness description, reveal-CC command", () => {
-    const provider = new SessionsTreeProvider(fakeClient(), OPEN);
+    const provider = new SessionsTreeProvider(fakeClient(), OPEN, OPEN_SESSION);
     const item = provider.getTreeItem({
       kind: "project",
       project: { id: "web-shop", readiness: "ready", paused: false },
@@ -91,7 +92,7 @@ describe("SessionsTreeProvider", () => {
   });
 
   it("getTreeItem(paused project) shows 'paused' as the description", () => {
-    const provider = new SessionsTreeProvider(fakeClient(), OPEN);
+    const provider = new SessionsTreeProvider(fakeClient(), OPEN, OPEN_SESSION);
     const item = provider.getTreeItem({
       kind: "project",
       project: { id: "api", readiness: "ready", paused: true },
@@ -100,7 +101,7 @@ describe("SessionsTreeProvider", () => {
   });
 
   it("getTreeItem(task) → status codicon+color, 'tier · lane · status' description, reveal-CC command", () => {
-    const provider = new SessionsTreeProvider(fakeClient(), OPEN);
+    const provider = new SessionsTreeProvider(fakeClient(), OPEN, OPEN_SESSION);
     const item = provider.getTreeItem({
       kind: "task",
       projectId: "web-shop",
@@ -113,11 +114,16 @@ describe("SessionsTreeProvider", () => {
     expect(icon.color?.id).toBe("charts.yellow");
     expect(item.description).toBe("T3 · web · awaiting-approval");
     expect(item.contextValue).toBe("conductorTask");
-    expect(item.command).toEqual({ command: OPEN, title: "Open Command Center" });
+    // N3: a task click deep-links the Command Center to this session (openSession + args).
+    expect(item.command).toEqual({
+      command: OPEN_SESSION,
+      title: "Open Session",
+      arguments: ["web-shop", "W-1"],
+    });
   });
 
   it("refresh() fires onDidChangeTreeData", () => {
-    const provider = new SessionsTreeProvider(fakeClient(), OPEN);
+    const provider = new SessionsTreeProvider(fakeClient(), OPEN, OPEN_SESSION);
     const listener = vi.fn();
     provider.onDidChangeTreeData(listener);
     provider.refresh();

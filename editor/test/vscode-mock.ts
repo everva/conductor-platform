@@ -407,6 +407,7 @@ export function __makeWebviewPanel(cspSource = "vscode-resource:"): WebviewPanel
   reveal: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
   __fireDispose(): void;
+  __fireMessage(message: unknown): void;
 } {
   const messageListeners: ((message: unknown) => void)[] = [];
   const disposeListeners: (() => void)[] = [];
@@ -435,6 +436,11 @@ export function __makeWebviewPanel(cspSource = "vscode-resource:"): WebviewPanel
       return makeDisposable();
     }),
     __fireDispose: fire,
+    __fireMessage(message: unknown) {
+      for (const l of messageListeners) {
+        l(message);
+      }
+    },
   };
 }
 

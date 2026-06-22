@@ -241,6 +241,49 @@ describe("cockpit barrel: FleetDashboard token-free over injected transports", (
     expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
   });
 
+  it("navigateTo (fork deep-link) opens the requested session's SessionView (N3)", async () => {
+    const fakeTransport = new FakeEventTransport();
+    render(
+      <FleetDashboard
+        token=""
+        onUnauthorized={() => {}}
+        makeClient={makeReadClient}
+        makeControlClient={makeControlClient}
+        makeIntakeClient={makeIntakeClient}
+        makeScenarioClient={() => ({ listScenarios: async () => [] })}
+        makeHistory={() => ({ listEvents: async () => [] })}
+        eventTransport={fakeTransport}
+        navigateTo={{ project: PROJECT.id, task: TASK.id }}
+      />,
+    );
+
+    // The host deep-link resolves against the live fleet and opens the task's SessionView —
+    // the SAME surface a board drill-in shows (the tabbed board is replaced). findByRole
+    // rides the async fleet load + SessionView mount.
+    expect(await screen.findByRole("region", { name: "Session" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Board" })).not.toBeInTheDocument();
+  });
+
+  it("navigateTo to an unknown task is a no-op (stays on the board, N3)", async () => {
+    const fakeTransport = new FakeEventTransport();
+    render(
+      <FleetDashboard
+        token=""
+        onUnauthorized={() => {}}
+        makeClient={makeReadClient}
+        makeControlClient={makeControlClient}
+        makeIntakeClient={makeIntakeClient}
+        eventTransport={fakeTransport}
+        navigateTo={{ project: PROJECT.id, task: "no-such-task" }}
+      />,
+    );
+    await flush();
+
+    // No matching task → no SessionView; the board (default surface) is still shown.
+    expect(screen.queryByRole("region", { name: "Session" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Board" })).toBeInTheDocument();
+  });
+
   it("exposes the transport seams the fork wires (ApiClient over an injected HttpTransport)", async () => {
     // The fork's REST factory is literally `() => new ApiClient({ transport })`. Prove
     // that exact shape works token-free through the barrel's re-exported ApiClient +

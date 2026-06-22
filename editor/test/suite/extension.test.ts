@@ -12,6 +12,7 @@ const EXTENSION_ID = "everva.conductor-editor";
 const CONNECT_COMMAND = "conductor.connect";
 const SHOW_DIFF_COMMAND = "conductor.showDiff";
 const OPEN_COMMAND = "conductor.open";
+const OPEN_SESSION_COMMAND = "conductor.openSession";
 const REFRESH_SESSIONS_COMMAND = "conductor.refreshSessions";
 const COMMAND_CENTER_TITLE = "Conductor";
 const DIFF_SCHEME = "conductor-diff";
@@ -77,6 +78,11 @@ export async function smoke(): Promise<void> {
     allCommands.includes(REFRESH_SESSIONS_COMMAND),
     `command ${REFRESH_SESSIONS_COMMAND} should be registered`,
   );
+  // N3: the deep-link openSession command must be registered.
+  assert.ok(
+    allCommands.includes(OPEN_SESSION_COMMAND),
+    `command ${OPEN_SESSION_COMMAND} should be registered`,
+  );
 
   // 4C-1b — NATIVE DIFF RENDER proof in a REAL VS Code host. The activated extension
   // registered the `conductor-diff` read-only TextDocumentContentProvider, so opening a
@@ -135,4 +141,9 @@ export async function smoke(): Promise<void> {
   // throw). The `conductor.sessions` view itself is package.json-contributed and createTreeView
   // attached to it during activation (which already succeeded, above).
   await vscode.commands.executeCommand(REFRESH_SESSIONS_COMMAND);
+
+  // N3: the deep-link command runs cleanly in a real host. It reveals the Command Center and
+  // posts a navigate-session message to its webview (no gateway → the cockpit has no data, so
+  // no SessionView appears, but the command + host→webview post path must not throw).
+  await vscode.commands.executeCommand(OPEN_SESSION_COMMAND, "smoke-project", "smoke-task");
 }

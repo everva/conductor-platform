@@ -49,6 +49,36 @@ export type HostMessage =
   | { kind: "event-message"; id: string; data: string }
   | { kind: "event-close"; id: string };
 
+// ── N3 control channel (host↔webview), SEPARATE from the REST/event bridge ──────────────
+// These carry NO correlation `id`, so the bridge routers (isHostMessage / isWebviewRequest,
+// both of which require a string `id`) reject them and the REST/event maps are untouched.
+// The fork webview's app + the CommandCenterPanel listen for them directly. TOKEN-FREE
+// (only project/task ids / a readiness ping) — like every other message here, by design.
+
+/** Host→Webview control: navigate the cockpit to a specific session (deep-link, N3). */
+export type HostControlMessage = { kind: "navigate-session"; project: string; task: string };
+
+/** Webview→Host control: the fork app has mounted + is listening, so the host can flush a
+ * navigate buffered during the cold-start window (avoids a lost first deep-link). */
+export type WebviewControlMessage = { kind: "webview-ready" };
+
+/**
+ * Defensive guard: is `x` a host→webview navigate control message (N3)? The fork app calls
+ * this on every inbound window message and acts only on a well-formed one (a foreign frame
+ * can't spoof a navigation). Requires both ids as strings; carries no token.
+ */
+export function isHostNavigate(x: unknown): x is HostControlMessage {
+  return (
+    isObject(x) && x.kind === "navigate-session" && hasString(x, "project") && hasString(x, "task")
+  );
+}
+
+/** Defensive guard: is `x` the webview-ready control ping (N3)? The CommandCenterPanel calls
+ * this on inbound webview messages to flush a buffered navigate. */
+export function isWebviewReady(x: unknown): x is WebviewControlMessage {
+  return isObject(x) && x.kind === "webview-ready";
+}
+
 /** True if `x` is a non-null object — the precondition for every guard below. */
 function isObject(x: unknown): x is Record<string, unknown> {
   return typeof x === "object" && x !== null;

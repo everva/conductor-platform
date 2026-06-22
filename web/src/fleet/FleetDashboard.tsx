@@ -10,7 +10,7 @@
 //     held tasks (and a project-level auto-resolve approve);
 //   * Abort/Approve are confirm-gated (ConfirmDialog); actions are optimistic and
 //     reconcile via useFleet.refresh(); errors surface as non-fatal notices.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useFleet } from "./useFleet.ts";
 import type { FleetClient } from "./useFleet.ts";
 import { useFleetControls } from "./useFleetControls.ts";
@@ -72,6 +72,13 @@ export interface FleetDashboardProps {
   // with transport-backed make*Client factories (e.g. () => new ApiClient({ transport }),
   // token ignored) so REST flows over the same bridge. See ADR-0027/0028.
   eventTransport?: EventTransport;
+  // navigateTo, when set (FORK MODE / N3 deep-link), drives an external jump to a specific
+  // session: the host (a sessions-tree click) posts it over the bridge and the fork webview
+  // passes it here. An effect resolves it against the live fleet (tasksByProject) and opens
+  // that task's SessionView — the SAME selectedTask seam a board drill-in uses. The fork
+  // passes a NEW object per host request (even for the same ids) so a repeat deep-link
+  // re-fires. Web mode omits it.
+  navigateTo?: { project: string; task: string } | null;
 }
 
 // DashboardTab selects the cockpit surface. "board" is the agent-native Command
@@ -96,6 +103,7 @@ export function FleetDashboard({
   makeHistory,
   makeScenarioClient,
   eventTransport,
+  navigateTo,
 }: FleetDashboardProps) {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   // selectedTask drives the session detail view (redesign E2): set by a board card
@@ -143,6 +151,27 @@ export function FleetDashboard({
     setSelectedProjectId(projectId);
     setTab("fleet");
   };
+
+  // N3 deep-link: when the host requests a session (a sessions-tree click), resolve it against
+  // the live fleet and open that task's SessionView — the SAME seam a board drill-in uses.
+  // Consumed once per distinct request object (a useRef guard), so it fires once and does NOT
+  // re-open after the user backs out; if the task isn't loaded yet it waits for the next fleet
+  // update (the effect also depends on tasksByProject) and resolves then.
+  const consumedNav = useRef<{ project: string; task: string } | null>(null);
+  useEffect(() => {
+    if (!navigateTo || navigateTo === consumedNav.current) {
+      return;
+    }
+    const task = (fleet.tasksByProject[navigateTo.project] ?? []).find(
+      (t) => t.id === navigateTo.task,
+    );
+    if (!task) {
+      return; // wait for fleet data; the effect re-runs when tasksByProject changes
+    }
+    consumedNav.current = navigateTo;
+    setSelectedProjectId(navigateTo.project);
+    setSelectedTask(task);
+  }, [navigateTo, fleet.tasksByProject]);
 
   // ⌘K / Ctrl+K toggles the command palette from anywhere in the cockpit (board,
   // a tab, or a session). A window-level listener keeps the shortcut working

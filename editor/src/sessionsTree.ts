@@ -3,8 +3,8 @@
 // The Devin "Your Devins" rail, done NATIVE: a vscode.TreeDataProvider that shows projects
 // (Conductors) → their tasks (sessions), each task carrying a status codicon (the at-a-glance
 // lifecycle read). It replaces the dar webview board as the sidebar's PRIMARY content — the
-// board itself now lives in the editor area (N1 Command Center). Clicking a node REVEALS that
-// Command Center (N2); deep-linking the webview to a specific session is N3 (session=workspace).
+// board itself now lives in the editor area (N1 Command Center). Clicking a TASK deep-links the
+// Command Center to that session (N3, conductor.openSession); clicking a project reveals it.
 //
 // DATA: fed by the host-side authed FleetReadClient (token in the header only — never reaches
 // this provider or a TreeItem). getChildren fetches lazily (root → projects, project → tasks);
@@ -48,19 +48,22 @@ export function taskStatusPresentation(status: string): { readonly icon: string;
 
 /**
  * The native "Conductors" tree. Lazy + async: root yields projects, a project yields its tasks.
- * `openCommand` is INJECTED (the `conductor.open` id) so this module needs no back-import from
- * extension.ts — clicking any node fires it to reveal the editor-area Command Center. `refresh()`
- * (manual command + on connection-state change) fires onDidChangeTreeData to refetch.
+ * The command ids are INJECTED (so this module needs no back-import from extension.ts):
+ * `openCommand` (`conductor.open`) reveals the Command Center for a project click;
+ * `openSessionCommand` (`conductor.openSession`) deep-links it to a task's session (N3).
+ * `refresh()` (manual command + on connection-state change) fires onDidChangeTreeData to refetch.
  */
 export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionNode> {
   readonly #client: FleetReadClient;
   readonly #openCommand: string;
+  readonly #openSessionCommand: string;
   readonly #emitter = new vscode.EventEmitter<SessionNode | undefined>();
   readonly onDidChangeTreeData = this.#emitter.event;
 
-  constructor(client: FleetReadClient, openCommand: string) {
+  constructor(client: FleetReadClient, openCommand: string, openSessionCommand: string) {
     this.#client = client;
     this.#openCommand = openCommand;
+    this.#openSessionCommand = openSessionCommand;
   }
 
   /** Refetch the whole tree (the gateway reads are cheap + the tree is small). */
@@ -109,9 +112,13 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionNode
     item.description = `${task.tier} · ${task.lane} · ${task.status}`;
     item.contextValue = "conductorTask";
     item.tooltip = `${task.id} — ${task.status} (${task.tier}/${task.lane})`;
-    // Click → reveal the editor-area Command Center (N2). Deep-linking the webview to THIS
-    // session's detail is N3 (session = workspace).
-    item.command = { command: this.#openCommand, title: "Open Command Center" };
+    // Click → deep-link the Command Center to THIS session (N3): the args reach the
+    // conductor.openSession handler, which navigates the cockpit's webview to its SessionView.
+    item.command = {
+      command: this.#openSessionCommand,
+      title: "Open Session",
+      arguments: [node.projectId, task.id],
+    };
     return item;
   }
 

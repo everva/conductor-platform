@@ -121,7 +121,7 @@ Canlı optiway/xirigo'ya DOKUNMA. isolation:"worktree" KULLANMA.
   electron smoke YEŞİL** (`tabs after activate (N1 startup): ["Conductor"]` — komut çalıştırmadan,
   startup'ta açıldı). `editor/` only (backend dokunulmadı). (Not: koşulsuz auto-open; "kullanıcı
   kapatınca hatırla" / setting ileride opsiyonel cila.)
-- **N2 ✅ (bu commit) — native "Conductors" sessions TreeView (ADR-0037).** `conductor.sessions`
+- **N2 ✅ (`25fca4f`) — native "Conductors" sessions TreeView (ADR-0037).** `conductor.sessions`
   `TreeDataProvider`: projeler→tasks, status codicon'lar (board.ts sözlüğüne dayalı; UYDURMA YOK).
   Veri = host-side authed `FleetReadClient` (vscode-free, ControlClient READ kardeşi; token header-only,
   leak-guard). Click → editör-alanı CC reveal (`conductor.open`; deep session-link N3). Refresh: connect +
@@ -129,7 +129,14 @@ Canlı optiway/xirigo'ya DOKUNMA. isolation:"worktree" KULLANMA.
   kullanıcı-onayı sonrası follow-up). Editör gate (vitest 196/3) + **GERÇEK runtime electron smoke YEŞİL**
   (view contributed + createTreeView attach + refresh komutu register/execute throw-suz; N0/N1 hâlâ yeşil).
   `editor/` only.
-- **SIRADAKİ: N3** — session = workspace layout: tree tıklama o session'ı açar → session detail (webview) YANINDA
-  native diff (4C-1) split editör grubunda (resizable). Native editör = diff workspace. → N4 native-etkileşim
+- **N3a ✅ (bu commit) — birleşik deep-link (ADR-0038).** Tree task-click → Command Center webview'i o
+  session'ın `SessionView`'ine yönlendirir. Host→webview AYRI kontrol kanalı (`navigate-session` + `webview-ready`
+  handshake; bridge id-tabanlı router'ı dokunulmaz; token YOK). `FleetDashboard.navigateTo` prop'u + useRef-effect
+  (board drill-in'in `selectedTask` seam'i reuse). `conductor.openSession` komutu (args). Fork `makeScenarioClient`
+  eklendi (deep-link'li SessionView spec'i bridge'den). Editör gate (vitest 201/3) + web gate (vitest 87 + **e2e
+  14/14**; `cockpit.test.tsx` nav testi deep-link→SessionView kanıtlar) + electron smoke YEŞİL. GÖRSEL uçtan-uca
+  (gerçek gateway verisiyle) = N5/kullanıcı-host (smoke'ta veri yok).
+- **SIRADAKİ: N3b** — session detail YANINDA **native diff (4C-1) split** editör grubunda: `openSession` o task'ın
+  diff'ini `ViewColumn.Beside`'da açar (resizable; native editör = diff workspace). → N4 native-etkileşim
   (keybinding + ok-tuşu time-travel) → N5 fork layout-default + imzalı rebuild + capstone (KULLANICI ONAYI). Her
   faz GERÇEK runtime KENDİM.

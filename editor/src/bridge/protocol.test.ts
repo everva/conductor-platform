@@ -3,7 +3,7 @@
 // acting. These lock that valid messages pass and junk (null, wrong kind, missing/
 // wrong-typed fields, bad filter values) is rejected.
 import { describe, expect, it } from "vitest";
-import { isHostMessage, isWebviewRequest } from "./protocol";
+import { isHostMessage, isWebviewRequest, isHostNavigate, isWebviewReady } from "./protocol";
 
 describe("isWebviewRequest", () => {
   it("accepts every valid WebviewRequest kind (including optional fields)", () => {
@@ -81,5 +81,34 @@ describe("isHostMessage", () => {
     ); // ok wrong type
     expect(isHostMessage({ kind: "rest-error", id: "b1" })).toBe(false); // no message
     expect(isHostMessage({ kind: "event-message", id: "b2" })).toBe(false); // no data
+  });
+});
+
+describe("N3 control channel guards", () => {
+  it("isHostNavigate accepts a well-formed navigate-session and rejects junk", () => {
+    expect(isHostNavigate({ kind: "navigate-session", project: "p", task: "t" })).toBe(true);
+    expect(isHostNavigate(null)).toBe(false);
+    expect(isHostNavigate({ kind: "navigate-session", project: "p" })).toBe(false); // no task
+    expect(isHostNavigate({ kind: "navigate-session", task: "t" })).toBe(false); // no project
+    expect(isHostNavigate({ kind: "navigate-session", project: 1, task: "t" })).toBe(false);
+    expect(isHostNavigate({ kind: "other", project: "p", task: "t" })).toBe(false);
+  });
+
+  it("isWebviewReady accepts the ready ping and rejects junk", () => {
+    expect(isWebviewReady({ kind: "webview-ready" })).toBe(true);
+    expect(isWebviewReady(null)).toBe(false);
+    expect(isWebviewReady({ kind: "nope" })).toBe(false);
+  });
+
+  it("the control channel does NOT cross-contaminate the bridge routers (no `id` → rejected)", () => {
+    // The navigate/ready messages carry no correlation id, so the REST/event guards reject
+    // them — they can never be mistaken for a rest-response/event frame or a rest-request.
+    expect(isHostMessage({ kind: "navigate-session", project: "p", task: "t" })).toBe(false);
+    expect(isWebviewRequest({ kind: "webview-ready" })).toBe(false);
+    // …and the REST/event messages are not mistaken for control messages either.
+    expect(isHostNavigate({ kind: "rest-response", id: "b1", status: 200, ok: true, body: "{}" })).toBe(
+      false,
+    );
+    expect(isWebviewReady({ kind: "rest-request", id: "b1", method: "GET", path: "/x" })).toBe(false);
   });
 });

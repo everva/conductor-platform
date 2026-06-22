@@ -33,6 +33,7 @@ import {
   COMMAND_CENTER_VIEW_TYPE,
   COMMAND_CENTER_TITLE,
   OPEN_COMMAND,
+  OPEN_SESSION_COMMAND,
   REFRESH_SESSIONS_COMMAND,
   OPEN_CONDUCTOR_ACTION,
   APPROVE_ACTION,
@@ -167,8 +168,8 @@ describe("registerConductor", () => {
     );
 
     // connect + disconnect + pause + resume + abort + approve + diff-provider + show-diff +
-    // open (N0) + fleet view = 10 (no fleetConfig → no Command Center panel disposable).
-    expect(disposables).toHaveLength(10);
+    // open (N0) + openSession (N3) + fleet view = 11 (no fleetConfig → no panel disposable).
+    expect(disposables).toHaveLength(11);
     expect(commands.registerCommand).toHaveBeenCalledWith(CONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(DISCONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(PAUSE_COMMAND, expect.any(Function));
@@ -181,8 +182,9 @@ describe("registerConductor", () => {
       expect.any(Object),
     );
     expect(commands.registerCommand).toHaveBeenCalledWith(SHOW_DIFF_COMMAND, expect.any(Function));
-    // N0: the editor-area Command Center open command.
+    // N0: the editor-area Command Center open command + N3: the deep-link openSession command.
     expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_COMMAND, expect.any(Function));
+    expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_SESSION_COMMAND, expect.any(Function));
     expect(window.registerWebviewViewProvider).toHaveBeenCalledWith(
       FLEET_VIEW_ID,
       expect.any(FleetViewProvider),
@@ -919,6 +921,8 @@ describe("activate", () => {
     // tab appears after activate()).
     expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_COMMAND, expect.any(Function));
     expect(commands.executeCommand).toHaveBeenCalledWith(OPEN_COMMAND);
+    // N3: the deep-link openSession command is registered.
+    expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_SESSION_COMMAND, expect.any(Function));
     // N2: the native sessions tree view + its refresh command are registered.
     expect(window.createTreeView).toHaveBeenCalledWith(SESSIONS_VIEW_ID, {
       treeDataProvider: expect.anything(),
@@ -927,8 +931,8 @@ describe("activate", () => {
       REFRESH_SESSIONS_COMMAND,
       expect.any(Function),
     );
-    // …the 16 prior subscriptions + N2 sessions view + refresh command + tree provider = 19.
-    expect(subscriptions).toHaveLength(19);
+    // …prior + N2 sessions view + refresh command + tree provider + N3 openSession command = 20.
+    expect(subscriptions).toHaveLength(20);
   });
 });
 
@@ -1109,6 +1113,48 @@ describe("CommandCenterPanel (N0 — editor-area Command Center)", () => {
     // leave the host. Auth is owned by the host-side bridge.
     expect(created.webview.html).toContain("connect-src 'none'");
     expect(created.webview.html).toMatch(/default-src 'none'/);
+  });
+
+  it("navigateToSession buffers the navigate until the webview is ready, then flushes it (N3)", () => {
+    const bridgeFactory = vi.fn(() => ({ attach: vi.fn(), dispose: vi.fn() }));
+    const panel = new CommandCenterPanel(makeFleetConfig({ bridgeFactory }));
+
+    panel.navigateToSession("web-shop", "W-1");
+    // Cold start: the fresh webview hasn't signalled ready → nothing is posted yet.
+    const created = window.createWebviewPanel.mock.results[0]?.value as {
+      webview: { postMessage: ReturnType<typeof vi.fn> };
+      __fireMessage: (m: unknown) => void;
+    };
+    expect(created.webview.postMessage).not.toHaveBeenCalled();
+
+    // The webview announces ready → the buffered navigate is flushed (token-free).
+    created.__fireMessage({ kind: "webview-ready" });
+    expect(created.webview.postMessage).toHaveBeenCalledWith({
+      kind: "navigate-session",
+      project: "web-shop",
+      task: "W-1",
+    });
+  });
+
+  it("navigateToSession posts immediately once the webview is ready, without a second panel (N3)", () => {
+    const bridgeFactory = vi.fn(() => ({ attach: vi.fn(), dispose: vi.fn() }));
+    const panel = new CommandCenterPanel(makeFleetConfig({ bridgeFactory }));
+
+    panel.open();
+    const created = window.createWebviewPanel.mock.results[0]?.value as {
+      webview: { postMessage: ReturnType<typeof vi.fn> };
+      __fireMessage: (m: unknown) => void;
+    };
+    created.__fireMessage({ kind: "webview-ready" });
+
+    panel.navigateToSession("api", "T-2");
+    expect(created.webview.postMessage).toHaveBeenCalledWith({
+      kind: "navigate-session",
+      project: "api",
+      task: "T-2",
+    });
+    // Singleton: navigateToSession revealed the existing panel, it did not spawn a second one.
+    expect(window.createWebviewPanel).toHaveBeenCalledTimes(1);
   });
 });
 

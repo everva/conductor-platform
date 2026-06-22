@@ -25,6 +25,7 @@ import { randomBytes } from "node:crypto";
 import { deriveWsUrl, makeGatewayProbe, normalizeBaseUrl, GATEWAY_TOKEN_KEY } from "./gateway";
 import { ConnectionManager, type ConnectionState } from "./connection";
 import { HostBridge, type WebviewLike } from "./bridge/hostBridge";
+import { isWebviewReady } from "./bridge/protocol";
 import { wsConnector } from "./bridge/wsConnector";
 import { ControlClient, ControlListError, type ControlAction } from "./controlClient";
 import { InterventionNotifier, type Intervention } from "./notifier";
@@ -63,6 +64,11 @@ export const OPEN_COMMAND = "conductor.open";
 /** Command id that refetches the native "Conductors" sessions tree (N2). Surfaced as the
  * view's title refresh button + the command palette. */
 export const REFRESH_SESSIONS_COMMAND = "conductor.refreshSessions";
+
+/** Command id that deep-links the Command Center to a specific session (N3). Invoked by a
+ * sessions-tree task click with `[projectId, taskId]` arguments: it opens/reveals the panel
+ * and navigates its cockpit to that task's SessionView. */
+export const OPEN_SESSION_COMMAND = "conductor.openSession";
 
 /** Custom URI scheme for the read-only diff virtual documents (4C-1b). Registered with a
  * TextDocumentContentProvider; the diff body is served from a bounded in-memory store. */
@@ -438,6 +444,10 @@ export class CommandCenterPanel implements vscode.Disposable {
   readonly #config: FleetViewConfig;
   #panel: vscode.WebviewPanel | undefined;
   #bridge: { dispose(): void } | undefined;
+  // N3 deep-link buffering: `#ready` flips true when the webview posts `webview-ready`; a
+  // navigate requested before then (cold-start window) is held in `#pendingNav` + flushed on ready.
+  #ready = false;
+  #pendingNav: { project: string; task: string } | undefined;
 
   constructor(config: FleetViewConfig) {
     this.#config = config;
@@ -486,8 +496,19 @@ export class CommandCenterPanel implements vscode.Disposable {
     this.#bridge = bridge;
     bridge.attach();
 
+    // N3 deep-link: a fresh webview starts NOT ready; it posts `webview-ready` on mount, at
+    // which point we flush any navigate buffered during the cold-start window. This listener
+    // observes the same webview as the bridge (both fire) but only acts on the ready ping.
+    this.#ready = false;
+    webview.onDidReceiveMessage((msg) => {
+      if (isWebviewReady(msg)) {
+        this.#ready = true;
+        this.#flushPendingNav();
+      }
+    });
+
     // Closing the tab tears the bridge down (WS handles + listener) and clears the singleton
-    // so a later `conductor.open` builds a fresh panel.
+    // (+ the N3 ready/pending state) so a later open builds a fresh panel.
     panel.onDidDispose(() => {
       bridge.dispose();
       if (this.#bridge === bridge) {
@@ -496,6 +517,43 @@ export class CommandCenterPanel implements vscode.Disposable {
       if (this.#panel === panel) {
         this.#panel = undefined;
       }
+      this.#ready = false;
+      this.#pendingNav = undefined;
+    });
+  }
+
+  /**
+   * Deep-links the cockpit to a session (N3): ensures the Command Center is open in the editor
+   * area, then posts a `navigate-session` control message to its webview so the cockpit opens
+   * that task's SessionView. If the webview hasn't signalled `webview-ready` yet (cold start),
+   * the request is BUFFERED and flushed on ready — so the first click right after a cold open
+   * isn't lost. Token-free (only project/task ids cross); re-navigating posts a fresh message.
+   */
+  navigateToSession(project: string, task: string): void {
+    this.open();
+    const panel = this.#panel;
+    if (panel === undefined) {
+      return;
+    }
+    if (this.#ready) {
+      void panel.webview.postMessage({ kind: "navigate-session", project, task });
+    } else {
+      this.#pendingNav = { project, task };
+    }
+  }
+
+  /** Posts a navigate buffered during cold start, once the webview signals ready (N3). */
+  #flushPendingNav(): void {
+    const panel = this.#panel;
+    const nav = this.#pendingNav;
+    if (panel === undefined || nav === undefined) {
+      return;
+    }
+    this.#pendingNav = undefined;
+    void panel.webview.postMessage({
+      kind: "navigate-session",
+      project: nav.project,
+      task: nav.task,
     });
   }
 
@@ -1109,6 +1167,14 @@ export function registerConductor(
   const open = api.commands.registerCommand(OPEN_COMMAND, () => {
     commandCenter?.open();
   });
+  // N3: deep-link to a session — invoked by a sessions-tree task click with [projectId, taskId].
+  // Opens/reveals the Command Center and navigates its cockpit to that task's SessionView.
+  const openSession = api.commands.registerCommand(OPEN_SESSION_COMMAND, (...args: unknown[]) => {
+    const [project, task] = args;
+    if (typeof project === "string" && typeof task === "string") {
+      commandCenter?.navigateToSession(project, task);
+    }
+  });
   // The Fleet view attaches the host↔webview bridge on resolve. When a config is
   // provided (the production path) the provider builds a real HostBridge; tests may omit
   // it (static-HTML provider) or pass one with a fake bridge factory.
@@ -1121,6 +1187,7 @@ export function registerConductor(
     diffProvider,
     showDiff,
     open,
+    openSession,
     fleetView,
   ];
   // Dispose the Command Center panel (+ its bridge) on deactivate when it was built.
@@ -1226,7 +1293,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const fleetReader = new FleetReadClient(normalizeBaseUrl(gatewayUrl), {
     getToken: () => Promise.resolve(context.secrets.get(GATEWAY_TOKEN_KEY)),
   });
-  const sessionsProvider = new SessionsTreeProvider(fleetReader, OPEN_COMMAND);
+  const sessionsProvider = new SessionsTreeProvider(fleetReader, OPEN_COMMAND, OPEN_SESSION_COMMAND);
 
   const manager = new ConnectionManager({
     secrets: context.secrets,

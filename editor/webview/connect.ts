@@ -38,10 +38,18 @@ export function forkClientFactories<C>(
   makeControlClient: () => C;
   makeIntakeClient: () => C;
   makeHistory: () => C;
+  makeScenarioClient: () => C;
 } {
   const make = (): C => new ApiClientCtor({ transport: http });
-  // makeHistory is the SAME bridge client: EventStreamView backfills /events through it so
-  // the history fetch rides the postMessage bridge too (the webview CSP blocks a direct
-  // fetch). Without it the Events tab would error "Could not reach the gateway".
-  return { makeClient: make, makeControlClient: make, makeIntakeClient: make, makeHistory: make };
+  // makeHistory + makeScenarioClient are the SAME bridge client: EventStreamView backfills
+  // /events and (N3) SessionView fetches /projects/{id}/scenarios through it, so both ride the
+  // postMessage bridge too (the webview CSP blocks a direct fetch). Without them the Events tab
+  // and the session's spec panel would error "Could not reach the gateway".
+  return {
+    makeClient: make,
+    makeControlClient: make,
+    makeIntakeClient: make,
+    makeHistory: make,
+    makeScenarioClient: make,
+  };
 }
