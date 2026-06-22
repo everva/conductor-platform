@@ -37,12 +37,6 @@
         {
           "id": "conductor.sessions",
           "name": "Conductors"
-        },
-        {
-          "id": "conductor.fleet",
-          "name": "Fleet",
-          "type": "webview",
-          "visibility": "collapsed"
         }
       ]
     },

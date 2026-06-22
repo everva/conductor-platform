@@ -47,4 +47,11 @@ bug FIX.** Sidebar yalnız native "Conductors" tree'yi (seçim sürücüsü) ta�
 - N3'ün deep-link davranışı KORUNUR (`select`-with-task = eski `navigate-session`); seçim artık
   proje düzeyinde de taşınabilir. Proje-only seçimin GÖRÜNÜR board-filtresi Q1'de (seçim-güdümlü
   yüzeyler); bu commit seam'i kurar.
+- **Q0.4 SEVK EDİLDİ (ayrı commit):** `FleetViewProvider` sınıfı + `conductor.fleet` view contribution
+  + `FLEET_VIEW_ID` + `placeholderHtml` (no-config sidebar HTML) + bunların testleri KALDIRILDI; cockpit
+  yalnız `CommandCenterPanel`'de mount edilir → TEK HostBridge/WS → **offline/live bug GİTTİ.** Sidebar
+  yalnız native "Conductors" tree'yi taşır. **Editör-only** (extension.ts + package.json + testler; web/Go
+  DOKUNULMADI). Doğrulama: editör gate (typecheck×2 + eslint-0 + **vitest 232/3**: registerConductor 11
+  disposable + `registerWebviewViewProvider` ARTIK ÇAĞRILMAZ; subscriptions 20; extension.js 190.8→187.9kb)
+  + **electron smoke YEŞİL** (1.125.1, N1 startup `["Conductor"]`, dangling view/menu referansı YOK, exit 0).
 - ADR-0038 (N3 control channel) bu ADR ile genelleştirilir; ADR-0021 / token-disiplini KORUNUR.

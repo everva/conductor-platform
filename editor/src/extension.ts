@@ -19,7 +19,7 @@
 // TESTABILITY: `activate` stays thin; the command flows are extracted into `runConnect`
 // /`runDisconnect` and the wiring into `registerConductor`, all written against a
 // narrow structural `VscodeApi` slice so vitest drives them with a mock — headlessly,
-// no electron, no display. The webview HTML is the pure `placeholderHtml`.
+// no electron, no display. The webview HTML is the pure `webviewHtml`.
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import { deriveWsUrl, makeGatewayProbe, normalizeBaseUrl, GATEWAY_TOKEN_KEY } from "./gateway";
@@ -93,12 +93,10 @@ export const FIRST_LAUNCH_KEY = "conductor.firstLaunchRevealed";
  * TextDocumentContentProvider; the diff body is served from a bounded in-memory store. */
 export const DIFF_SCHEME = "conductor-diff";
 
-/** View id of the placeholder Fleet webview view (contributed in package.json). */
-export const FLEET_VIEW_ID = "conductor.fleet";
-
-/** WebviewPanel viewType of the editor-area Command Center (N0 — ADR-0036). Distinct from
- * FLEET_VIEW_ID (the activity-bar sidebar view): the two COEXIST during the native-IDE
- * transition — the panel is the main-area surface, the sidebar stays until N2. */
+/** WebviewPanel viewType of the editor-area Command Center (N0 — ADR-0036). The cockpit's ONLY
+ * mount (Faz-Q / Q0.4 — ADR-0044): the activity-bar sidebar's webview Fleet view was removed so
+ * there is a SINGLE cockpit + a single live event stream (the offline/live bug is gone); the
+ * sidebar now holds only the native "Conductors" tree (the selection driver). */
 export const COMMAND_CENTER_VIEW_TYPE = "conductor.commandCenter";
 
 /** Editor tab title for the Command Center panel (N0). */
@@ -165,10 +163,6 @@ export interface VscodeApi {
     // Rest form covers the single-action toast (4C-2) AND the 4C-3 multi-action
     // intervention toast (Approve / Open diff / Open Conductor).
     showWarningMessage(message: string, ...items: string[]): Thenable<string | undefined>;
-    registerWebviewViewProvider(
-      viewId: string,
-      provider: vscode.WebviewViewProvider,
-    ): vscode.Disposable;
   };
 }
 
@@ -288,48 +282,7 @@ export function webviewHtml(opts: WebviewHtmlOptions): string {
 }
 
 /**
- * Builds the no-config Fleet HTML. Pure (no vscode runtime needed) so tests can assert the
- * CSP + copy directly. Reached ONLY on the legacy bare-construction path (a
- * `new FleetViewProvider()` with no config + no extensionUri): without the extensionUri we
- * can't build the bundle's resource URIs, so we render a minimal strict-CSP "not connected"
- * page (no live script). The production path always supplies a config and serves
- * `webviewHtml` (the live cockpit bundle). The CSP mirrors the live page minus the script
- * directive: everything defaults to 'none', only our nonce'd <style> applies, and
- * `connect-src 'none'` still forbids any webview-originated network.
- */
-export function placeholderHtml(cspSource: string): string {
-  const nonce = makeNonce();
-  return `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'nonce-${nonce}' ${cspSource}; img-src ${cspSource}; script-src 'nonce-${nonce}'; connect-src 'none';"
-    />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <style nonce="${nonce}">
-      body {
-        font-family: var(--vscode-font-family);
-        color: var(--vscode-foreground);
-        padding: 12px;
-      }
-      .status {
-        opacity: 0.8;
-        font-size: 12px;
-      }
-    </style>
-    <title>Conductor</title>
-  </head>
-  <body>
-    <h3>Conductor</h3>
-    <p class="status">Not connected. Run "Conductor: Connect to Gateway" to connect.</p>
-  </body>
-</html>`;
-}
-
-/**
- * Builds a HostBridge over a resolved webview. Injectable so the FleetViewProvider tests
+ * Builds a HostBridge over a resolved webview. Injectable so the CommandCenterPanel tests
  * can pass a fake (no real `ws`/fetch) and the production path uses the real wsConnector.
  * The TokenProvider reads the bearer token from SecretStorage per request (the bridge
  * never caches it); `baseUrl` is normalized + `wsBaseUrl` derived once here so the
@@ -337,9 +290,9 @@ export function placeholderHtml(cspSource: string): string {
  */
 export type BridgeFactory = (webview: WebviewLike) => { attach(): void; dispose(): void };
 
-/** Configuration the FleetViewProvider needs to load the cockpit bundle + attach the
- * bridge on resolve. `extensionUri` is the installed extension root (context.extensionUri)
- * used to build the webview resource URIs of the bundled cockpit under dist/webview. */
+/** Configuration the {@link CommandCenterPanel} needs to load the cockpit bundle + attach the
+ * bridge. `extensionUri` is the installed extension root (context.extensionUri) used to build the
+ * webview resource URIs of the bundled cockpit under dist/webview. */
 export interface FleetViewConfig {
   readonly secrets: SecretStore;
   readonly gatewayUrl: string;
@@ -374,86 +327,17 @@ export function makeBridgeFactory(secrets: SecretStore, gatewayUrl: string): Bri
 }
 
 /**
- * The Fleet view provider. With a config (the production path) resolve (a) enables scripts
- * and scopes `localResourceRoots` to dist/webview so ONLY the bundle's assets load, (b)
- * serves `webviewHtml` — a strict-CSP page that nonce-loads the shared cockpit bundle
- * (4B-3) + its CSS via `asWebviewUri`, and (c) constructs + attaches a HostBridge over the
- * webview so the typed postMessage transport (the 4A-1 fork impl) is live for the bundle's
- * REST/WS. The bridge's dispose is registered on the view's onDidDispose so the WS handles
- * + listener are torn down.
- *
- * `config` is optional ONLY so a bare `new FleetViewProvider()` still constructs (used by
- * legacy unit tests of the static HTML); when absent, resolve renders the no-config
- * placeholder (scripts on, no bundle, no bridge — no extensionUri to build asset URIs).
- * The production path always supplies a config with the real factory + extensionUri.
- */
-export class FleetViewProvider implements vscode.WebviewViewProvider {
-  readonly #config: FleetViewConfig | undefined;
-  // The bridge for the currently-resolved view. VS Code can call resolveWebviewView
-  // more than once on one provider (a hidden view is torn down and re-resolved on
-  // reveal when retainContextWhenHidden is off); dispose any predecessor on re-resolve
-  // so an old HostBridge (with its WS handles + message listener) can never leak.
-  #bridge: { dispose(): void } | undefined;
-
-  constructor(config?: FleetViewConfig) {
-    this.#config = config;
-  }
-
-  resolveWebviewView(webviewView: vscode.WebviewView): void {
-    const config = this.#config;
-    if (config === undefined) {
-      // No config (bare construction in a legacy test): scripts on, placeholder HTML, no
-      // bundle (no extensionUri for asset URIs), no bridge.
-      webviewView.webview.options = { enableScripts: true };
-      webviewView.webview.html = placeholderHtml(webviewView.webview.cspSource);
-      return;
-    }
-
-    // Re-resolve safety: tear down the bridge from a previous resolve before building a
-    // new one, so a re-resolve that didn't fire the prior view's onDidDispose can't leak.
-    this.#bridge?.dispose();
-    this.#bridge = undefined;
-
-    const webview = webviewView.webview;
-    const distRoot = vscode.Uri.joinPath(config.extensionUri, "dist", "webview");
-    // Scope script/style loading to the bundle dir: the webview can't read arbitrary
-    // extension files, only dist/webview (paired with the strict CSP).
-    webview.options = { enableScripts: true, localResourceRoots: [distRoot] };
-
-    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "main.js")).toString();
-    const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "main.css")).toString();
-    webview.html = webviewHtml({
-      cspSource: webview.cspSource,
-      nonce: makeNonce(),
-      scriptUri,
-      styleUri,
-    });
-
-    const factory =
-      config.bridgeFactory ?? makeBridgeFactory(config.secrets, config.gatewayUrl);
-    const bridge = factory(webview);
-    this.#bridge = bridge;
-    bridge.attach();
-    // Tear the bridge down when the view goes away (closes WS handles + the listener).
-    webviewView.onDidDispose(() => {
-      bridge.dispose();
-      if (this.#bridge === bridge) {
-        this.#bridge = undefined;
-      }
-    });
-  }
-}
-
-/**
  * The editor-area Command Center (N0 — ADR-0036, implementing ADR-0032's "Command Center =
  * default surface"). A SINGLETON WebviewPanel in the MAIN editor area (ViewColumn.One) — the
  * Devin Desktop model where the agent command center is the primary surface, not a narrow
- * activity-bar sidebar. It reuses the EXACT cockpit wiring of {@link FleetViewProvider}:
+ * activity-bar sidebar. Since Faz-Q / Q0.4 (ADR-0044) it is the cockpit's ONLY mount: the
+ * activity-bar sidebar's webview Fleet view was removed (the sidebar now holds only the native
+ * "Conductors" tree), so there is a SINGLE live event stream — the old offline/live split
+ * between two cockpit mounts is gone. Its wiring:
  *   - strict-CSP {@link webviewHtml} nonce-loading the shared cockpit bundle from dist/webview;
- *   - a HostBridge from the SAME factory ({@link makeBridgeFactory}), so the token stays
- *     host-side (SecretStorage + the bridge's fetch/WS) and the panel is NOT a new token
- *     surface — CSP `connect-src 'none'` forbids any webview-originated network, exactly as the
- *     sidebar does. No token, message, or log ever crosses into the panel.
+ *   - a HostBridge from {@link makeBridgeFactory}, so the token stays host-side (SecretStorage +
+ *     the bridge's fetch/WS) and the panel is NOT a new token surface — CSP `connect-src 'none'`
+ *     forbids any webview-originated network. No token, message, or log ever crosses into the panel.
  *
  * Singleton: a second `conductor.open` REVEALS the existing panel rather than spawning a
  * duplicate. `retainContextWhenHidden` keeps the live cockpit + its WS bridge alive while the
@@ -479,7 +363,7 @@ export class CommandCenterPanel implements vscode.Disposable {
 
   /**
    * Opens the Command Center in the editor area, or reveals the existing panel (singleton).
-   * Mirrors FleetViewProvider.resolveWebviewView's bundle + bridge wiring, but targets a
+   * Loads the shared cockpit bundle ({@link webviewHtml}) + attaches a HostBridge, but targets a
    * WebviewPanel whose options are set at CREATION (not assigned onto `webview.options`).
    */
   open(): void {
@@ -1500,11 +1384,9 @@ export function registerConductor(
       void runShowDiffForTask(api, diffStore, ref.project, ref.task, fetchFullDiff);
     }
   });
-  // The Fleet view attaches the host↔webview bridge on resolve. When a config is
-  // provided (the production path) the provider builds a real HostBridge; tests may omit
-  // it (static-HTML provider) or pass one with a fake bridge factory.
-  const provider = fleetConfig ? new FleetViewProvider(fleetConfig) : new FleetViewProvider();
-  const fleetView = api.window.registerWebviewViewProvider(FLEET_VIEW_ID, provider);
+  // Faz-Q / Q0.4 (ADR-0044): the sidebar webview Fleet view is gone — the cockpit mounts ONLY in
+  // the editor-area Command Center, so a single HostBridge owns the one live event stream. The
+  // sidebar keeps only the native "Conductors" tree (registered in `activate`, the selection driver).
   const disposables: vscode.Disposable[] = [
     connect,
     disconnect,
@@ -1514,7 +1396,6 @@ export function registerConductor(
     open,
     openSession,
     openTaskDiff,
-    fleetView,
   ];
   // Dispose the Command Center panel (+ its bridge) on deactivate when it was built.
   if (commandCenter) {

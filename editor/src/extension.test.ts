@@ -14,7 +14,6 @@ import {
   Uri,
   ViewColumn,
   __reset,
-  __makeWebviewView,
   __makeSecretStorage,
   __makeGlobalState,
   __makeExtensionUri,
@@ -30,7 +29,6 @@ import {
   DIFF_SCHEME,
   DIFF_STORE_CAP,
   DIFF_EVICTED_PLACEHOLDER,
-  FLEET_VIEW_ID,
   COMMAND_CENTER_VIEW_TYPE,
   COMMAND_CENTER_TITLE,
   OPEN_COMMAND,
@@ -50,7 +48,6 @@ import {
   type FleetViewConfig,
   type InterventionStatusBar,
   DiffStore,
-  FleetViewProvider,
   CommandCenterPanel,
   activate,
   deactivate,
@@ -62,7 +59,6 @@ import {
   diffSideUri,
   diffUnifiedUri,
   parseDiffUri,
-  placeholderHtml,
   registerConductor,
   renderDiffDocument,
   runApproveTask,
@@ -164,7 +160,7 @@ function makeControl(opts: {
 }
 
 describe("registerConductor", () => {
-  it("registers connect + disconnect + the 4 control commands + the diff scheme/command + the fleet view provider", () => {
+  it("registers connect + disconnect + the 4 control commands + the diff scheme/command + the editor-area commands", () => {
     const { manager } = makeManager({});
     const disposables = registerConductor(
       diffApi,
@@ -175,8 +171,10 @@ describe("registerConductor", () => {
     );
 
     // connect + disconnect + pause + resume + abort + approve + diff-provider + show-diff +
-    // open (N0) + openSession (N3) + openTaskDiff (P3) + fleet view = 12 (no fleetConfig → no panel).
-    expect(disposables).toHaveLength(12);
+    // open (N0) + openSession (N3) + openTaskDiff (P3) = 11. (Q0.4: the sidebar webview Fleet view
+    // is gone → no registerWebviewViewProvider; the cockpit mounts only in the Command Center panel,
+    // built only when a fleetConfig is supplied — registerConductor here gets none.)
+    expect(disposables).toHaveLength(11);
     expect(commands.registerCommand).toHaveBeenCalledWith(CONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(DISCONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(PAUSE_COMMAND, expect.any(Function));
@@ -194,10 +192,8 @@ describe("registerConductor", () => {
     expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_SESSION_COMMAND, expect.any(Function));
     // P3: the task context-menu "Open Diff" command.
     expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_TASK_DIFF_COMMAND, expect.any(Function));
-    expect(window.registerWebviewViewProvider).toHaveBeenCalledWith(
-      FLEET_VIEW_ID,
-      expect.any(FleetViewProvider),
-    );
+    // Q0.4: NO sidebar webview view is registered any more (the cockpit lives only in the panel).
+    expect(window.registerWebviewViewProvider).not.toHaveBeenCalled();
   });
 });
 
@@ -1106,10 +1102,9 @@ describe("activate", () => {
 
     expect(commands.registerCommand).toHaveBeenCalledWith(CONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(DISCONNECT_COMMAND, expect.any(Function));
-    expect(window.registerWebviewViewProvider).toHaveBeenCalledWith(
-      FLEET_VIEW_ID,
-      expect.any(FleetViewProvider),
-    );
+    // Q0.4: the sidebar webview Fleet view is gone — no webview-VIEW provider is registered (the
+    // cockpit mounts only in the editor-area Command Center panel).
+    expect(window.registerWebviewViewProvider).not.toHaveBeenCalled();
     // 4C-2 also registers the pause/resume/abort/approve commands.
     expect(commands.registerCommand).toHaveBeenCalledWith(PAUSE_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(APPROVE_COMMAND, expect.any(Function));
@@ -1139,9 +1134,10 @@ describe("activate", () => {
       REFRESH_SESSIONS_COMMAND,
       expect.any(Function),
     );
-    // …prior + N2 sessions view + refresh command + tree provider + N3 openSession + P3
-    // openTaskDiff command = 21.
-    expect(subscriptions).toHaveLength(21);
+    // registerConductor's 11 (Q0.4: no sidebar webview view) + the Command Center panel +
+    // N2 sessions tree view + refresh command + tree provider + the diff/intervention bars +
+    // managers = 20. (Down one from before: the sidebar Fleet webview-view registration is gone.)
+    expect(subscriptions).toHaveLength(20);
   });
 
   it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {
@@ -1169,8 +1165,8 @@ describe("deactivate", () => {
   });
 });
 
-// A FleetViewConfig for the provider tests. extensionUri is the mock's UriLike (the real
-// type is vscode.Uri; the headless mock is structurally compatible), so cast at the seam.
+// A FleetViewConfig for the CommandCenterPanel tests. extensionUri is the mock's UriLike (the
+// real type is vscode.Uri; the headless mock is structurally compatible), so cast at the seam.
 function makeFleetConfig(over: Partial<FleetViewConfig> = {}): FleetViewConfig {
   return {
     secrets: __makeSecretStorage(),
@@ -1179,71 +1175,6 @@ function makeFleetConfig(over: Partial<FleetViewConfig> = {}): FleetViewConfig {
     ...over,
   };
 }
-
-describe("FleetViewProvider", () => {
-  it("enables scripts and renders the no-config placeholder HTML on resolve (bare, no bridge)", () => {
-    const view = __makeWebviewView("vscode-resource:");
-    // Bare construction (no config) renders the static placeholder: scripts on, no bundle
-    // (no extensionUri to build asset URIs), and NO bridge attached.
-    new FleetViewProvider().resolveWebviewView(view as never);
-    expect(view.webview.options.enableScripts).toBe(true);
-    expect(view.webview.html).toContain("Not connected");
-    // The legacy placeholder carries no live <script> (no bundle on the no-config path).
-    expect(view.webview.html).not.toMatch(/<script/i);
-    // No config → no bridge → the host never subscribes to the webview's messages.
-    expect(view.webview.onDidReceiveMessage).not.toHaveBeenCalled();
-  });
-
-  it("loads the cockpit bundle, scopes localResourceRoots, attaches a bridge, and disposes on view-dispose", () => {
-    const view = __makeWebviewView("vscode-resource:");
-    const attach = vi.fn();
-    const dispose = vi.fn();
-    const bridgeFactory = vi.fn(() => ({ attach, dispose }));
-
-    new FleetViewProvider(makeFleetConfig({ bridgeFactory })).resolveWebviewView(view as never);
-
-    // 4B-3: scripts on + localResourceRoots scoped to dist/webview; the HTML nonce-loads
-    // the bundled cockpit script + CSS (asWebviewUri-mapped under dist/webview).
-    expect(view.webview.options.enableScripts).toBe(true);
-    expect(view.webview.options.localResourceRoots?.[0]?.path).toBe("/ext/dist/webview");
-    expect(view.webview.html).toContain('src="vscode-resource:/ext/dist/webview/main.js"');
-    expect(view.webview.html).toContain('href="vscode-resource:/ext/dist/webview/main.css"');
-    expect(view.webview.html).toContain('<div id="root"></div>');
-
-    // The factory was handed the webview and the bridge was attached.
-    expect(bridgeFactory).toHaveBeenCalledTimes(1);
-    expect(bridgeFactory).toHaveBeenCalledWith(view.webview);
-    expect(attach).toHaveBeenCalledTimes(1);
-    expect(dispose).not.toHaveBeenCalled();
-
-    // Closing the view tears the bridge down.
-    view.__fireDispose();
-    expect(dispose).toHaveBeenCalledTimes(1);
-  });
-
-  it("disposes the previous bridge when re-resolved (review FAZ-4 MED: re-resolve leak)", () => {
-    const disposes: ReturnType<typeof vi.fn>[] = [];
-    const attaches: ReturnType<typeof vi.fn>[] = [];
-    const bridgeFactory = vi.fn(() => {
-      const attach = vi.fn();
-      const dispose = vi.fn();
-      attaches.push(attach);
-      disposes.push(dispose);
-      return { attach, dispose };
-    });
-    const provider = new FleetViewProvider(makeFleetConfig({ bridgeFactory }));
-
-    provider.resolveWebviewView(__makeWebviewView() as never); // bridge 0
-    // Re-resolve WITHOUT firing the first view's onDidDispose (VS Code can re-resolve a
-    // hidden→revealed view): the provider must tear down the predecessor itself.
-    provider.resolveWebviewView(__makeWebviewView() as never); // bridge 1
-
-    expect(bridgeFactory).toHaveBeenCalledTimes(2);
-    expect(disposes[0]).toHaveBeenCalledTimes(1); // predecessor disposed on re-resolve (no leak)
-    expect(attaches[1]).toHaveBeenCalledTimes(1); // new bridge attached
-    expect(disposes[1]).not.toHaveBeenCalled();
-  });
-});
 
 describe("CommandCenterPanel (N0 — editor-area Command Center)", () => {
   it("opens an editor-area WebviewPanel that loads the cockpit bundle + attaches a bridge", () => {
@@ -1398,48 +1329,6 @@ describe("CommandCenterPanel (N0 — editor-area Command Center)", () => {
     panel.select("web-shop");
     // Project-only: the message carries exactly { kind, project } — no `task` on the wire.
     expect(created.webview.postMessage).toHaveBeenCalledWith({ kind: "select", project: "web-shop" });
-  });
-});
-
-describe("placeholderHtml", () => {
-  it("contains a strict CSP meta with default-src 'none'", () => {
-    const html = placeholderHtml("vscode-resource:");
-    expect(html).toMatch(/Content-Security-Policy/);
-    expect(html).toMatch(/default-src 'none'/);
-  });
-
-  it("contains the not-connected copy", () => {
-    const html = placeholderHtml("vscode-resource:");
-    expect(html).toContain("Not connected");
-  });
-
-  it("threads the cspSource into the style/img directives", () => {
-    const html = placeholderHtml("vscode-resource:");
-    expect(html).toContain("img-src vscode-resource:");
-    expect(html).toContain("style-src 'nonce-");
-  });
-
-  it("does NOT contain any inline <script> (no script without a nonce)", () => {
-    const html = placeholderHtml("vscode-resource:");
-    expect(html).not.toMatch(/<script/i);
-  });
-
-  it("uses a nonce on its inline <style> rather than allowing 'unsafe-inline'", () => {
-    const html = placeholderHtml("vscode-resource:");
-    expect(html).toMatch(/<style nonce="[A-Za-z0-9]{32}">/);
-    expect(html).not.toContain("unsafe-inline");
-  });
-
-  it("produces a fresh nonce per render", () => {
-    const randomSpy = vi.spyOn(Math, "random");
-    const a = placeholderHtml("vscode-resource:");
-    const b = placeholderHtml("vscode-resource:");
-    randomSpy.mockRestore();
-    const nonceA = /<style nonce="([A-Za-z0-9]{32})">/.exec(a)?.[1];
-    const nonceB = /<style nonce="([A-Za-z0-9]{32})">/.exec(b)?.[1];
-    expect(nonceA).toBeDefined();
-    expect(nonceB).toBeDefined();
-    expect(nonceA).not.toEqual(nonceB);
   });
 });
 
