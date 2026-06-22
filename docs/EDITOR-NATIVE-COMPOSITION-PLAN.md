@@ -148,6 +148,52 @@ Q2 events, Q3 çok-turlu distill). **Token DONMUŞ.** **CSS-foundation + cross-d
 - Docs/üçüncü-taraf: code.claude.com/docs/en/cli-reference · github.com/anthropics/claude-code ·
   shipyard.build/blog/claude-code-cheat-sheet · introl.com/blog/claude-code-cli-comprehensive-guide-2025
 
-## DURUM (2026-06-22) — PLAN HAZIR (implementasyon yok; kullanıcı onayı bekleniyor)
-- Faz-P CANLI + CI-yeşil. Bu plan (Faz-Q) kullanıcının native-kompozisyon eleştirisini kapatır.
-- SIRADAKİ: kullanıcı §7 kararları + faz seçimi → seçilen fazdan başla (aynı disiplin).
+## §9 — Task-task OTONOM yürütme planı (gece; kullanıcı: "otonom, sabaha kadar bitir")
+Defaults (kullanıcı "otonom bitir" → §7 makul varsayım): Events→Panel-area · sidebar cockpit→KALDIR (native
+tree + Command Center) · intake→sahneli Q3a→b→c · sıra **Q0→Q1→Q4bugfix→Q2→Q3→Q5**. HER task:
+kodla → **Rule#9 editör gate** (typecheck×2+eslint-0+vitest+esbuild) → **paylaşılan cockpit'e dokununca web gate +
+Playwright e2e** → **electron smoke** → commit develop → **CI 3-job yeşil** (`gh run view`) → ledger+memory.
+Frozen-additive (ADR-0021), token DONMUŞ, UYDURMA/fake-green YOK.
+
+**Q0 — Paylaşılan seçim + tek bağlantı (temel)** [ADR-0044]
+- **Q0.1** `bridge/protocol.ts`: `navigate-session`'ı genelleştir → `select`(kind:project|task, project, task?) host→webview
+  kontrol mesajı + `isSelect` guard (id-yok→bridge reddeder, token-yok). Mevcut `navigate-session` korunur/sarmalanır.
+- **Q0.2** host (`extension.ts`/`CommandCenterPanel`): `select(project, task?)` (open+post, cold-start buffer); tree
+  proje-click + task-click → `select`. `conductor.openSession` bunu çağırır.
+- **Q0.3** web (`FleetDashboard`): opsiyonel `selection:{project,task?}` prop → `selectedProjectId`/`selectedTask`/`tab`
+  sürer (navigateTo'yu kapsar, geriye-uyumlu). web gate + e2e (proje→board filtre, task→session).
+- **Q0.4** TEK bağlantı: sidebar webview cockpit'i (`FleetViewProvider` + `conductor.fleet` view) KALDIR → cockpit
+  yalnız Command Center'da → tek `useEventStream` → **offline/live BUG FIX**. package.json view + extension reg + testler.
+  electron smoke (tek "Conductor" tab, sidebar yalnız native tree).
+
+**Q1 — Seçim-güdümlü yüzeyler** [ADR-0044 kapsamında]
+- **Q1.1** tree proje-click → CC `select-project` (board O projeye filtre) — `conductor.open`(salt-reveal) yerine.
+- **Q1.2** board host-seçili projeye filtreli; task-select→session (Q0.3 seam). web gate + **e2e KENDİM** (proje seç→
+  board filtre; task seç→session; geri→board).
+- **Q1.3** tree seçili-highlight (`TreeView.reveal`/selection) + CC senkron.
+
+**Q4-bugfix (öne alındı — hızlı + yüksek kazanç)**
+- **Q4.1** `SessionView` GEÇMİŞ backfill: mount'ta scenario (`/scenarios`) + events (`/events?task=`) backfill +
+  verdict/diff'i geçmiş `KindDecision`/`KindDiff` event'lerinden TÜRET → *done* task SPEC/ACTIVITY/VERDICT/DIFF dolu.
+  web gate + **e2e KENDİM** (done task dolu). Backend'siz (mevcut endpoint'ler). [BUG FIX]
+- **Q4.2** native StatusBar fleet-stat (projects/hosts/leases + bağlantı) host-item'ları (tek kaynak); webview
+  FleetStatusBar incelt/kaldır. editör gate + smoke.
+
+**Q2 — Events native Panel** [ADR-0045]
+- **Q2.1** package.json: Panel-area `viewsContainers.panel` + `conductor.events` webview view.
+- **Q2.2** `EventsPanelProvider` (cockpit `EventStreamView` reuse + bridge), seçime göre kapsamlı; `/events` backfill +
+  canlı WS. extension reg + testler.
+- **Q2.3** electron smoke (panel açılır + seçim takip). 
+
+**Q3 — CC-tarzı konuşmalı intake (sahneli)** [ADR-0046]
+- **Q3a** intake ayrı editor-tab: `conductor.newWork` komut → Intake webview panel (editor-alan); `IntakeChat` reuse.
+- **Q3b** çok-turlu: `IntakeChat`→chat (mesaj geçmişi) + clarifying-question turu; backend `/distill` conversation
+  HISTORY (frozen-additive OPSİYONEL alan; tek-string fallback) + `intake.Distiller` history. **Go gate + GERÇEK-PG/stub**.
+- **Q3c** streaming (satır-satır) + plan-preview cila; ops. repo-keşif agent (CC `code-explorer` deseni).
+
+**Q5 — Capstone**: re-inject fork + electron smoke + canlı demo (:8099) görsel + **sabah dürüst özet** (ne bitti/CI-yeşil,
+ne kaldı). Kullanıcı görsel onayı.
+
+## DURUM (2026-06-22) — OTONOM YÜRÜTME BAŞLADI
+- Faz-P CANLI + CI-yeşil. Kullanıcı: **"çok detaylı plan + otonom, sabaha kadar bitir, task-task."** → §9 sırasıyla
+  yürütülüyor; her doğrulanmış task commit + CI-yeşil. Sabah dürüst kapanış özeti.
