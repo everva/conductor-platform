@@ -89,5 +89,17 @@ görüntülerine dayan.
   editör gate (vitest 206/3 + bridge guard) + emitted main.css denetimi (cascade + color-mix passthrough + brand)
   + **electron smoke YEŞİL** (VS Code 1.125.1, exit 0). **KALAN: kullanıcı görsel capstone** (fork pull+inject +
   light/dark ekran-görüntüsü + ONAY); `--vscode-*` yalnız gerçek webview'de → görsel fork runtime'da doğrulanır.
-- **SIRADAKİ: P2 native diff** (P2a unified-patch'ten per-file `vscode.diff` reconstruct = backend'siz;
-  P2b full-file = frozen-additive backend) → **P3 agentic/uyum**. Her faz GERÇEK fork runtime + kullanıcı onayı.
+- **P2a ✅ SEVK EDİLDİ — native `vscode.diff`** (develop `a846dc9`, **CI 3-job YEŞİL**; ADR-0040).
+  `editor/src/diffReconstruct.ts` (pure, 13 test) unified `patch`'i per-file before/after'a böler (context→iki
+  taraf, `-`→before, `+`→after; add/delete `/dev/null`; binary/rename non-diffable; truncated best-effort).
+  `DiffStore` per-file side URI'leri (`conductor-diff:/<n>/file/<idx>/<before|after>/<path>`) + unified fallback
+  tutar; `openStoredDiff` → 1 dosya `vscode.diff` / çoklu quick-pick / binary→unified fallback; deep-link split
+  primary (prompt'suz). **BACKEND'SİZ** (frozen-additive trivially). editör gate vitest 226/3 + electron smoke
+  yeşil. KALAN: kullanıcı görsel capstone (gerçek task diff'inde native yan-yana red-green).
+- **P2b KARARI BEKLENİYOR (kullanıcı P2b seçti):** full-file diff. **YENİDEN-DEĞERLENDİRME (kod'a-dayalı, dürüst):
+  "küçük" DEĞİL** — `cmd/conductor-api` (gateway, PG var, repo YOK) ≠ `cmd/conductor` (worker, repo/worktree var);
+  worktree view-time'da SİLİNMİŞ (branch survives ama worker'ın repo'sunda, gateway'de değil). ⇒ full content
+  GATE-TIME'da PG'ye PERSIST + yeni gateway endpoint'le servis gerek = 4-katman (goose migration + worker persist
+  full-context patch + conductor-api route + editör fetch). Migration = canlı-PG/geri-dönüşü-zor → açık onay şart.
+  Alternatifler: P2a yeter→P3; veya P2b-lite (patch context/budget artır, migration'sız, kısmi). → KULLANICIYA SOR.
+- **P3 (alternatif/sonraki):** agentic/uyum (tree context-menü + keybinding + context-key + Welcome). Editör-only, hafif.
