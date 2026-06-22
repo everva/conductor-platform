@@ -501,6 +501,19 @@ export function statusBarText(state: ConnectionState): string {
 }
 
 /**
+ * Renders the native fleet-glance status-bar label for a project count (Faz-Q / Q4.2): the
+ * at-a-glance "$(server) N Conductor(s)" the director reads without opening the cockpit. Pure so
+ * a test asserts the 0/1/N renderings. Returns "" for ≤0 (the caller hides the item then);
+ * singular/plural for ≥1. Carries no token — only the count.
+ */
+export function fleetBarText(count: number): string {
+  if (count <= 0) {
+    return "";
+  }
+  return `$(server) ${count} Conductor${count === 1 ? "" : "s"}`;
+}
+
+/**
  * Renders the dedicated intervention status-bar label for a pending count (4C-3). Pure so a
  * test asserts the 0/1/N renderings. Returns "" for 0 (the caller hides the item then);
  * singular/plural for ≥1. Carries no token — only the count. Distinct codicon ($(bell))
@@ -1466,6 +1479,14 @@ export function activate(context: vscode.ExtensionContext): void {
   diffBar.command = SHOW_DIFF_COMMAND;
   const diffStore = new DiffStore();
 
+  // Q4.2 (Faz-Q): a native fleet-glance status-bar item — "$(server) N Conductors" — fed by the
+  // SAME authed read client as the sessions tree (token in the header only). Clicking it reveals the
+  // Conductor view. Shown only while connected with ≥1 project (updateFleetBar below); hidden
+  // otherwise. The cockpit keeps its own in-surface bar; this is the NATIVE at-a-glance fleet read.
+  const fleetBar = vscode.window.createStatusBarItem();
+  fleetBar.command = REVEAL_CONTAINER_COMMAND;
+  fleetBar.tooltip = "Conductor: open the Conductors view";
+
   // 4C-3: the host's OWN intervention-filtered WS subscription. The 4B-2 HostBridge only
   // forwards events to the webview while it's OPEN; this fires native notifications even
   // when the Conductor view is closed. TokenProvider reads SecretStorage per start (never
@@ -1507,6 +1528,20 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   const sessionsProvider = new SessionsTreeProvider(fleetReader, OPEN_COMMAND, OPEN_SESSION_COMMAND);
 
+  // Q4.2: refresh the native fleet-glance bar from the SAME authed read the tree uses. listProjects
+  // never throws (→ [] on any non-happy path), so an empty/failed read just hides the bar.
+  const updateFleetBar = (): void => {
+    void fleetReader.listProjects().then((projects) => {
+      const label = fleetBarText(projects.length);
+      if (label === "") {
+        fleetBar.hide();
+      } else {
+        fleetBar.text = label;
+        fleetBar.show();
+      }
+    });
+  };
+
   const manager = new ConnectionManager({
     secrets: context.secrets,
     gateway: makeGatewayProbe(gatewayUrl),
@@ -1529,6 +1564,13 @@ export function activate(context: vscode.ExtensionContext): void {
       // N2: refetch the sessions tree on any link change (connected → projects/tasks appear;
       // otherwise it empties to the welcome view). The read client no-ops without a token.
       sessionsProvider.refresh();
+      // Q4.2: refresh the native fleet glance with the tree — show the count when connected, hide
+      // it otherwise (a disconnected fleet has nothing to glance at).
+      if (state === "connected") {
+        updateFleetBar();
+      } else {
+        fleetBar.hide();
+      }
     },
   });
   statusBar.text = statusBarText(manager.state);
@@ -1569,6 +1611,7 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   const refreshSessions = vscode.commands.registerCommand(REFRESH_SESSIONS_COMMAND, () => {
     sessionsProvider.refresh();
+    updateFleetBar(); // Q4.2: keep the native fleet glance in step with a manual tree refresh.
   });
 
   // Push the intervention + diff status-bar items + dispose-wrappers that stop the host WS
@@ -1578,6 +1621,7 @@ export function activate(context: vscode.ExtensionContext): void {
     statusBar,
     interventionBar,
     diffBar,
+    fleetBar,
     { dispose: () => notifier.stop() },
     { dispose: () => diffObserver.stop() },
     sessionsView,

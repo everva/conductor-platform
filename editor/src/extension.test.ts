@@ -52,6 +52,7 @@ import {
   activate,
   deactivate,
   diffStatusText,
+  fleetBarText,
   handleDiff,
   handleIntervention,
   interventionStatusText,
@@ -507,6 +508,15 @@ describe("statusBarText", () => {
     expect(statusBarText("connecting")).toContain("connecting");
     expect(statusBarText("disconnected")).toContain("disconnected");
     expect(statusBarText("error")).toContain("error");
+  });
+});
+
+describe("fleetBarText (Q4.2 native fleet glance)", () => {
+  it("renders singular/plural for ≥1 and empty for ≤0 (caller hides it)", () => {
+    expect(fleetBarText(0)).toBe("");
+    expect(fleetBarText(-1)).toBe("");
+    expect(fleetBarText(1)).toBe("$(server) 1 Conductor");
+    expect(fleetBarText(3)).toBe("$(server) 3 Conductors");
   });
 });
 
@@ -1119,9 +1129,9 @@ describe("activate", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    // 4C-3 adds the intervention status-bar item; 4C-1b adds the diff one — so three are
-    // created (connection + intervention + diff).
-    expect(window.createStatusBarItem).toHaveBeenCalledTimes(3);
+    // 4C-3 adds the intervention status-bar item; 4C-1b adds the diff one; Q4.2 adds the native
+    // fleet-glance one — so four are created (connection + intervention + diff + fleet).
+    expect(window.createStatusBarItem).toHaveBeenCalledTimes(4);
     const statusBar = window.createStatusBarItem.mock.results[0]?.value as {
       text: string;
       show: () => void;
@@ -1164,9 +1174,9 @@ describe("activate", () => {
       expect.any(Function),
     );
     // registerConductor's 11 (Q0.4: no sidebar webview view) + the Command Center panel +
-    // N2 sessions tree view + refresh command + tree provider + the diff/intervention bars +
-    // managers = 20. (Down one from before: the sidebar Fleet webview-view registration is gone.)
-    expect(subscriptions).toHaveLength(20);
+    // N2 sessions tree view + refresh command + tree provider + the connection/intervention/diff
+    // status bars + Q4.2 native fleet bar + the WS-stop wrappers = 21. (Q4.2 added the fleet bar.)
+    expect(subscriptions).toHaveLength(21);
   });
 
   it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {
