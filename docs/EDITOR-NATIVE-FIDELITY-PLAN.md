@@ -109,5 +109,20 @@ görüntülerine dayan.
   migration CANLI conductor-PG'ye deploy'da uygulanır = **kullanıcı ops adımı** (ben canlı-PG'ye DOKUNMADIM;
   editör 404→bounded fallback olduğundan deploy-öncesi güvenli); (b) deploy sonrası kullanıcı görsel capstone
   (gerçek task diff tam-dosya native).
-- **SIRADAKİ: P3 agentic/uyum** (tree `view/item/context` menüleri + keybinding seti + context-key/when + Welcome
-  doğrula). Editör-only, hafif, backend yok. Her faz GERÇEK fork runtime + kullanıcı onayı.
+- **P3 ✅ SEVK EDİLDİ — agentic tree menüleri + context-key + keybinding** (develop `7214bee`, **CI 3-job
+  YEŞİL**; ADR-0042). Editör-only: (1) `view/item/context` — proje item'ı Approve/Pause/Resume/Abort, task item'ı
+  Open Session/Open Diff; (2) context-aware komutlar (`runControl` preselected proje → context menü quick-pick'siz;
+  palette list+pick korunur; yeni `conductor.openTaskDiff`; `openSession` hem tree-click hem node çözer —
+  `nodeProjectId`/`nodeTaskRef` pure helper'lar); (3) `conductor.connected` context-key (setContext) → keybinding'leri
+  (showDiff ⌘⌥D, refresh ⌘⌥R) koşullar; (4) arg-gerektiren komutlar palette'te `when:false`. **Welcome:** 0003
+  mekanizması DOĞRU; "yine göründü"=ortam → fork-runtime re-check (kod değişmedi). **Doğrulama:** editör gate (vitest
+  242/3) + **electron smoke YEŞİL** — **smoke GERÇEK bulgu yakaladı (mocked-gate kaçırdı):** menü
+  `conductor.openSession`'a referans verdi ama `contributes.commands`'ta deklare değildi→eklendi. backend/web DOKUNULMADI.
+
+## FAZ-P İŞLEVSEL TAMAM (2026-06-22)
+- **P1 (tema, `1796144`) + P2a (native diff, `a846dc9`) + P2b (full-file diff, `bc9eb23`) + P3 (agentic, `7214bee`)
+  — hepsi CI 3-job YEŞİL.** Kullanıcının 3 feedback'i (tema · diff · agentic) karşılandı. Hepsi additive; web/src +
+  frozen StateStore + KindDiff event + canlı-PG ben-tarafından DOKUNULMADI; token disiplini DONMUŞ.
+- **KALAN (yalnız kullanıcı, async):** (a) P2b `00008` migration'ı canlı conductor-PG'ye deploy (ArgoCD/goose;
+  editör 404→bounded fallback olduğundan deploy-öncesi güvenli); (b) fork rebuild/inject + GÖRSEL CAPSTONE'lar
+  (tema light/dark · native diff · full-file diff · sağ-tık agentic) + **KULLANICI ONAYI** (kabul barı §4).
