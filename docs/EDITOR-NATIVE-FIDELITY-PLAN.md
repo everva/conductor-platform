@@ -78,7 +78,16 @@ Yeni ADR'ler (theme-tokens, native-diff-source). Canlı optiway/xirigo'ya DOKUNM
 KULLANMA. **UYDURMA YOK** — gerçek Devin + native git-diff + gerçek fork runtime + kullanıcı ekran-
 görüntülerine dayan.
 
-## DURUM (2026-06-22) — PLAN HAZIR
+## DURUM (2026-06-22)
 - N0–N5 + CSS-fix CANLI + CI-yeşil (develop `321a627`, fork `5b67cbc`). Native layout gerçek fork'ta çalışıyor.
-- **SIRADAKİ: önce TAM eksikler denetimi (§2 genişlet) → P1 tema → P2 native diff → P3 agentic/uyum.**
-  Her faz GERÇEK fork runtime KENDİM + kullanıcı görsel onayı. P2 backend = frozen-additive.
+- **Eksikler denetimi TAMAM** (§2 kod'a-dayalı doğrulandı: tema `--vscode-*`=0 · diff unified-text `vscode.diff`
+  değil · agentic `view/item/context`+keybinding+context-key yok). Kullanıcı **P1**'i ilk faz seçti.
+- **P1 ✅ SEVK EDİLDİ — VS Code tema köprüsü** (develop `1796144`, **CI 3-job YEŞİL**: Go + web cockpit
+  [e2e dahil] + editor). ADR-0039. `editor/webview/theme-vscode.css`: chrome token'ları (`--bg`/`--surface-*`/
+  `--text-*`/`--border-*` color-mix/`--font-*`/`--focus`/scrollbar) → `var(--vscode-…, web-fallback)`; main.tsx'te
+  EN SONA import (cascade kazanır); marka KORUNDU; **web/src + Go DOKUNULMADI** (web App byte-aynı). Doğrulama:
+  editör gate (vitest 206/3 + bridge guard) + emitted main.css denetimi (cascade + color-mix passthrough + brand)
+  + **electron smoke YEŞİL** (VS Code 1.125.1, exit 0). **KALAN: kullanıcı görsel capstone** (fork pull+inject +
+  light/dark ekran-görüntüsü + ONAY); `--vscode-*` yalnız gerçek webview'de → görsel fork runtime'da doğrulanır.
+- **SIRADAKİ: P2 native diff** (P2a unified-patch'ten per-file `vscode.diff` reconstruct = backend'siz;
+  P2b full-file = frozen-additive backend) → **P3 agentic/uyum**. Her faz GERÇEK fork runtime + kullanıcı onayı.
