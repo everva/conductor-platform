@@ -47,10 +47,27 @@ döndürür (model karar verir; varsayma → sor).
   (scenarios-win/questions/both-prefer-scenarios/malformed-surfaces/neither→ErrNoScenarios) +
   DistillOrClarify (questions/scenarios/nil-runner/empty-conv/run-err-empty/run-err-with-output).
 
+## Sonuçlar (Q3c.2 — gateway additive `questions`; bu commit)
+- `cmd/conductor-api/control.go` `handleDistill`: distiller `ClarifyingDistiller` ise `DistillOrClarify`,
+  değilse frozen `Distill` (eski fake'ler/`stubDistiller` bu fallback'tan geçer = davranış birebir).
+  `distillResultDTO`'ya **`questions []questionDTO json:"questions,omitempty"`** (snake_case `questionDTO`/
+  `questionOptionDTO` + `toQuestionDTO`). Eşleme: scenarios→200 `{scenarios,yaml}` (questions OMIT) ·
+  clarify→200 `{scenarios:[],questions:[...]}` · `ErrNoScenarios`→**422 KORUNDU** · `ErrMalformed{Scenarios,
+  Questions}`→422 · diğer→502 · nil→501. Conversation loglanmaz.
+- **Entegrasyon bulgusu + düzeltme:** `*CommandDistiller` HER ZAMAN `ClarifyingDistiller`'ı implement eder
+  (method-set), bu yüzden `NewCommandDistillerWithRunner` (distill-only) ile kurulu distiller de gateway'in
+  type-assert'inden geçer → `DistillOrClarify` "no clarify runner"→502 ile mevcut `TestDistillRoundTripViaRunnerStub`'ı
+  kırdı. **FIX:** `DistillOrClarify` clarifyRun yoksa **distill runner'a graceful-degrade** eder (scenarios
+  üretir, asla questions). Böylece her constructor için tutarlı bir ClarifyingDistiller; gateway sürprizsiz
+  type-assert eder. (Q3c.1 unit testi `NoRunner_Rejected` + `FallsBackToDistillRunner` olarak güncellendi.)
+- **Doğrulama:** Go gate GREEN (build+test+vet+**golangci 0**+gofmt) + **`-race`** (intake+conductor-api) +
+  **GERÇEK-PG** (`make itest` statestore+events conformance + conductor-api suite `TEST_DATABASE_URL` ile,
+  hepsi yeşil — distill yeni persistence EKLEMEZ, yalnız read-only `GetProject`). `distill_test.go`:
+  `stubClarifyingDistiller` + clarify-questions-200 (snake_case `multi_select`) + scenarios-200-omits-questions
+  (frozen-additive byte-kanıtı) + no-scenarios-422 + malformed-questions-422 + clarify-via-runner-stub
+  (GERÇEK CommandDistiller + ParseOutcome). Mevcut 11 distill testi DEĞİŞMEDEN geçer (legacy fallback kanıtı).
+
 ## Kalan (sonraki commitler)
-- **Q3c.2** gateway: `handleDistill` `ClarifyingDistiller` ise `DistillOrClarify`; `distillResponse`'a
-  ADDITIVE `questions` alanı (boşsa eski `{scenarios,yaml}` birebir; LLM hiçbir şey vermezse 422 KORU);
-  `control_test.go` scenarios/questions/422/501 + GERÇEK-PG conformance.
 - **Q3c.3** web: `types.questions?` + `QuestionCard.tsx` (CC-tarzı chip + option + "Other" + multiSelect) +
   `IntakeChat` soru-turu → cevap → re-distill; web gate + Playwright e2e (KENDİM) + editör gate + electron smoke.
 - **Q3c.4** (ops.) streaming + fork re-inject (re-sign + `open -n`) + görsel capstone + kullanıcı onayı.

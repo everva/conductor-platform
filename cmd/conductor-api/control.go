@@ -177,12 +177,16 @@ func (s *apiServer) handleIntake(w http.ResponseWriter, r *http.Request) {
 // the EXISTING POST /projects/{id}/intake accepts verbatim, so the human approve
 // step is just re-POSTing that YAML.
 //
-// Honest, never-fake-green mapping of the distiller's outcome:
-//   - success                       → 200 {"scenarios":[...],"yaml":"..."}
-//   - intake.ErrNoScenarios         → 422 (the model gave nothing usable)
-//   - intake.ErrMalformedScenarios  → 422 (a block was found but did not validate)
-//   - any other (runner/exec) error → 502 (never leaking command/secret details)
-//   - nil distiller (misconfigured) → 501
+// When the wired distiller implements the clarifying seam (ADR-0047) it may instead
+// return SPECIFIC clarifying questions (CC AskUserQuestion) when the conversation is
+// ambiguous, rather than guessing — the additive `questions` field. Honest,
+// never-fake-green mapping of the distiller's outcome:
+//   - scenarios distilled           → 200 {"scenarios":[...],"yaml":"..."}
+//   - clarification needed           → 200 {"scenarios":[],"questions":[...]}
+//   - intake.ErrNoScenarios          → 422 (the model gave nothing usable)
+//   - intake.ErrMalformed{Scenarios,Questions} → 422 (a block was found but invalid)
+//   - any other (runner/exec) error  → 502 (never leaking command/secret details)
+//   - nil distiller (misconfigured)  → 501
 //
 // The conversation is NEVER logged or echoed (it may carry sensitive context).
 func (s *apiServer) handleDistill(w http.ResponseWriter, r *http.Request) {
@@ -216,14 +220,26 @@ func (s *apiServer) handleDistill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scenarios, err := s.distiller.Distill(ctx, req.Conversation)
+	// Prefer the clarifying seam when the wired distiller supports it (ADR-0047):
+	// the model may answer with SPECIFIC clarifying questions instead of guessing.
+	// A distiller that only knows the frozen Distill path falls back to it, so the
+	// scenarios-only behavior is byte-identical for legacy/fake distillers.
+	var outcome intake.DistillOutcome
+	var err error
+	if cd, ok := s.distiller.(intake.ClarifyingDistiller); ok {
+		outcome, err = cd.DistillOrClarify(ctx, req.Conversation)
+	} else {
+		var scenarios []intake.Scenario
+		scenarios, err = s.distiller.Distill(ctx, req.Conversation)
+		outcome.Scenarios = scenarios
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, intake.ErrNoScenarios):
 			writeError(w, http.StatusUnprocessableEntity, "no scenarios could be distilled from the conversation")
-		case errors.Is(err, intake.ErrMalformedScenarios):
-			// Descriptive and secret-free (validation/decode detail), never the
-			// conversation or a command line.
+		case errors.Is(err, intake.ErrMalformedScenarios), errors.Is(err, intake.ErrMalformedQuestions):
+			// Descriptive and secret-free (validation/decode detail of the model's
+			// OUTPUT), never the conversation or a command line.
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 		default:
 			// Runner/exec failure: do NOT leak command or secret details.
@@ -232,14 +248,31 @@ func (s *apiServer) handleDistill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	yamlStr, err := marshalIntakeYAML(scenarios)
+	// Clarifying turn: the model asked for more detail instead of distilling.
+	// Return the structured questions (ADDITIVE field); there are no scenarios or
+	// intake YAML to render yet. The director answers, then re-distills.
+	if len(outcome.Questions) > 0 {
+		qd := make([]questionDTO, 0, len(outcome.Questions))
+		for _, q := range outcome.Questions {
+			qd = append(qd, toQuestionDTO(q))
+		}
+		writeJSON(w, http.StatusOK, distillResultDTO{
+			Scenarios: []scenarioDTO{},
+			Questions: qd,
+		})
+		return
+	}
+
+	// Scenarios path — response shape UNCHANGED ({scenarios, yaml}); the additive
+	// `questions` field is omitted (omitempty) so legacy clients see the old body.
+	yamlStr, err := marshalIntakeYAML(outcome.Scenarios)
 	if err != nil {
 		s.serverError(w, "distill: marshal yaml", err)
 		return
 	}
 
-	dtos := make([]scenarioDTO, 0, len(scenarios))
-	for _, sc := range scenarios {
+	dtos := make([]scenarioDTO, 0, len(outcome.Scenarios))
+	for _, sc := range outcome.Scenarios {
 		dtos = append(dtos, toScenarioDTO(sc))
 	}
 	writeJSON(w, http.StatusOK, distillResultDTO{
@@ -381,9 +414,47 @@ func toScenarioDTO(s intake.Scenario) scenarioDTO {
 // PROPOSED scenarios (snake_case scenarioDTO) and the intake-ready YAML string. The
 // yaml field is exactly what POST /intake accepts, so the human approve step is a
 // verbatim re-POST of it. Nothing is persisted.
+//
+// Questions is the ADDITIVE clarifying-turn field (ADR-0047): when the distiller
+// asks for more detail instead of distilling, it carries the structured
+// AskUserQuestion-style questions and scenarios/yaml are empty. It is omitempty so a
+// scenarios response is byte-identical to the pre-ADR-0047 body for legacy clients.
 type distillResultDTO struct {
 	Scenarios []scenarioDTO `json:"scenarios"`
 	YAML      string        `json:"yaml"`
+	Questions []questionDTO `json:"questions,omitempty"`
+}
+
+// questionDTO is the snake_case JSON shape of a clarifying question (the mirror of
+// CC's AskUserQuestion, ADR-0047). As with scenarioDTO we do NOT serialize
+// intake.Question directly (it carries only yaml tags) — this pins the snake_case
+// wire contract the web client consumes.
+type questionDTO struct {
+	Question    string              `json:"question"`
+	Header      string              `json:"header"`
+	Options     []questionOptionDTO `json:"options"`
+	MultiSelect bool                `json:"multi_select"`
+}
+
+// questionOptionDTO is one offered choice of a questionDTO (label + description).
+type questionOptionDTO struct {
+	Label       string `json:"label"`
+	Description string `json:"description"`
+}
+
+// toQuestionDTO maps an intake.Question onto the snake_case wire shape, non-nilling
+// the options slice so it encodes as [] not null.
+func toQuestionDTO(q intake.Question) questionDTO {
+	opts := make([]questionOptionDTO, 0, len(q.Options))
+	for _, o := range q.Options {
+		opts = append(opts, questionOptionDTO{Label: o.Label, Description: o.Description})
+	}
+	return questionDTO{
+		Question:    q.Question,
+		Header:      q.Header,
+		Options:     opts,
+		MultiSelect: q.MultiSelect,
+	}
 }
 
 // marshalIntakeYAML renders the distilled scenarios into the EXACT multi-document

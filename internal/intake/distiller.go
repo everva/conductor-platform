@@ -107,14 +107,24 @@ func (d *CommandDistiller) Distill(ctx context.Context, conversation string) ([]
 // output is parsed by ParseOutcome (which keeps the ErrNoScenarios sentinel for the
 // "nothing usable" case so the gateway's 422 mapping is unchanged). It is ADDITIVE:
 // the frozen Distill path above is not touched.
+//
+// When no clarify runner is configured (a distiller built only for the frozen
+// Distill path, e.g. via NewCommandDistillerWithRunner) it gracefully DEGRADES to the
+// distill runner: such a distiller never emits questions but still distills
+// scenarios. This keeps *CommandDistiller a coherent ClarifyingDistiller for every
+// constructor, so the gateway can type-assert the seam without surprise.
 func (d *CommandDistiller) DistillOrClarify(ctx context.Context, conversation string) (DistillOutcome, error) {
-	if d.clarifyRun == nil {
-		return DistillOutcome{}, errors.New("intake: distiller has no clarify runner configured")
+	runner := d.clarifyRun
+	if runner == nil {
+		runner = d.run
+	}
+	if runner == nil {
+		return DistillOutcome{}, errors.New("intake: distiller has no runner configured")
 	}
 	if strings.TrimSpace(conversation) == "" {
 		return DistillOutcome{}, errors.New("intake: distiller: empty conversation")
 	}
-	stdout, runErr := d.clarifyRun(ctx, conversation)
+	stdout, runErr := runner(ctx, conversation)
 	if runErr != nil && len(strings.TrimSpace(string(stdout))) == 0 {
 		return DistillOutcome{}, fmt.Errorf("%w: %v", ErrNoScenarios, runErr)
 	}

@@ -24,6 +24,23 @@ func (d stubDistiller) Distill(_ context.Context, _ string) ([]intake.Scenario, 
 	return d.scenarios, d.err
 }
 
+// stubClarifyingDistiller is a fake that implements the ADR-0047 ClarifyingDistiller
+// seam (DistillOrClarify) in addition to Distill, so handleDistill's type-assert
+// selects the clarifying path. Distill returns a sentinel error to prove it is NOT
+// the method exercised when DistillOrClarify is available.
+type stubClarifyingDistiller struct {
+	outcome intake.DistillOutcome
+	err     error
+}
+
+func (d stubClarifyingDistiller) Distill(_ context.Context, _ string) ([]intake.Scenario, error) {
+	return nil, errors.New("stubClarifyingDistiller: Distill must not be called when DistillOrClarify exists")
+}
+
+func (d stubClarifyingDistiller) DistillOrClarify(_ context.Context, _ string) (intake.DistillOutcome, error) {
+	return d.outcome, d.err
+}
+
 // distillServer builds an apiServer over a fresh in-memory store with the given
 // distiller injected (the test seam — no real claude), the fixed token + clock.
 func distillServer(d intake.Distiller) (*apiServer, statestore.StateStore) {
@@ -280,6 +297,137 @@ func TestDistillRequiresAuth(t *testing.T) {
 	rec = doBody(t, s, http.MethodPost, "/projects/proj-x/distill", "Bearer wrong", `{"conversation":"x"}`)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("wrong-token status = %d, want 401", rec.Code)
+	}
+}
+
+// sampleQuestions is a valid two-option clarifying question (ADR-0047).
+func sampleQuestions() []intake.Question {
+	return []intake.Question{
+		{
+			Question: "Which datastore should the service use?",
+			Header:   "Datastore",
+			Options: []intake.QuestionOption{
+				{Label: "Postgres", Description: "Relational, the platform default."},
+				{Label: "Redis", Description: "In-memory key-value cache."},
+			},
+		},
+	}
+}
+
+// TestDistillClarifyingQuestions200 proves the clarifying seam (ADR-0047): an
+// ambiguous conversation yields 200 with the structured `questions` field (CC
+// AskUserQuestion), snake_case, and no scenarios/yaml.
+func TestDistillClarifyingQuestions200(t *testing.T) {
+	s, store := distillServer(stubClarifyingDistiller{outcome: intake.DistillOutcome{Questions: sampleQuestions()}})
+	mustCreate(t, store.CreateProject(context.Background(), statestore.Project{ID: "proj-q", Repo: "owner/q", BaseBranch: "develop"}))
+
+	rec := doBody(t, s, http.MethodPost, "/projects/proj-q/distill", bearer(),
+		`{"conversation":"build me something with a database, not sure which"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	// snake_case wire contract: multi_select (not MultiSelect), header present.
+	if body := rec.Body.String(); !strings.Contains(body, `"multi_select"`) || strings.Contains(body, `"MultiSelect"`) {
+		t.Fatalf("questions not snake_case: %s", body)
+	}
+
+	var res distillResultDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(res.Questions) != 1 {
+		t.Fatalf("questions = %+v, want 1", res.Questions)
+	}
+	q := res.Questions[0]
+	if q.Header != "Datastore" || len(q.Options) != 2 || q.Options[0].Label != "Postgres" || q.Options[0].Description == "" {
+		t.Fatalf("unexpected question: %+v", q)
+	}
+	if len(res.Scenarios) != 0 || res.YAML != "" {
+		t.Fatalf("clarifying turn must carry no scenarios/yaml: %+v / %q", res.Scenarios, res.YAML)
+	}
+}
+
+// TestDistillClarifyingScenarios200OmitsQuestions proves the scenarios response is
+// byte-compatible through the clarifying seam: the additive `questions` field is
+// OMITTED (omitempty), so a legacy client sees the exact pre-ADR-0047 body.
+func TestDistillClarifyingScenarios200OmitsQuestions(t *testing.T) {
+	s, store := distillServer(stubClarifyingDistiller{outcome: intake.DistillOutcome{Scenarios: sampleScenarios()}})
+	mustCreate(t, store.CreateProject(context.Background(), statestore.Project{ID: "proj-s", Repo: "owner/s", BaseBranch: "develop"}))
+
+	rec := doBody(t, s, http.MethodPost, "/projects/proj-s/distill", bearer(),
+		`{"conversation":"build a backend that does two things"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); strings.Contains(body, `"questions"`) {
+		t.Fatalf("scenarios response must omit the questions field: %s", body)
+	}
+	var res distillResultDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(res.Scenarios) != 2 || res.YAML == "" {
+		t.Fatalf("scenarios path through clarifying seam broke: %+v / %q", res.Scenarios, res.YAML)
+	}
+}
+
+// TestDistillClarifyingNoScenarios422 proves the never-fake-green 422 is preserved
+// on the clarifying seam (the model produced neither scenarios nor questions).
+func TestDistillClarifyingNoScenarios422(t *testing.T) {
+	s, store := distillServer(stubClarifyingDistiller{err: fmt.Errorf("%w: nothing", intake.ErrNoScenarios)})
+	mustCreate(t, store.CreateProject(context.Background(), statestore.Project{ID: "proj-q", Repo: "owner/q", BaseBranch: "develop"}))
+
+	rec := doBody(t, s, http.MethodPost, "/projects/proj-q/distill", bearer(), `{"conversation":"vague"}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestDistillClarifyingMalformedQuestions422 proves a malformed questions block maps
+// to 422 (symmetry with malformed scenarios).
+func TestDistillClarifyingMalformedQuestions422(t *testing.T) {
+	s, store := distillServer(stubClarifyingDistiller{err: fmt.Errorf("%w: too few options", intake.ErrMalformedQuestions)})
+	mustCreate(t, store.CreateProject(context.Background(), statestore.Project{ID: "proj-q", Repo: "owner/q", BaseBranch: "develop"}))
+
+	rec := doBody(t, s, http.MethodPost, "/projects/proj-q/distill", bearer(), `{"conversation":"ambiguous"}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestDistillClarifyViaRunnerStub proves the clarifying path end-to-end through the
+// REAL CommandDistiller wired to a STUB clarify runner emitting a fenced QUESTIONS
+// block (exercising ParseOutcome + DistillOrClarify; still no real claude).
+func TestDistillClarifyViaRunnerStub(t *testing.T) {
+	const stdout = `The request is ambiguous; I need to clarify first.
+
+<<<QUESTIONS
+questions:
+  - question: "Which datastore should the service use?"
+    header: "Datastore"
+    multi_select: false
+    options:
+      - label: "Postgres"
+        description: "Relational, the platform default."
+      - label: "Redis"
+        description: "In-memory key-value cache."
+QUESTIONS>>>
+`
+	runner := func(_ context.Context, _ string) ([]byte, error) { return []byte(stdout), nil }
+	s, store := distillServer(intake.NewClarifyingDistillerWithRunner(runner))
+	mustCreate(t, store.CreateProject(context.Background(), statestore.Project{ID: "proj-z", Repo: "owner/z", BaseBranch: "develop"}))
+
+	rec := doBody(t, s, http.MethodPost, "/projects/proj-z/distill", bearer(), `{"conversation":"build a database thing"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var res distillResultDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(res.Questions) != 1 || res.Questions[0].Header != "Datastore" || len(res.Questions[0].Options) != 2 {
+		t.Fatalf("questions = %+v, want single Datastore question with 2 options", res.Questions)
 	}
 }
 

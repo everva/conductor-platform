@@ -226,11 +226,24 @@ func TestDistillOrClarify_Scenarios(t *testing.T) {
 	}
 }
 
-func TestDistillOrClarify_NilClarifyRunner_Rejected(t *testing.T) {
-	// A distiller built only for the frozen Distill path has no clarify runner.
-	d := NewCommandDistillerWithRunner(stubRunner(validDistillerOutput, nil))
+func TestDistillOrClarify_NoRunner_Rejected(t *testing.T) {
+	// A distiller with NEITHER runner configured cannot run at all.
+	d := &CommandDistiller{}
 	if _, err := d.DistillOrClarify(context.Background(), "x"); err == nil {
-		t.Fatal("expected error when clarify runner is unconfigured")
+		t.Fatal("expected error when no runner is configured")
+	}
+}
+
+func TestDistillOrClarify_FallsBackToDistillRunner(t *testing.T) {
+	// No clarify runner but a distill runner: DistillOrClarify degrades to the
+	// frozen scenarios-only behavior (it never emits questions).
+	d := NewCommandDistillerWithRunner(stubRunner(validDistillerOutput, nil))
+	out, err := d.DistillOrClarify(context.Background(), "we need an in-memory state store")
+	if err != nil {
+		t.Fatalf("clarify fallback: %v", err)
+	}
+	if len(out.Scenarios) != 1 || len(out.Questions) != 0 {
+		t.Fatalf("expected scenarios via distill-runner fallback, got: %+v", out)
 	}
 }
 
