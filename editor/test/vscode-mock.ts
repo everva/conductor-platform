@@ -147,11 +147,11 @@ export const commands = {
   registerCommand: vi
     .fn<(command: string, callback: (...args: unknown[]) => unknown) => Disposable>()
     .mockImplementation(makeDisposable),
-  // 4C-3: the intervention notification's "Open Conductor" action reveals the activity-bar
-  // container by running the built-in `workbench.view.extension.conductor` command. Resolves
-  // undefined by default; tests assert it was called with the reveal command id.
+  // 4C-3: reveals the activity-bar container via `workbench.view.extension.conductor`.
+  // P2a: also opens a native diff via the built-in `vscode.diff` (left, right, title, options).
+  // Variadic so both call shapes record; resolves undefined by default. No token flows here.
   executeCommand: vi
-    .fn<(command: string) => Thenable<unknown>>()
+    .fn<(command: string, ...args: unknown[]) => Thenable<unknown>>()
     .mockResolvedValue(undefined),
 };
 

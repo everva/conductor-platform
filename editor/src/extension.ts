@@ -30,6 +30,7 @@ import { wsConnector } from "./bridge/wsConnector";
 import { ControlClient, ControlListError, type ControlAction } from "./controlClient";
 import { InterventionNotifier, type Intervention } from "./notifier";
 import { DiffObserver, type TaskDiff } from "./diffObserver";
+import { reconstructDiffFiles } from "./diffReconstruct";
 import { FleetReadClient } from "./fleetReadClient";
 import { SessionsTreeProvider, SESSIONS_VIEW_ID } from "./sessionsTree";
 
@@ -171,6 +172,11 @@ export interface VscodeApi {
 export interface DiffVscodeApi {
   readonly commands: {
     registerCommand(command: string, callback: (...args: unknown[]) => unknown): vscode.Disposable;
+    // P2a: open a NATIVE diff editor via the built-in `vscode.diff` command
+    // (left, right, title, options). Variadic so the real vscode + the mock both satisfy it;
+    // the return is ignored (the flow only awaits it). Carries no token (the URIs are
+    // `conductor-diff:` virtual docs served from the token-free store).
+    executeCommand(command: string, ...args: unknown[]): Thenable<unknown>;
   };
   readonly window: {
     showInformationMessage(message: string): Thenable<string | undefined>;
@@ -721,66 +727,152 @@ export function renderDiffDocument(taskDiff: TaskDiff): string {
 }
 
 /**
- * One retained diff in the {@link DiffStore}: enough to (a) serve the content provider and
- * (b) label a quick-pick item. `uri` is the stable string key; `task` + `fileCount` build the
- * quick-pick label. Token-free (derived from a TaskDiff).
+ * One changed file's reconstruction in a {@link StoredDiff} (P2a). `before`/`after` are the
+ * hunk-scoped base/modified text (from {@link reconstructDiffFiles}); `diffable` is false for
+ * a binary file or a pure rename (nothing to render side-by-side → the unified fallback is
+ * used). Token-free (derived from the patch).
+ */
+export interface StoredDiffFile {
+  path: string;
+  before: string;
+  after: string;
+  diffable: boolean;
+}
+
+/**
+ * One retained diff in the {@link DiffStore}: enough to (a) serve the content provider both the
+ * per-file before/after sides (native `vscode.diff`) AND the unified fallback doc, and (b) label
+ * a quick-pick. `n` is the monotonic id embedded in every URI; `uri` is the unified-fallback URI
+ * (kept for back-compat — the status-bar/intervention paths reference it). Token-free.
  */
 export interface StoredDiff {
+  n: number;
   uri: string;
   project: string;
   task: string;
   fileCount: number;
-  content: string;
+  files: StoredDiffFile[];
+  unified: string;
+}
+
+/** Builds the unified-fallback `conductor-diff:` URI for a diff `n` (ends in `.diff` so VS Code
+ * applies the `diff` language to the fallback document). */
+export function diffUnifiedUri(n: number): string {
+  return `${DIFF_SCHEME}:/${n}/unified.diff`;
+}
+
+/** Builds a per-file SIDE `conductor-diff:` URI (P2a). The path ends in the real file path so
+ * VS Code infers the language (TS/JS/… highlighting) on each side of the native diff; `n` +
+ * `fileIdx` + `side` locate the content. Each path segment is encoded so odd names can't break
+ * the URI (lookup never depends on the path — only on n/fileIdx/side). */
+export function diffSideUri(n: number, fileIdx: number, side: "before" | "after", path: string): string {
+  const encodedPath = path
+    .split("/")
+    .map((seg) => encodeURIComponent(seg))
+    .join("/");
+  return `${DIFF_SCHEME}:/${n}/file/${fileIdx}/${side}/${encodedPath}`;
+}
+
+/** A parsed `conductor-diff:` URI: the unified fallback doc, or one side of one file. */
+type ParsedDiffUri =
+  | { kind: "unified"; n: number }
+  | { kind: "side"; n: number; fileIdx: number; side: "before" | "after" };
+
+/** Parses a `conductor-diff:` URI string back to {@link ParsedDiffUri}, or undefined if it isn't
+ * one we minted. Tolerant: an unknown/legacy/garbage URI (NaN id, wrong shape) → undefined →
+ * the content provider serves the evicted placeholder. */
+export function parseDiffUri(uri: string): ParsedDiffUri | undefined {
+  const prefix = `${DIFF_SCHEME}:`;
+  if (!uri.startsWith(prefix)) {
+    return undefined;
+  }
+  const segs = uri.slice(prefix.length).split("/").filter((s) => s.length > 0);
+  const n = Number(segs[0]);
+  if (!Number.isInteger(n)) {
+    return undefined;
+  }
+  if (segs[1] === "unified.diff") {
+    return { kind: "unified", n };
+  }
+  if (segs[1] === "file") {
+    const fileIdx = Number(segs[2]);
+    const side = segs[3];
+    if (Number.isInteger(fileIdx) && (side === "before" || side === "after")) {
+      return { kind: "side", n, fileIdx, side };
+    }
+  }
+  return undefined;
 }
 
 /**
- * A small BOUNDED store of recently-emitted diffs, keyed by their `conductor-diff:` URI
- * string. Mints a unique URI per diff from a monotonic counter (so re-diffing the same task
- * never collides with a stale document), caps the retained set at {@link DIFF_STORE_CAP}
- * (evicting the OLDEST), serves the content provider, and lists the recents (newest first)
- * for the quick-pick. No vscode runtime → unit-tested directly. Token-free by construction
- * (every entry is built from a token-free TaskDiff via {@link renderDiffDocument}).
+ * A small BOUNDED store of recently-emitted diffs, keyed by a monotonic id `n` (embedded in
+ * every URI, so re-diffing the same task never collides with a stale document). Each entry
+ * reconstructs the per-file before/after sides (P2a — for native `vscode.diff`) AND keeps the
+ * unified-text render (the fallback when a file isn't diffable). Caps the retained set at
+ * {@link DIFF_STORE_CAP} (evicting the OLDEST), serves the content provider, and lists the
+ * recents (newest first) for the quick-pick. No vscode runtime → unit-tested directly.
+ * Token-free by construction (every entry derives from a token-free TaskDiff).
  */
 export class DiffStore {
   // Insertion-ordered: Map preserves insertion order, so the first key is the oldest.
-  readonly #byUri = new Map<string, StoredDiff>();
+  readonly #byN = new Map<number, StoredDiff>();
   #counter = 0;
 
-  /** Renders + stores a diff, returning its fresh unique URI string. The path ends in
-   * `.diff` so VS Code applies the `diff` language; segments are encoded so a task id with
-   * odd characters can't break the URI. Evicts the oldest entry past the cap. */
+  /** Reconstructs + stores a diff, returning the unified-fallback URI string (the path ends in
+   * `.diff` so VS Code applies the diff language). Evicts the oldest entry past the cap. */
   add(taskDiff: TaskDiff): string {
     const n = (this.#counter += 1);
-    const uri = `${DIFF_SCHEME}:/${encodeURIComponent(taskDiff.project)}/${encodeURIComponent(
-      taskDiff.task,
-    )}/${n}.diff`;
-    this.#byUri.set(uri, {
-      uri,
+    const files: StoredDiffFile[] = reconstructDiffFiles(taskDiff.patch).map((f) => ({
+      path: f.path,
+      before: f.before,
+      after: f.after,
+      diffable: f.diffable,
+    }));
+    const entry: StoredDiff = {
+      n,
+      uri: diffUnifiedUri(n),
       project: taskDiff.project,
       task: taskDiff.task,
       fileCount: taskDiff.files.length,
-      content: renderDiffDocument(taskDiff),
-    });
+      files,
+      unified: renderDiffDocument(taskDiff),
+    };
+    this.#byN.set(n, entry);
     // Evict oldest while over the cap (normally a single eviction per add).
-    while (this.#byUri.size > DIFF_STORE_CAP) {
-      const oldest = this.#byUri.keys().next().value;
+    while (this.#byN.size > DIFF_STORE_CAP) {
+      const oldest = this.#byN.keys().next().value;
       if (oldest === undefined) {
         break;
       }
-      this.#byUri.delete(oldest);
+      this.#byN.delete(oldest);
     }
-    return uri;
+    return entry.uri;
   }
 
-  /** The rendered content for a URI, or undefined if it's unknown/evicted (the content
-   * provider maps that to a placeholder). */
+  /** The content for a `conductor-diff:` URI: the unified fallback body, or one file's before/
+   * after side (P2a), or undefined if unknown/evicted (the provider maps that to a placeholder). */
   content(uri: string): string | undefined {
-    return this.#byUri.get(uri)?.content;
+    const parsed = parseDiffUri(uri);
+    if (parsed === undefined) {
+      return undefined;
+    }
+    const entry = this.#byN.get(parsed.n);
+    if (entry === undefined) {
+      return undefined;
+    }
+    if (parsed.kind === "unified") {
+      return entry.unified;
+    }
+    const file = entry.files[parsed.fileIdx];
+    if (file === undefined) {
+      return undefined;
+    }
+    return parsed.side === "before" ? file.before : file.after;
   }
 
   /** The retained diffs, NEWEST first (the most recent is `recents()[0]`). */
   recents(): StoredDiff[] {
-    return [...this.#byUri.values()].reverse();
+    return [...this.#byN.values()].reverse();
   }
 
   /** The most-recent retained diff for a specific project/task, or undefined if none is
@@ -792,7 +884,7 @@ export class DiffStore {
 
   /** The number of retained diffs (drives the status-bar count). */
   get size(): number {
-    return this.#byUri.size;
+    return this.#byN.size;
   }
 }
 
@@ -816,16 +908,44 @@ export function makeDiffContentProvider(store: DiffStore): DiffContentProvider {
 }
 
 /**
- * Opens a stored diff (by its URI string) in a native read-only diff document: parse the
- * URI → `openTextDocument` (the content provider fills it) → `showTextDocument` (preview so
- * diffs don't stack tabs) → explicitly set the `diff` language (the `.diff` suffix already
- * does, this is belt-and-braces). Pure of the picking logic so both the status-bar click and
- * the quick-pick reuse it.
+ * Opens ONE changed file as a NATIVE diff (P2a): `vscode.diff` between the file's before/after
+ * `conductor-diff:` side URIs (the content provider fills each from the store). The diff editor
+ * gives red-green gutters, side-by-side/inline toggle, and F7 change navigation — the "native
+ * git diff / Claude Code" experience. The side URI paths end in the real file path so VS Code
+ * infers the language on each side. `column` (ViewColumn.Beside) targets the session split.
+ * Token-free (the URIs key a token-free store).
  */
-async function openDiff(api: DiffVscodeApi, uri: string, column?: vscode.ViewColumn): Promise<void> {
+async function openFileVscodeDiff(
+  api: DiffVscodeApi,
+  entry: StoredDiff,
+  file: StoredDiffFile,
+  column?: vscode.ViewColumn,
+): Promise<void> {
+  const fileIdx = entry.files.indexOf(file);
+  if (fileIdx < 0) {
+    return; // defensive: the file isn't part of this entry.
+  }
+  const left = api.Uri.parse(diffSideUri(entry.n, fileIdx, "before", file.path));
+  const right = api.Uri.parse(diffSideUri(entry.n, fileIdx, "after", file.path));
+  const title = `${file.path} (${entry.task})`;
+  // preview:true so diffs don't stack tabs; viewColumn only when a split is requested.
+  const options =
+    column === undefined ? { preview: true } : { preview: true, viewColumn: column };
+  await api.commands.executeCommand("vscode.diff", left, right, title, options);
+}
+
+/**
+ * Opens the unified-text FALLBACK document (the 4C-1b render) for a diff: used when no file is
+ * natively diffable (binary-only / pure rename / a patch dropped over budget). parse the URI →
+ * `openTextDocument` (the content provider fills it) → `showTextDocument` (preview) → set the
+ * `diff` language. Token-free.
+ */
+async function openUnifiedDiffDoc(
+  api: DiffVscodeApi,
+  uri: string,
+  column?: vscode.ViewColumn,
+): Promise<void> {
   const doc = await api.workspace.openTextDocument(api.Uri.parse(uri));
-  // N3b: a `column` (ViewColumn.Beside) targets the split beside the Command Center; without
-  // one the diff opens in the active column (the 4C-1b/4C-3 behavior, unchanged).
   await api.window.showTextDocument(
     doc,
     column === undefined ? { preview: true } : { preview: true, viewColumn: column },
@@ -834,11 +954,47 @@ async function openDiff(api: DiffVscodeApi, uri: string, column?: vscode.ViewCol
 }
 
 /**
- * The show-diff flow (4C-1b), the `conductor.showDiff` command + the diff status-bar click.
- * With several retained diffs it offers a quick-pick labelled `<task> (<n> files)` and opens
- * the chosen; with exactly one it opens it directly; with none it shows an info message. The
- * quick-pick label is index-aligned to the recents list so the pick maps back to a URI
- * (task ids aren't unique across diffs). Token-free throughout (the store is token-free).
+ * Opens a retained diff entry (P2a). The native path: one diffable file → open its `vscode.diff`
+ * directly; several → either quick-pick the file (`interactive`, the explicit show-diff command)
+ * or open the FIRST diffable file silently (`!interactive`, the deep-link session split — a
+ * deep-link must not prompt). When NO file is natively diffable (binary-only / pure rename /
+ * dropped patch) it falls back to the unified-text document so the change is still inspectable.
+ * `column` (Beside) targets the session split. Token-free.
+ */
+async function openStoredDiff(
+  api: DiffVscodeApi,
+  entry: StoredDiff,
+  interactive: boolean,
+  column?: vscode.ViewColumn,
+): Promise<void> {
+  const diffable = entry.files.filter((f) => f.diffable);
+  if (diffable.length === 0) {
+    await openUnifiedDiffDoc(api, entry.uri, column); // nothing to render side-by-side.
+    return;
+  }
+  if (diffable.length === 1 || !interactive) {
+    await openFileVscodeDiff(api, entry, diffable[0]!, column); // single, or the primary (no prompt).
+    return;
+  }
+  // Several diffable files + interactive: let the user pick which to open.
+  const labels = diffable.map((f) => f.path);
+  const picked = await api.window.showQuickPick(labels, { placeHolder: "Select a changed file" });
+  if (picked === undefined) {
+    return; // cancelled — quiet no-op.
+  }
+  const file = diffable.find((f) => f.path === picked);
+  if (file === undefined) {
+    return; // defensive: the picked label isn't one we offered.
+  }
+  await openFileVscodeDiff(api, entry, file, column);
+}
+
+/**
+ * The show-diff flow (4C-1b, P2a-native), the `conductor.showDiff` command + the diff status-bar
+ * click. With several retained diffs it first offers a quick-pick labelled `<task> (<n> files)`,
+ * then opens the chosen diff natively (a further file pick if it touches several files); with
+ * exactly one it opens it directly; with none it shows an info message. The quick-pick label is
+ * index-aligned to the recents list. Token-free throughout (the store is token-free).
  */
 export async function runShowDiff(api: DiffVscodeApi, store: DiffStore): Promise<void> {
   const recents = store.recents();
@@ -847,7 +1003,7 @@ export async function runShowDiff(api: DiffVscodeApi, store: DiffStore): Promise
     return;
   }
   if (recents.length === 1) {
-    await openDiff(api, recents[0]!.uri);
+    await openStoredDiff(api, recents[0]!, true);
     return;
   }
   const labels = recents.map((d) => diffQuickPickLabel(d));
@@ -859,7 +1015,7 @@ export async function runShowDiff(api: DiffVscodeApi, store: DiffStore): Promise
   if (idx < 0) {
     return; // defensive: the picked label isn't one we offered.
   }
-  await openDiff(api, recents[idx]!.uri);
+  await openStoredDiff(api, recents[idx]!, true);
 }
 
 /** Labels a stored diff for the quick-pick: `<task> (<n> file[s])`. Pure; token-free. */
@@ -885,7 +1041,7 @@ export async function runShowDiffForTask(
     await api.window.showInformationMessage(`No diff yet for ${project}/${task}.`);
     return;
   }
-  await openDiff(api, d.uri);
+  await openStoredDiff(api, d, true);
 }
 
 /**
@@ -894,8 +1050,8 @@ export async function runShowDiffForTask(
  * webview, column One) | native diff (column Two). QUIET: if no diff is retained for the task
  * (never emitted / evicted) it does NOTHING — unlike the intervention toast's "Open diff", a
  * deep-link's primary action is navigating the cockpit, so it must not nag with a "no diff"
- * message on every session click. `preview: true` reuses the one diff tab across clicks.
- * Token-free (the store is).
+ * message on every session click. Non-interactive: opens the PRIMARY changed file's native diff
+ * (no file prompt) — `preview: true` reuses the one diff tab across clicks. Token-free.
  */
 export async function openTaskDiffBeside(
   api: DiffVscodeApi,
@@ -908,7 +1064,7 @@ export async function openTaskDiffBeside(
   if (d === undefined) {
     return;
   }
-  await openDiff(api, d.uri, column);
+  await openStoredDiff(api, d, false, column);
 }
 
 /**

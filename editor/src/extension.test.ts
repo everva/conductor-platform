@@ -58,6 +58,9 @@ import {
   handleIntervention,
   interventionStatusText,
   makeDiffContentProvider,
+  diffSideUri,
+  diffUnifiedUri,
+  parseDiffUri,
   placeholderHtml,
   registerConductor,
   renderDiffDocument,
@@ -687,6 +690,51 @@ describe("DiffStore + content provider", () => {
     expect(recents[0]?.task).toBe("new");
     expect(recents[1]?.task).toBe("old");
   });
+
+  it("serves each file's before/after side from its per-file URI (P2a native diff)", () => {
+    const store = new DiffStore();
+    const provider = makeDiffContentProvider(store);
+    store.add(makeTaskDiff()); // n=1, file 0 = src/a.ts (before "old", after "new")
+
+    const before = provider.provideTextDocumentContent(
+      Uri.parse(diffSideUri(1, 0, "before", "src/a.ts")) as never,
+    );
+    const after = provider.provideTextDocumentContent(
+      Uri.parse(diffSideUri(1, 0, "after", "src/a.ts")) as never,
+    );
+    expect(before).toBe("old");
+    expect(after).toBe("new");
+    // The unified fallback URI still serves the rendered patch document.
+    expect(
+      provider.provideTextDocumentContent(Uri.parse(diffUnifiedUri(1)) as never),
+    ).toBe(renderDiffDocument(makeTaskDiff()));
+  });
+
+  it("yields the placeholder for an out-of-range file index", () => {
+    const store = new DiffStore();
+    const provider = makeDiffContentProvider(store);
+    store.add(makeTaskDiff());
+    expect(
+      provider.provideTextDocumentContent(Uri.parse(diffSideUri(1, 9, "before", "x")) as never),
+    ).toBe(DIFF_EVICTED_PLACEHOLDER);
+  });
+});
+
+describe("parseDiffUri / diffSideUri / diffUnifiedUri", () => {
+  it("round-trips a per-file side URI", () => {
+    const u = diffSideUri(3, 2, "after", "src/deep/file.ts");
+    expect(parseDiffUri(u)).toEqual({ kind: "side", n: 3, fileIdx: 2, side: "after" });
+  });
+
+  it("parses the unified URI", () => {
+    expect(parseDiffUri(diffUnifiedUri(5))).toEqual({ kind: "unified", n: 5 });
+  });
+
+  it("rejects a non-conductor / malformed URI (NaN id, wrong scheme)", () => {
+    expect(parseDiffUri("file:///x")).toBeUndefined();
+    expect(parseDiffUri(`${DIFF_SCHEME}:/nan/unified.diff`)).toBeUndefined();
+    expect(parseDiffUri(`${DIFF_SCHEME}:/1/bogus/0/before/x`)).toBeUndefined();
+  });
 });
 
 describe("handleDiff", () => {
@@ -746,44 +794,46 @@ describe("runShowDiff", () => {
     expect(workspace.openTextDocument).not.toHaveBeenCalled();
   });
 
-  it("opens the single diff directly (no quick-pick) in a conductor-diff document", async () => {
+  it("opens the single diff directly (no quick-pick) as a NATIVE vscode.diff", async () => {
     const store = new DiffStore();
-    const uri = store.add(makeTaskDiff());
+    store.add(makeTaskDiff()); // fixture patch → one diffable file (src/a.ts)
 
     await runShowDiff(diffApi, store);
 
     expect(window.showQuickPick).not.toHaveBeenCalled();
-    // The conductor-diff URI was opened + shown (as a preview) + given the diff language.
-    expect(workspace.openTextDocument).toHaveBeenCalledTimes(1);
-    const opened = workspace.openTextDocument.mock.calls[0]?.[0] as { path: string };
-    expect(opened.path).toBe(uri);
-    expect(window.showTextDocument).toHaveBeenCalledWith(
-      expect.objectContaining({ uri: expect.objectContaining({ path: uri }) }),
-      expect.objectContaining({ preview: true }),
-    );
-    expect(languages.setTextDocumentLanguage).toHaveBeenCalledWith(expect.any(Object), "diff");
+    // Opened natively: vscode.diff(beforeUri, afterUri, title, {preview:true}).
+    expect(commands.executeCommand).toHaveBeenCalledTimes(1);
+    const [cmd, left, right, title, opts] = commands.executeCommand.mock.calls[0]!;
+    expect(cmd).toBe("vscode.diff");
+    expect((left as { path: string }).path).toContain("/file/0/before/src/a.ts");
+    expect((right as { path: string }).path).toContain("/file/0/after/src/a.ts");
+    expect(title).toContain("src/a.ts");
+    expect(opts).toMatchObject({ preview: true });
+    // The native path doesn't fall back to a text document for a diffable file.
+    expect(workspace.openTextDocument).not.toHaveBeenCalled();
   });
 
-  it("opens the MOST-RECENT diff when one is picked from the quick-pick (>1 diffs)", async () => {
+  it("opens the MOST-RECENT diff natively when one is picked from the quick-pick (>1 diffs)", async () => {
     const store = new DiffStore();
     store.add(makeTaskDiff({ task: "older" }));
-    const newestUri = store.add(makeTaskDiff({ task: "newer" }));
+    store.add(makeTaskDiff({ task: "newer" }));
     // The newest is listed first; the label is "<task> (<n> files)".
     window.showQuickPick.mockResolvedValueOnce("newer (2 files)");
 
     await runShowDiff(diffApi, store);
 
-    // The quick-pick offered both, newest first.
+    // The quick-pick offered both diffs, newest first.
     expect(window.showQuickPick).toHaveBeenCalledTimes(1);
     const labels = window.showQuickPick.mock.calls[0]?.[0] as string[];
     expect(labels[0]).toContain("newer");
     expect(labels[1]).toContain("older");
-    // The picked (newest) URI was opened.
-    const opened = workspace.openTextDocument.mock.calls[0]?.[0] as { path: string };
-    expect(opened.path).toBe(newestUri);
+    // The picked (newest) diff opened natively — its single diffable file → vscode.diff whose
+    // title names the newest task.
+    const call = commands.executeCommand.mock.calls.find((c) => c[0] === "vscode.diff");
+    expect(call?.[3]).toContain("newer");
   });
 
-  it("is a quiet no-op when the quick-pick is cancelled (>1 diffs)", async () => {
+  it("is a quiet no-op when the diff quick-pick is cancelled (>1 diffs)", async () => {
     const store = new DiffStore();
     store.add(makeTaskDiff({ task: "a" }));
     store.add(makeTaskDiff({ task: "b" }));
@@ -791,8 +841,52 @@ describe("runShowDiff", () => {
 
     await runShowDiff(diffApi, store);
 
+    expect(commands.executeCommand).not.toHaveBeenCalled();
     expect(workspace.openTextDocument).not.toHaveBeenCalled();
-    expect(window.showTextDocument).not.toHaveBeenCalled();
+  });
+
+  it("quick-picks the FILE when a diff touches several, opening the chosen natively", async () => {
+    const store = new DiffStore();
+    const twoFilePatch =
+      "diff --git a/x.ts b/x.ts\n@@ -1 +1 @@\n-a\n+b\n" +
+      "diff --git a/y.ts b/y.ts\n@@ -1 +1 @@\n-c\n+d\n";
+    store.add(
+      makeTaskDiff({
+        files: [
+          { path: "x.ts", status: "M", additions: 1, deletions: 1 },
+          { path: "y.ts", status: "M", additions: 1, deletions: 1 },
+        ],
+        patch: twoFilePatch,
+      }),
+    );
+    window.showQuickPick.mockResolvedValueOnce("y.ts");
+
+    await runShowDiff(diffApi, store);
+
+    // One retained diff → no diff-level pick; two diffable files → a FILE pick.
+    expect(window.showQuickPick).toHaveBeenCalledTimes(1);
+    const labels = window.showQuickPick.mock.calls[0]?.[0] as string[];
+    expect(labels).toEqual(["x.ts", "y.ts"]);
+    const call = commands.executeCommand.mock.calls.find((c) => c[0] === "vscode.diff");
+    expect((call?.[1] as { path: string }).path).toContain("/file/1/before/y.ts"); // y.ts = index 1
+    expect(call?.[3]).toContain("y.ts");
+  });
+
+  it("falls back to the unified document when no file is natively diffable (binary)", async () => {
+    const store = new DiffStore();
+    store.add(
+      makeTaskDiff({
+        files: [{ path: "img.png", status: "M", additions: 0, deletions: 0 }],
+        patch: "diff --git a/img.png b/img.png\nBinary files a/img.png and b/img.png differ\n",
+      }),
+    );
+
+    await runShowDiff(diffApi, store);
+
+    // Nothing to render side-by-side → the unified text document is shown instead of vscode.diff.
+    expect(commands.executeCommand).not.toHaveBeenCalled();
+    expect(workspace.openTextDocument).toHaveBeenCalledTimes(1);
+    expect(languages.setTextDocumentLanguage).toHaveBeenCalledWith(expect.any(Object), "diff");
   });
 });
 
@@ -810,20 +904,17 @@ describe("DiffStore.latestForTask (4C-3 take over)", () => {
 });
 
 describe("runShowDiffForTask (4C-3 take over)", () => {
-  it("opens the named task's most-recent diff (not a quick-pick of everything)", async () => {
+  it("opens the named task's most-recent diff natively (not a quick-pick of everything)", async () => {
     const store = new DiffStore();
     store.add(makeTaskDiff({ project: "alpha", task: "other" }));
-    const target = store.add(makeTaskDiff({ project: "alpha", task: "t-1" }));
+    store.add(makeTaskDiff({ project: "alpha", task: "t-1" }));
 
     await runShowDiffForTask(diffApi, store, "alpha", "t-1");
 
+    // The target has a single diffable file → opens directly (no file pick), title names t-1.
     expect(window.showQuickPick).not.toHaveBeenCalled();
-    const opened = workspace.openTextDocument.mock.calls[0]?.[0] as { path: string };
-    expect(opened.path).toBe(target);
-    expect(window.showTextDocument).toHaveBeenCalledWith(
-      expect.objectContaining({ uri: expect.objectContaining({ path: target }) }),
-      expect.objectContaining({ preview: true }),
-    );
+    const call = commands.executeCommand.mock.calls.find((c) => c[0] === "vscode.diff");
+    expect(call?.[3]).toContain("t-1");
   });
 
   it("shows a clear info message (no stale diff) when the task has none retained", async () => {
@@ -838,19 +929,20 @@ describe("runShowDiffForTask (4C-3 take over)", () => {
 });
 
 describe("openTaskDiffBeside (N3b session=workspace split)", () => {
-  it("opens the task's latest diff BESIDE the command center (ViewColumn.Beside)", async () => {
+  it("opens the task's latest diff natively BESIDE the command center (ViewColumn.Beside)", async () => {
     const store = new DiffStore();
     store.add(makeTaskDiff({ project: "alpha", task: "t-1" }));
     await openTaskDiffBeside(diffApi, store, "alpha", "t-1", ViewColumn.Beside);
-    expect(window.showTextDocument).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ preview: true, viewColumn: ViewColumn.Beside }),
-    );
+    // Native vscode.diff opened in the Beside column (no file prompt — deep-link opens the primary).
+    const call = commands.executeCommand.mock.calls.find((c) => c[0] === "vscode.diff");
+    expect(call?.[4]).toMatchObject({ preview: true, viewColumn: ViewColumn.Beside });
+    expect(window.showQuickPick).not.toHaveBeenCalled();
   });
 
   it("is a quiet no-op when no diff is retained for the task (no open, no message)", async () => {
     const store = new DiffStore();
     await openTaskDiffBeside(diffApi, store, "alpha", "absent", ViewColumn.Beside);
+    expect(commands.executeCommand).not.toHaveBeenCalled();
     expect(window.showTextDocument).not.toHaveBeenCalled();
     expect(window.showInformationMessage).not.toHaveBeenCalled();
   });
