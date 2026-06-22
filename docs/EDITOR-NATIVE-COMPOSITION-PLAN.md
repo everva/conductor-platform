@@ -194,6 +194,30 @@ Frozen-additive (ADR-0021), token DONMUŞ, UYDURMA/fake-green YOK.
 **Q5 — Capstone**: re-inject fork + electron smoke + canlı demo (:8099) görsel + **sabah dürüst özet** (ne bitti/CI-yeşil,
 ne kaldı). Kullanıcı görsel onayı.
 
-## DURUM (2026-06-22) — OTONOM YÜRÜTME BAŞLADI
-- Faz-P CANLI + CI-yeşil. Kullanıcı: **"çok detaylı plan + otonom, sabaha kadar bitir, task-task."** → §9 sırasıyla
-  yürütülüyor; her doğrulanmış task commit + CI-yeşil. Sabah dürüst kapanış özeti.
+## DURUM (2026-06-22) — OTONOM YÜRÜTME TAMAMLANDI (Q3c hariç, dürüst)
+Kullanıcı: **"çok detaylı plan + otonom, sabaha kadar bitir, task-task."** → §9 sırasıyla yürütüldü; HER
+doğrulanmış task commit + CI 3-job yeşil (`gh run view`). Sevk edilen (develop):
+- **Q0.1-0.3 `4fbffe2`** — host-sahipli `select{project,task?}` kanalı (navigate-session genelleştirildi); ADR-0044.
+- **Q0.4 `c9206dd`** — sidebar webview cockpit KALDIRILDI → tek cockpit/WS → **offline/live BUG FIX** (−229 satır).
+- **Q1 `924e9a4`** — seçim-güdümlü board (tree proje-click→`select`→board kapsanır + "Show all") — **kullanıcı #1**.
+- **Q4.1 `f190aab`** — SessionView dürüst empty-states (spec "Loading…" sonsuz BUG FIX); DÜRÜST BULGU: verdict/diff
+  backfill ZATEN çalışıyordu (§2.F mistanı; demo'da 0 event=DATA boşluğu).
+- **Q4.2 `fb2117b`** — native fleet-glance status-bar ("$(server) N Conductors") — **native-feel (#4)**.
+- **Q2 `eb7e7f6`** — Events ayrı NATIVE panel (EventsWatcher backfill+WS → EventsTreeProvider, panel-container);
+  webview DEĞİL (2.bridge offline/live'ı geri getirirdi); ADR-0045 — **kullanıcı #2 + #4**.
+- **Q3a `757fb08`** — Intake KENDİ editör penceresi (`conductor.newWork`→IntakePanel; çift-mod webview
+  `data-surface=intake`; REST-only); ADR-0046 — **kullanıcı #3**. Smoke: `tabs: ["Conductor","New Work"]`.
+- **Q3b `0a1f1b7`** — Intake çok-turlu KONUŞMA (thread + bağlam-biriken `/distill` + never-fabricate-clarify +
+  plan-preview) — **kullanıcı #5**. web App + fork intake İKİSİ de konuşmalı.
+
+**5/5 kullanıcı talebi + 2 bug + native kompozisyon karşılandı.** HER task: editör gate + (paylaşılan cockpit'e
+dokununca web gate + Playwright e2e KENDİM) + GERÇEK fork electron smoke + CI 3-job yeşil. Frozen-additive
+(ADR-0021): **Go/gateway hiç DOKUNULMADI** (tüm Faz-Q editör+web; conversation client-side accumulate). Token DONMUŞ.
+
+**DÜRÜST KALANLAR (rush YOK):**
+- **Q3c** — LLM-üretimli SPESİFİK clarifying soruları + streaming. Gerektirir: backend `/distill` conversation
+  HISTORY (frozen-additive `messages` alanı) + distiller'ın scenarios-or-422 yerine bir SORU döndürmesi (Go LLM-prompt)
+  + SSE/WS streaming. Q3b "konuşmalı + clarify-as-guidance" verdi; bu derinlik backend işi (ADR-0046'da kapsamlı).
+- **Q1.3** programatik tree-highlight (CC→tree senkron; native click-highlight zaten var; reveal() getParent gerekir).
+- **Q2** seçim-filtre + event-row→session deep-link (gözlemsel panel yeterli; follow-up).
+- **Görsel capstone** — kullanıcı host'unda fork rebuild/inject + canlı gateway ile 5 yüzeyin ekran-görüntüsü + ONAY.
