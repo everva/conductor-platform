@@ -1,0 +1,21 @@
+# DRAFT recipe for optiway — commit as `.conductor/config.yaml` on the conductor/optiway
+# branch (the performer + verify gate read it from the checkout). REVIEW the gates: this
+# wires the standard turbo build/lint/test, which on a large monorepo is heavy; scope
+# them with `--filter` (e.g. ["pnpm","turbo","run","build","--filter=@optiway/api"]) for
+# faster, change-scoped gating before production use. The gate is the SOLE merge authority.
+version: 1
+stack: node-pnpm-turbo
+base_branch: conductor/optiway
+readiness:
+  ready: true
+  reason: "pnpm/turbo monorepo; gates wired to turbo build/lint/test — review + scope with --filter"
+# optiway runs on any Linux host; no special capability required for the gate.
+requires: linux
+recipe:
+  # The performer reads the task's scenario from .conductor/scenarios/<id>.yaml in the
+  # checkout (developStdin gives it the task id + scenario id + workspace path).
+  develop: ["claude", "-p"]
+  verify:
+    build: ["pnpm", "build"]
+    lint: ["pnpm", "lint"]
+    test: ["pnpm", "test"]

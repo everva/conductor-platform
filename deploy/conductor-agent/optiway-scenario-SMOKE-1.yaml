@@ -1,0 +1,17 @@
+# DRAFT first scenario for optiway — a SAFE, trivial smoke task to prove the full
+# held-for-review loop end to end with minimal risk. Commit as
+# `.conductor/scenarios/SMOKE-1.yaml` on conductor/optiway, then intake it (see README).
+# It is held-for-review: nothing merges without your approval. Reject it or replace it
+# with your real first task whenever you like.
+id: SMOKE-1
+title: "Conductor smoke — add a docs note confirming the pipeline works"
+lane: backend
+tier: T2
+deps: []
+acceptance:
+  - "Create docs/conductor-smoke.md containing exactly one line: 'Conductor pipeline verified.'"
+  - "Make NO other change. The build, lint, and test gates must stay green."
+# The hidden holdout is repo-EXTERNAL (ADR-0018). The gateway does not serve holdouts
+# yet (Faz G3), so the agent's verify runs the gates WITHOUT holdout injection; this ref
+# is recorded for transparency only.
+hidden_holdout_ref: "store://holdouts/SMOKE-1/none"

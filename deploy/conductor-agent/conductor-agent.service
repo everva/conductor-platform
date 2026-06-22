@@ -1,0 +1,34 @@
+# systemd unit for the gateway-mediated conductor host-agent (ADR-0048, Faz A/D).
+# Install on a performer host (e.g. davinci):
+#   sudo cp conductor-agent.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now conductor-agent
+#
+# Secrets (CONDUCTOR_AGENT_TOKEN, CONDUCTOR_GH_TOKEN) come from the EnvironmentFile —
+# never the command line — so they are not in the process table. The agent NEVER opens
+# Postgres; it talks only to the gateway over HTTP (tailscale).
+[Unit]
+Description=Conductor host-agent (gateway-mediated performer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust User + paths to the host's account.
+User=davinci
+WorkingDirectory=/home/davinci/conductor-agent
+EnvironmentFile=/home/davinci/conductor-agent/conductor-agent.env
+ExecStart=/home/davinci/conductor-agent/conductor-agent \
+  -gateway ${CONDUCTOR_GATEWAY} \
+  -project ${CONDUCTOR_PROJECT} \
+  -repo ${CONDUCTOR_REPO} \
+  -base ${CONDUCTOR_BASE} \
+  -recipe-dir ${CONDUCTOR_RECIPE_DIR} \
+  -capabilities ${CONDUCTOR_CAPABILITIES} \
+  -root ${CONDUCTOR_ROOT}
+Restart=always
+RestartSec=5
+# The performer subprocess can be heavy (claude + the repo build); give it room.
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
