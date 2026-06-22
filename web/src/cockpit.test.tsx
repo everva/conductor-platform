@@ -321,6 +321,33 @@ describe("cockpit barrel: FleetDashboard token-free over injected transports", (
     expect(screen.queryByRole("region", { name: "Session" })).not.toBeInTheDocument();
   });
 
+  it("a project-only selection scopes the board; Show all clears it (Q1)", async () => {
+    const fakeTransport = new FakeEventTransport();
+    render(
+      <FleetDashboard
+        token=""
+        onUnauthorized={() => {}}
+        makeClient={makeReadClient}
+        makeControlClient={makeControlClient}
+        makeIntakeClient={makeIntakeClient}
+        eventTransport={fakeTransport}
+        selection={{ project: PROJECT.id }}
+      />,
+    );
+    await flush();
+
+    // The board (default surface) is scoped to the selected project: the "Show all" clear control
+    // appears only while scoped, proving selection → selectedProjectId → board scope is wired.
+    const showAll = await screen.findByRole("button", { name: "Show all" });
+    expect(showAll).toBeInTheDocument();
+
+    // Clearing the scope removes the control (back to the full-fleet board).
+    act(() => {
+      fireEvent.click(showAll);
+    });
+    expect(screen.queryByRole("button", { name: "Show all" })).not.toBeInTheDocument();
+  });
+
   it("exposes the transport seams the fork wires (ApiClient over an injected HttpTransport)", async () => {
     // The fork's REST factory is literally `() => new ApiClient({ transport })`. Prove
     // that exact shape works token-free through the barrel's re-exported ApiClient +

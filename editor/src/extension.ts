@@ -1347,15 +1347,20 @@ export function registerConductor(
   const showDiff = api.commands.registerCommand(SHOW_DIFF_COMMAND, () => {
     void runShowDiff(api, diffStore, fetchFullDiff);
   });
-  // N0 (ADR-0036): the editor-area Command Center. A singleton WebviewPanel that reuses the
-  // SAME cockpit bundle + bridge as the Fleet view but lives in the MAIN editor area (the
-  // Devin "Command Center = default surface" model) instead of the activity-bar sidebar. Built
-  // only on the production path (a fleetConfig with extensionUri/secrets); `conductor.open`
-  // opens or reveals it. It does NOT auto-open on startup yet (that default flip is N1) and the
-  // sidebar Fleet view stays put during the transition (N2 replaces it with a native tree).
+  // N0 (ADR-0036): the editor-area Command Center — a singleton WebviewPanel hosting the cockpit
+  // in the MAIN editor area (the Devin "Command Center = default surface" model). The cockpit's
+  // ONLY mount since Q0.4. Built only on the production path (a fleetConfig with extensionUri/
+  // secrets). `conductor.open` REVEALS it (keybinding / startup / status bar — no arg), OR, when a
+  // sessions-tree project click passes a project id, SELECTS that project so the board scopes to
+  // that Conductor (Faz-Q / Q1; `select` with no task → project-only selection over the bridge).
   const commandCenter = fleetConfig ? new CommandCenterPanel(fleetConfig) : undefined;
-  const open = api.commands.registerCommand(OPEN_COMMAND, () => {
-    commandCenter?.open();
+  const open = api.commands.registerCommand(OPEN_COMMAND, (arg?: unknown) => {
+    const projectId = typeof arg === "string" ? arg : nodeProjectId(arg);
+    if (projectId !== undefined) {
+      commandCenter?.select(projectId);
+    } else {
+      commandCenter?.open();
+    }
   });
   // N3: deep-link to a session — invoked by a sessions-tree task click with [projectId, taskId].
   // Opens/reveals the Command Center and navigates its cockpit to that task's SessionView.

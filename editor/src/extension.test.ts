@@ -195,6 +195,35 @@ describe("registerConductor", () => {
     // Q0.4: NO sidebar webview view is registered any more (the cockpit lives only in the panel).
     expect(window.registerWebviewViewProvider).not.toHaveBeenCalled();
   });
+
+  it("conductor.open with a project id SELECTS it → the Command Center scopes to that project (Q1)", () => {
+    const { manager } = makeManager({});
+    const bridgeFactory = vi.fn(() => ({ attach: vi.fn(), dispose: vi.fn() }));
+    registerConductor(
+      diffApi,
+      manager,
+      "http://gw.test",
+      makeControl(),
+      new DiffStore(),
+      undefined, // fetchFullDiff (unused here)
+      makeFleetConfig({ bridgeFactory }),
+    );
+    // Grab the registered conductor.open callback and invoke it with a project id (the sessions-tree
+    // project-click path) — it must select that project on the Command Center (project-only `select`).
+    const openCb = commands.registerCommand.mock.calls.find((c) => c[0] === OPEN_COMMAND)?.[1] as (
+      arg?: unknown,
+    ) => void;
+    expect(openCb).toBeDefined();
+
+    openCb("web-shop");
+    const created = window.createWebviewPanel.mock.results[0]?.value as {
+      webview: { postMessage: ReturnType<typeof vi.fn> };
+      __fireMessage: (m: unknown) => void;
+    };
+    created.__fireMessage({ kind: "webview-ready" });
+    // Project-only select (no `task`) → the board scopes to web-shop.
+    expect(created.webview.postMessage).toHaveBeenCalledWith({ kind: "select", project: "web-shop" });
+  });
 });
 
 describe("runConnect", () => {

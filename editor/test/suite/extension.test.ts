@@ -146,4 +146,9 @@ export async function smoke(): Promise<void> {
   // posts a `select` (project+task) message to its webview (no gateway → the cockpit has no data,
   // so no SessionView appears, but the command + host→webview post path must not throw).
   await vscode.commands.executeCommand(OPEN_SESSION_COMMAND, "smoke-project", "smoke-task");
+
+  // Q1: `conductor.open` WITH a project id (the sessions-tree project-click path) selects that
+  // project → the cockpit scopes its board to it. Real host: the command + project-only `select`
+  // post path must not throw (no gateway → no data, but the wiring is exercised end to end).
+  await vscode.commands.executeCommand(OPEN_COMMAND, "smoke-project");
 }

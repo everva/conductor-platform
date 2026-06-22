@@ -4,7 +4,8 @@
 // (Conductors) → their tasks (sessions), each task carrying a status codicon (the at-a-glance
 // lifecycle read). It replaces the dar webview board as the sidebar's PRIMARY content — the
 // board itself now lives in the editor area (N1 Command Center). Clicking a TASK deep-links the
-// Command Center to that session (N3, conductor.openSession); clicking a project reveals it.
+// Command Center to that session (conductor.openSession); clicking a PROJECT selects it so the
+// board scopes to that Conductor (Faz-Q / Q1, conductor.open with the project id).
 //
 // DATA: fed by the host-side authed FleetReadClient (token in the header only — never reaches
 // this provider or a TreeItem). getChildren fetches lazily (root → projects, project → tasks);
@@ -49,8 +50,9 @@ export function taskStatusPresentation(status: string): { readonly icon: string;
 /**
  * The native "Conductors" tree. Lazy + async: root yields projects, a project yields its tasks.
  * The command ids are INJECTED (so this module needs no back-import from extension.ts):
- * `openCommand` (`conductor.open`) reveals the Command Center for a project click;
- * `openSessionCommand` (`conductor.openSession`) deep-links it to a task's session (N3).
+ * `openCommand` (`conductor.open`) SELECTS a project (passes its id → the Command Center's board
+ * scopes to that Conductor, Faz-Q / Q1); `openSessionCommand` (`conductor.openSession`) deep-links
+ * it to a task's session.
  * `refresh()` (manual command + on connection-state change) fires onDidChangeTreeData to refetch.
  */
 export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionNode> {
@@ -99,8 +101,13 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionNode
       item.description = project.paused ? "paused" : project.readiness;
       item.contextValue = "conductorProject";
       item.tooltip = `Conductor ${project.id}${project.paused ? " (paused)" : ""}`;
-      // Clicking a project reveals the Command Center too (the board shows all its sessions).
-      item.command = { command: this.#openCommand, title: "Open Command Center" };
+      // Clicking a project SELECTS it (Faz-Q / Q1): the id rides to the `conductor.open` handler,
+      // which scopes the Command Center's board to this Conductor (host-owned selection).
+      item.command = {
+        command: this.#openCommand,
+        title: "Open Command Center",
+        arguments: [project.id],
+      };
       return item;
     }
     const { task } = node;

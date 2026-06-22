@@ -83,7 +83,7 @@ describe("SessionsTreeProvider", () => {
     expect(await provider.getChildren(node)).toEqual([]);
   });
 
-  it("getTreeItem(project) → repo icon, collapsible, readiness description, reveal-CC command", () => {
+  it("getTreeItem(project) → repo icon, collapsible, readiness description, SELECT-project command (Q1)", () => {
     const provider = new SessionsTreeProvider(fakeClient(), OPEN, OPEN_SESSION);
     const item = provider.getTreeItem({
       kind: "project",
@@ -94,7 +94,12 @@ describe("SessionsTreeProvider", () => {
     expect((item.iconPath as { id: string }).id).toBe("repo");
     expect(item.description).toBe("ready");
     expect(item.contextValue).toBe("conductorProject");
-    expect(item.command).toEqual({ command: OPEN, title: "Open Command Center" });
+    // Q1: clicking a project passes its id so the Command Center scopes the board to it.
+    expect(item.command).toEqual({
+      command: OPEN,
+      title: "Open Command Center",
+      arguments: ["web-shop"],
+    });
   });
 
   it("getTreeItem(paused project) shows 'paused' as the description", () => {

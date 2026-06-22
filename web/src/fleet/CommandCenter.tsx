@@ -50,6 +50,13 @@ export interface CommandCenterProps {
   onNewWork?: () => void;
   // loading drives the initial-load skeleton (before the first data lands).
   loading?: boolean;
+  // selectedProjectId (Faz-Q / Q1), when set, SCOPES the board to that one project — the
+  // selection-driven view: picking a Conductor in the native sessions tree pushes a project
+  // selection and the board narrows to it. Null/undefined → the cross-project fleet overview.
+  selectedProjectId?: string | null;
+  // onShowAllProjects clears the project scope back to the full fleet (the "Show all" affordance
+  // shown while scoped). Omitted → no clear control (the scope is owned externally).
+  onShowAllProjects?: () => void;
 }
 
 export function CommandCenter({
@@ -61,8 +68,28 @@ export function CommandCenter({
   onOpenSession,
   onNewWork,
   loading = false,
+  selectedProjectId,
+  onShowAllProjects,
 }: CommandCenterProps) {
-  const board = buildBoard(tasksByProject, leasesByProject, recentEvents);
+  // Faz-Q / Q1: when a project is selected (native tree → host selection), scope the board to it;
+  // otherwise show the whole fleet. Scoping the SOURCE maps narrows the columns, the strip counts,
+  // AND the bulk-approve set (they all derive from these) in one place. Memoized so the downstream
+  // heldKeys/selectedItems memos keep a stable input across renders.
+  const scopedTasks = useMemo(
+    () =>
+      selectedProjectId
+        ? { [selectedProjectId]: tasksByProject[selectedProjectId] ?? [] }
+        : tasksByProject,
+    [selectedProjectId, tasksByProject],
+  );
+  const scopedLeases = useMemo(
+    () =>
+      selectedProjectId
+        ? { [selectedProjectId]: leasesByProject[selectedProjectId] ?? [] }
+        : leasesByProject,
+    [selectedProjectId, leasesByProject],
+  );
+  const board = buildBoard(scopedTasks, scopedLeases, recentEvents);
   // Show placeholders only on the very first load (still fetching, nothing yet).
   const boardEmpty = BOARD_COLUMNS.every((c) => board.columns[c.key].length === 0);
   const showSkeleton = loading && boardEmpty;
@@ -75,7 +102,7 @@ export function CommandCenter({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const heldKeys = useMemo(() => {
     const s = new Set<string>();
-    for (const tasks of Object.values(tasksByProject)) {
+    for (const tasks of Object.values(scopedTasks)) {
       for (const t of tasks) {
         if (isAwaitingApproval(t)) {
           s.add(selKey(t.project_id, t.id));
@@ -83,7 +110,7 @@ export function CommandCenter({
       }
     }
     return s;
-  }, [tasksByProject]);
+  }, [scopedTasks]);
   useEffect(() => {
     setSelected((prev) => {
       let changed = false;
@@ -110,7 +137,7 @@ export function CommandCenter({
   // approve, in a stable order (matches the held tasks' board order).
   const selectedItems = useMemo(() => {
     const items: { projectId: string; taskId: string }[] = [];
-    for (const tasks of Object.values(tasksByProject)) {
+    for (const tasks of Object.values(scopedTasks)) {
       for (const t of tasks) {
         if (isAwaitingApproval(t) && selected.has(selKey(t.project_id, t.id))) {
           items.push({ projectId: t.project_id, taskId: t.id });
@@ -123,11 +150,23 @@ export function CommandCenter({
         : a.projectId.localeCompare(b.projectId),
     );
     return items;
-  }, [tasksByProject, selected]);
+  }, [scopedTasks, selected]);
 
   return (
     <section className="cc" aria-label="Command Center">
       <div className="cc-strip">
+        {selectedProjectId && (
+          <span className="cc-scope" role="status">
+            <Chip className="cc-scope-pill">
+              <CircleDashed size={12} strokeWidth={2.2} aria-hidden="true" /> {selectedProjectId}
+            </Chip>
+            {onShowAllProjects && (
+              <button type="button" className="cc-scope-clear" onClick={onShowAllProjects}>
+                Show all
+              </button>
+            )}
+          </span>
+        )}
         <span className="cc-stat">
           <b>{board.counts.running}</b> running
         </span>

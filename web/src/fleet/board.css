@@ -58,6 +58,32 @@
   flex-wrap: wrap;
 }
 
+/* Faz-Q / Q1: the project-scope indicator (shown when the board is narrowed to a selected
+   Conductor) + its "Show all" clear control. */
+.cc-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.cc-scope-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-weight: var(--weight-medium);
+}
+.cc-scope-clear {
+  font-size: var(--text-sm);
+  color: var(--brand-text);
+  background: none;
+  border: none;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.cc-scope-clear:hover {
+  background: var(--surface-3);
+}
+
 /* --- board: four lifecycle columns --- */
 .cc-board {
   display: grid;

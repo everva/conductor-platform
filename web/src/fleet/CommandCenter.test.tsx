@@ -151,6 +151,32 @@ describe("CommandCenter board", () => {
     ]);
   });
 
+  it("scopes the board to selectedProjectId and Show all clears the scope (Q1)", async () => {
+    const user = userEvent.setup();
+    const onShowAllProjects = vi.fn();
+    render(
+      <CommandCenter
+        tasksByProject={{
+          web: [task({ id: "W-1", project_id: "web", status: "running" })],
+          api: [task({ id: "A-1", project_id: "api", status: "running" })],
+        }}
+        leasesByProject={{}}
+        hosts={[]}
+        recentEvents={[]}
+        selectedProjectId="web"
+        onShowAllProjects={onShowAllProjects}
+      />,
+    );
+    // Only the selected project's task is on the board (the other project is scoped out).
+    expect(within(col("Running")).getByText("W-1")).toBeInTheDocument();
+    expect(within(col("Running")).queryByText("A-1")).not.toBeInTheDocument();
+    // The scope indicator names the project; "Show all" clears the scope back to the full fleet.
+    const scope = screen.getByRole("status");
+    expect(within(scope).getByText("web")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Show all" }));
+    expect(onShowAllProjects).toHaveBeenCalled();
+  });
+
   it("Clear empties the selection and hides the bulk bar (E4)", async () => {
     const user = userEvent.setup();
     const controls = {

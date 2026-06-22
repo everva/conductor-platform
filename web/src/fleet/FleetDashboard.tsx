@@ -303,6 +303,8 @@ export function FleetDashboard({
           onOpenSession={setSelectedTask}
           onNewWork={() => setTab("intake")}
           loading={fleet.loading}
+          selectedProjectId={selectedProjectId}
+          onShowAllProjects={() => setSelectedProjectId(null)}
         />
       ) : tab === "fleet" ? (
         <>

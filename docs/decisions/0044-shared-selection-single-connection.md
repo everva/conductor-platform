@@ -54,4 +54,15 @@ bug FIX.** Sidebar yalnız native "Conductors" tree'yi (seçim sürücüsü) ta�
   DOKUNULMADI). Doğrulama: editör gate (typecheck×2 + eslint-0 + **vitest 232/3**: registerConductor 11
   disposable + `registerWebviewViewProvider` ARTIK ÇAĞRILMAZ; subscriptions 20; extension.js 190.8→187.9kb)
   + **electron smoke YEŞİL** (1.125.1, N1 startup `["Conductor"]`, dangling view/menu referansı YOK, exit 0).
+- **Q1 SEVK EDİLDİ (seçim-güdümlü yüzeyler, ADR-0044 kapsamında):** native tree proje-click artık
+  `conductor.open`'a proje id'sini geçirir → handler `select(projectId)` çağırır (arg-yoksa salt-reveal
+  korunur: keybinding/startup/status-bar); web `CommandCenter` `selectedProjectId` prop'u ile board'u O
+  projeye KAPSAR (kaynak map'leri daraltır → kolonlar+strip+bulk-approve hepsi kapsanır) + "Show all"
+  temizleme affordance'ı (`onShowAllProjects`→`selectedProjectId=null`). **Kullanıcı #1 talebi karşılandı:
+  tree'de Conductor seç → aşağıdaki board ona güncellenir.** Doğrulama: editör gate (vitest 233/3:
+  sessionsTree proje-komut `arguments:[id]` + `conductor.open` proje→select routing) + web gate
+  (vitest 162/162 + lint-0: CommandCenter scope+Show-all, cockpit selection→board-scope) + Playwright
+  e2e 15/15 + electron smoke (proje-select komut yolu throw-suz). **Q1.3 programatik tree-highlight
+  (CC→tree senkron) Q4.2 native-feel pass'e ERTELENDİ** (native click-highlight zaten var; reveal()
+  getParent gerektirir — dürüst kapsam). Proje-only seçimde board scope GÖRÜNÜR; task-select session.
 - ADR-0038 (N3 control channel) bu ADR ile genelleştirilir; ADR-0021 / token-disiplini KORUNUR.
