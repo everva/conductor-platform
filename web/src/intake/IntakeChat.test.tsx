@@ -76,8 +76,8 @@ describe("IntakeChat", () => {
       />,
     );
 
-    await user.type(screen.getByLabelText("Conversation"), "build the auth flow");
-    await user.click(screen.getByRole("button", { name: "Distill" }));
+    await user.type(screen.getByLabelText("Message"), "build the auth flow");
+    await user.click(screen.getByRole("button", { name: "Send" }));
 
     const card = await screen.findByTestId("scenario-card");
     expect(within(card).getByText("A-1")).toBeInTheDocument();
@@ -92,6 +92,37 @@ describe("IntakeChat", () => {
     expect(client.distill).toHaveBeenCalledWith("proj-x", "build the auth flow");
   });
 
+  it("multi-turn: a second message re-distills with the WHOLE conversation accumulated (Q3b)", async () => {
+    const user = userEvent.setup({ delay: null });
+    // Turn 1 → 422 (the assistant asks for more detail); turn 2 → a proposal. Proves the thread
+    // accumulates context across turns and the never-fabricate guidance is a clarifying reply.
+    const distill = vi
+      .fn<IntakeClient["distill"]>()
+      .mockRejectedValueOnce(new DistillNoScenariosError("need more detail"))
+      .mockResolvedValueOnce(PROPOSAL);
+    const client = fakeClient({ distill });
+    render(<IntakeChat projects={[project()]} client={client} onUnauthorized={vi.fn()} />);
+
+    await user.type(screen.getByLabelText("Message"), "build auth");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText(/Add more detail/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("scenario-card")).not.toBeInTheDocument();
+
+    await user.type(
+      screen.getByLabelText("Message"),
+      "acceptance: login works; lane backend; tier T1",
+    );
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    // The proposal lands, AND the second distill got BOTH turns joined (accumulated context).
+    expect(await screen.findByTestId("scenario-card")).toBeInTheDocument();
+    expect(distill).toHaveBeenNthCalledWith(
+      2,
+      "proj-x",
+      "build auth\n\nacceptance: login works; lane backend; tier T1",
+    );
+  });
+
   it("editing the YAML then Approve posts the EDITED yaml and shows created ids", async () => {
     const user = userEvent.setup({ delay: null });
     const client = fakeClient();
@@ -103,8 +134,8 @@ describe("IntakeChat", () => {
       />,
     );
 
-    await user.type(screen.getByLabelText("Conversation"), "x");
-    await user.click(screen.getByRole("button", { name: "Distill" }));
+    await user.type(screen.getByLabelText("Message"), "x");
+    await user.click(screen.getByRole("button", { name: "Send" }));
 
     const yaml = await screen.findByLabelText("Intake YAML");
     await user.clear(yaml);
@@ -136,13 +167,18 @@ describe("IntakeChat", () => {
       />,
     );
 
-    await user.type(screen.getByLabelText("Conversation"), "vague");
-    await user.click(screen.getByRole("button", { name: "Distill" }));
+    await user.type(screen.getByLabelText("Message"), "vague");
+    await user.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByText(/Add more detail/i)).toBeInTheDocument();
-    // No proposal rendered, and the button is back to "Distill" (spinner cleared).
+    // No proposal rendered, and the spinner cleared: the button is back to "Send" (not "Sending…")
+    // and the inline "Distilling…" indicator is gone. (It's disabled only because Send clears the
+    // input — the conversational flow; typing a follow-up re-enables it.)
     expect(screen.queryByTestId("scenario-card")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Distill" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+    expect(screen.queryByText("Distilling…")).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("Message"), "more");
+    expect(screen.getByRole("button", { name: "Send" })).not.toBeDisabled();
   });
 
   it("an invalid-YAML 400 from intake shows the inline parse error", async () => {
@@ -160,8 +196,8 @@ describe("IntakeChat", () => {
       />,
     );
 
-    await user.type(screen.getByLabelText("Conversation"), "x");
-    await user.click(screen.getByRole("button", { name: "Distill" }));
+    await user.type(screen.getByLabelText("Message"), "x");
+    await user.click(screen.getByRole("button", { name: "Send" }));
     await screen.findByLabelText("Intake YAML");
     await user.click(screen.getByRole("button", { name: "Approve & add to ledger" }));
     await user.click(screen.getByRole("button", { name: "Approve & add" }));
@@ -185,8 +221,8 @@ describe("IntakeChat", () => {
       />,
     );
 
-    await user.type(screen.getByLabelText("Conversation"), "x");
-    await user.click(screen.getByRole("button", { name: "Distill" }));
+    await user.type(screen.getByLabelText("Message"), "x");
+    await user.click(screen.getByRole("button", { name: "Send" }));
 
     await vi.waitFor(() => expect(onUnauthorized).toHaveBeenCalledTimes(1));
   });

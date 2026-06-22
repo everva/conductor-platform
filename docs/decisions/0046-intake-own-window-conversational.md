@@ -35,6 +35,22 @@ fallback) + streaming. CC 7-faz modeli + never-fabricate=clarify.
   komut + esbuild) + **web gate** (typecheck + eslint-0 + vitest 163/163; barrel export) + **GERÇEK fork
   electron smoke YEŞİL**: `tabs after conductor.newWork: ["Conductor","New Work"]` — Intake KENDİ editör
   sekmesinde açıldı (çift-mod + IntakePanel + komut uçtan-uca gerçek runtime'da çalışıyor; exit 0).
-- **#3 KARŞILANDI** (intake ayrı window). **#5 (CC-tarzı konuşmalı) Q3b/Q3c'ye KALDI** (dürüst). Q3a
-  mevcut tek-atış IntakeChat'i kendi penceresinde sunar; konuşmalı dönüşüm follow-up.
-- ADR-0044/0045/0021 + token-disiplini korunur. Görsel capstone (gerçek gateway'le intake akışı) = Q5/kullanıcı.
+- **#3 KARŞILANDI** (intake ayrı window).
+
+## Sonuçlar (Q3b — konuşmalı intake, web-forward)
+- **IntakeChat tek-atış form → ÇOK-TURLU KONUŞMA'ya yeniden yazıldı** (web-only): proje seç + **mesaj
+  thread'i** (her "Send" turnünü ekler) + composer (⌘/Ctrl+Enter). Her gönderimde TÜM director turn'leri
+  birleştirilip mevcut tek-string `/distill`'e verilir → **bağlam turlar arası BİRİKİR** (gateway
+  DEĞİŞMEDİ — frozen-additive'e bile gerek kalmadan client-side accumulation). Asistan yanıtı thread'e
+  düşer: scenario varsa "Drafted N — review the plan below" + plan-preview (scenario kart + AUTHORITATIVE
+  YAML editör + Approve, korundu); **422 → never-fabricate GUIDANCE bir clarifying yanıt olarak** (CC
+  "varsayma, sor"). "Write spec directly" korundu. **Doğrulama:** web gate (typecheck + eslint-0 +
+  **vitest 164/164**: IntakeChat 7 test incl. **çok-turlu accumulation** `distill` nth(2) birleşik-bağlam +
+  422-clarify + edited-YAML-approve + 401 + write-spec) + **Playwright e2e 15/15** (dashboard intake
+  Message/Send konuşmalı; intake.spec write-spec) + editör gate 254/3 (fork bundle yeni IntakeChat'le
+  rebuild) + **electron smoke** (New Work tab konuşmalı IntakeChat'i mount eder, exit 0).
+- **DÜRÜST KAPSAM:** Q3b "konuşmalı + bağlam-biriken + never-fabricate-clarify + plan-preview" verir.
+  **LLM-üretimli SPESİFİK clarifying soruları + streaming = Q3b-full/Q3c'ye KALDI** (gateway `/distill`'in
+  scenarios-or-422 yerine bir soru döndürmesi = backend LLM-prompt işi; frozen-additive `messages` alanı +
+  distiller history). web App'in kendi intake'i de bu paylaşılan IntakeChat'i kullandığından konuşmalı oldu.
+- ADR-0044/0045/0021 + token-disiplini korunur. Görsel capstone (gerçek gateway'le konuşmalı intake) = Q5/kullanıcı.

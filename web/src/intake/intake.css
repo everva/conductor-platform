@@ -47,6 +47,55 @@
   color: var(--text-3);
 }
 
+/* Faz-Q / Q3b: the multi-turn intake conversation thread. */
+.intake-thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 22rem;
+  overflow-y: auto;
+  padding: var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+}
+.intake-msg {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  max-width: 92%;
+}
+.intake-msg.you {
+  align-self: flex-end;
+  background: var(--surface-3);
+}
+.intake-msg.assistant {
+  align-self: flex-start;
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+}
+.intake-msg.assistant.warn {
+  background: var(--warn-soft);
+  border-color: var(--warn-border);
+}
+.intake-msg.assistant.error {
+  background: var(--danger-soft, var(--warn-soft));
+  border-color: var(--danger-border, var(--warn-border));
+}
+.intake-msg-role {
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  color: var(--text-3);
+}
+.intake-msg-text {
+  font-size: var(--text-sm);
+  color: var(--text-1);
+  white-space: pre-wrap;
+}
+
 .intake-select,
 .intake-textarea {
   background: var(--bg);

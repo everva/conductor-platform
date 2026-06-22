@@ -239,12 +239,14 @@ test("intake tab: converse → distill → review proposed scenario + holdout (3
   // moves the button mid-click); with the WebSocket cleanly mocked (mockWebSocket — no
   // offline/closed churn) the button stays mounted, so dispatchEvent triggers reliably.
   await page.getByRole("tab", { name: /intake/i }).click();
-  await page.getByLabel("Conversation").fill("build the auth flow");
+  // Q3b: intake is a multi-turn conversation now — type a message and Send; the assistant folds
+  // the distilled proposal into the thread + the plan-preview (scenario card + YAML) below.
+  await page.getByLabel("Message").fill("build the auth flow");
   // Retry the click → outcome until it lands: on rare 5s-poll re-render frames a
   // single dispatched click can be dropped, so toPass re-fires it until the proposal
   // renders (deterministic outcome, no fixed sleep). The distill route is mocked.
   await expect(async () => {
-    await page.getByRole("button", { name: /^distill$/i }).dispatchEvent("click");
+    await page.getByRole("button", { name: /^send$/i }).dispatchEvent("click");
     await expect(page.getByTestId("scenario-card")).toBeVisible({ timeout: 2000 });
   }).toPass({ timeout: 15000 });
   await expect(page.getByTestId("scenario-holdout")).toContainText(

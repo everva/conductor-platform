@@ -1,22 +1,27 @@
-// IntakeChat: the conversational intake view (3B-4b) — the CORE Conductor flow
-// "converse → distill → review scenarios+holdout → edit YAML → human approve →
-// ledger" (ADR-0005, ADR-0012). It is the human-in-the-loop drafting surface:
+// IntakeChat: the CONVERSATIONAL intake view (Faz-Q / Q3b, evolving 3B-4b) — a Claude-Code-style
+// "describe → the assistant drafts (or asks for more) → review the plan → approve" loop, replacing
+// the old one-shot textarea+Distill form (the user's "intake çok basit, claude code gibi olsun").
 //
 //   1. pick a project to intake into;
-//   2. describe the work in free text and press Distill — the gateway's assisted
-//      distiller (POST /distill) PROPOSES shape-validated scenarios + an
-//      intake-ready YAML, persisting NOTHING;
-//   3. review the proposed scenarios (id/lane/tier/deps/acceptance + the
-//      repo-EXTERNAL hidden holdout ref) and EDIT the YAML — the YAML textarea is
-//      the AUTHORITATIVE input to /intake; it is POSTed VERBATIM, never transformed;
-//   4. Approve & add to ledger (confirm-gated) re-POSTs that exact YAML to
-//      POST /intake, creating real tasks; the created/skipped ids are shown.
+//   2. CHAT the work: each message you Send is appended to a multi-turn thread and the WHOLE
+//      conversation (all your turns) is handed to the gateway distiller (POST /distill) — so detail
+//      ACCUMULATES across turns. The assistant replies in the thread: a draft summary when it
+//      proposes scenarios, or — honoring NEVER-FABRICATE — a "needs more detail" CLARIFYING reply
+//      when it can't (a 422 becomes guidance, not a crash). Nothing is persisted while you chat.
+//   3. when scenarios are drafted, review them (id/lane/tier/deps/acceptance + the repo-EXTERNAL
+//      hidden holdout) and EDIT the YAML — the YAML textarea is the AUTHORITATIVE input to /intake,
+//      POSTed VERBATIM, never transformed;
+//   4. Approve & add to ledger (confirm-gated) re-POSTs that exact YAML to POST /intake.
 //
-// Never-fabricate is surfaced honestly: a 422 from distill (the model gave nothing
-// approvable) renders as "add more detail" GUIDANCE, not a crash or fake scenario.
+// The "Write spec directly" path (claude-free authoring straight into the YAML) is preserved.
 // A 401 anywhere bubbles to onUnauthorized. The conversation/token are never logged.
-import { useState } from "react";
-import { ArrowRight, X } from "lucide-react";
+//
+// NOTE (honest scope): the assistant's clarifying reply is the distiller's never-fabricate GUIDANCE
+// (the gateway returns scenarios-or-422); LLM-generated SPECIFIC clarifying questions + streaming
+// are a backend follow-up (Q3b-full/Q3c, ADR-0046). The conversation is accumulated CLIENT-side and
+// the existing single-string /distill is reused — no gateway change here.
+import { useRef, useState } from "react";
+import { ArrowRight } from "lucide-react";
 import { ApiError, DistillNoScenariosError } from "../api/client.ts";
 import type { DistillResult, IntakeResult, Project } from "../api/types.ts";
 import { ConfirmDialog } from "../fleet/ConfirmDialog.tsx";
@@ -27,7 +32,8 @@ import "./intake.css";
 // IntakeClient is the NARROW surface IntakeChat consumes — the two endpoints of the
 // converse→approve flow. ApiClient implements both with these exact shapes, so the
 // real client is passed in production and a fake (no network) is passed in tests; we
-// add no second HTTP path.
+// add no second HTTP path. `distill` still takes a single conversation string (the
+// accumulated turns); a structured multi-turn request is a frozen-additive follow-up.
 export interface IntakeClient {
   distill(projectId: string, conversation: string): Promise<DistillResult>;
   intake(projectId: string, yaml: string): Promise<IntakeResult>;
@@ -41,15 +47,19 @@ export interface IntakeChatProps {
   // onUnauthorized fires on a 401 so the app can sign out.
   onUnauthorized: () => void;
   // onViewTasks, when provided, offers a "View tasks" affordance after a successful
-  // intake so the human can jump to the Fleet view for that project.
+  // intake so the human can jump to the board for that project.
   onViewTasks?: (projectId: string) => void;
 }
 
-// Notice is a one-shot inline message (mirrors the fleet notice tones) for the
-// distill/intake outcomes that are not a full proposal render.
-interface Notice {
-  tone: "ok" | "warn" | "error";
-  message: string;
+// A turn in the intake conversation. "you" is the director; "assistant" is the distiller's
+// reply (a draft summary, a clarifying "needs more detail" guidance [tone:"warn"], or an
+// error [tone:"error"]). Token-free — only the human-authored / gateway-derived text.
+type ChatRole = "you" | "assistant";
+interface ChatMsg {
+  id: number;
+  role: ChatRole;
+  text: string;
+  tone?: "warn" | "error";
 }
 
 // SPEC_TEMPLATE seeds the "Write spec directly" path — an operator who already knows
@@ -72,81 +82,103 @@ export function IntakeChat({
   onViewTasks,
 }: IntakeChatProps) {
   const [projectId, setProjectId] = useState<string>(projects[0]?.id ?? "");
-  const [conversation, setConversation] = useState<string>("");
+  // The multi-turn conversation thread (Q3b). Your turns accumulate; the assistant replies inline.
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [draft, setDraft] = useState<string>("");
   const [proposal, setProposal] = useState<DistillResult | null>(null);
   // editedYaml is the AUTHORITATIVE input to /intake — initialised from the
   // distilled yaml, then freely edited by the human. We POST it verbatim.
   const [editedYaml, setEditedYaml] = useState<string>("");
   const [distilling, setDistilling] = useState<boolean>(false);
   const [approving, setApproving] = useState<boolean>(false);
-  const [notice, setNotice] = useState<Notice | null>(null);
-  // yamlError holds the inline parse error from a 400 on /intake so the human can
-  // fix the YAML in place.
+  // yamlError holds the inline parse error from a 400 on /intake so the human can fix it in place.
   const [yamlError, setYamlError] = useState<string | null>(null);
   const [result, setResult] = useState<IntakeResult | null>(null);
   const [pending, setPending] = useState<PendingConfirm | null>(null);
   // directMode shows the authoritative YAML editor + Dispatch WITHOUT a distill
   // proposal — the "Write spec directly" path (no claude-assisted distiller needed).
   const [directMode, setDirectMode] = useState<boolean>(false);
+  const nextMsgId = useRef<number>(0);
 
   const hasProjects = projects.length > 0;
-  const canDistill =
-    hasProjects && projectId !== "" && conversation.trim() !== "" && !distilling;
+  const canSend = hasProjects && projectId !== "" && draft.trim() !== "" && !distilling;
   const canPickProject = hasProjects && projectId !== "";
   // The authoritative YAML editor + Dispatch show for EITHER path: an assisted
   // proposal, or a direct-authored spec.
   const showEditor = proposal !== null || directMode;
+
+  function addMsg(role: ChatRole, text: string, tone?: "warn" | "error") {
+    setMessages((prev) => [
+      ...prev,
+      { id: nextMsgId.current++, role, text, ...(tone ? { tone } : {}) },
+    ]);
+  }
 
   // writeSpecDirectly opens the YAML editor with a starter template (or keeps the
   // current edits) so an operator can author + dispatch a spec without distilling.
   function writeSpecDirectly() {
     setProposal(null);
     setResult(null);
-    setNotice(null);
     setYamlError(null);
     setDirectMode(true);
     setEditedYaml((cur) => (cur.trim() === "" ? SPEC_TEMPLATE : cur));
   }
 
-  async function runDistill() {
-    if (!canDistill) {
-      return;
-    }
+  // runDistill hands the ACCUMULATED conversation to the gateway distiller and folds the
+  // outcome into the thread. Scenarios → a draft summary + the plan-preview below; a 422 →
+  // the never-fabricate guidance as a clarifying reply; other failures → an error reply.
+  async function runDistill(conversation: string) {
     setDistilling(true);
-    setNotice(null);
     setResult(null);
     setYamlError(null);
     try {
       const res = await client.distill(projectId, conversation);
       setProposal(res);
       setEditedYaml(res.yaml);
+      setDirectMode(false);
+      addMsg(
+        "assistant",
+        res.scenarios.length > 0
+          ? `Drafted ${res.scenarios.length} scenario${res.scenarios.length === 1 ? "" : "s"} — review the plan below, edit the YAML, and approve.`
+          : "That distilled to an empty proposal. Add more detail and send again.",
+      );
     } catch (err: unknown) {
-      // Clear any stale proposal so the human re-distills cleanly.
+      // Clear any stale proposal so the human re-sends cleanly.
       setProposal(null);
       setEditedYaml("");
       if (err instanceof DistillNoScenariosError) {
-        // NEVER-FABRICATE contract surfaced as guidance, not a crash.
-        setNotice({
-          tone: "warn",
-          message:
-            "Couldn't distill an approvable scenario from that. Add more detail — " +
-            "explicit acceptance criteria, a capability lane, and a risk tier — " +
-            `then distill again. (gateway: ${err.message})`,
-        });
+        // NEVER-FABRICATE surfaced as a clarifying reply, not a crash (CC "ask, don't assume").
+        addMsg(
+          "assistant",
+          "I couldn't draft an approvable scenario from that yet. Add more detail — explicit " +
+            "acceptance criteria, a capability lane, and a risk tier — then send again. " +
+            `(gateway: ${err.message})`,
+          "warn",
+        );
       } else if (err instanceof ApiError && err.status === 401) {
         onUnauthorized();
       } else if (err instanceof ApiError) {
-        setNotice({
-          tone: "error",
-          message: `Distill failed (${err.status}): ${err.message}`,
-        });
+        addMsg("assistant", `Distill failed (${err.status}): ${err.message}`, "error");
       } else {
-        setNotice({ tone: "error", message: "Could not reach the gateway." });
+        addMsg("assistant", "Could not reach the gateway.", "error");
       }
     } finally {
       // Spinner is ALWAYS cleared — never a stuck spinner.
       setDistilling(false);
     }
+  }
+
+  // send appends the draft as your turn and re-distills with the WHOLE conversation (all your
+  // turns), so detail accumulates across the thread. The existing single-string /distill is reused.
+  function send() {
+    if (!canSend) {
+      return;
+    }
+    const text = draft.trim();
+    const youTurns = [...messages.filter((m) => m.role === "you").map((m) => m.text), text];
+    addMsg("you", text);
+    setDraft("");
+    void runDistill(youTurns.join("\n\n"));
   }
 
   // requestApprove opens the confirm gate; the actual POST happens on confirm. This
@@ -156,8 +188,6 @@ export function IntakeChat({
       return;
     }
     setPending({
-      // Reuse the fleet's confirm shape; "approve" is the matching action verb and
-      // ConfirmDialog only renders title/body/confirmLabel/tone.
       kind: "approve",
       projectId,
       taskId: undefined,
@@ -173,17 +203,16 @@ export function IntakeChat({
   async function confirmApprove() {
     setPending(null);
     setApproving(true);
-    setNotice(null);
     setYamlError(null);
     try {
       // POST the EDITED yaml verbatim — the human-reviewed source of truth.
       const res = await client.intake(projectId, editedYaml);
       setResult(res);
       setProposal(null);
-      setNotice({
-        tone: "ok",
-        message: `Added to ledger: ${res.created.length} created, ${res.skipped.length} skipped.`,
-      });
+      addMsg(
+        "assistant",
+        `Added to ledger: ${res.created.length} created, ${res.skipped.length} skipped.`,
+      );
     } catch (err: unknown) {
       if (err instanceof ApiError && err.status === 400) {
         // Invalid YAML — show the parse error inline so the human can fix it.
@@ -191,12 +220,9 @@ export function IntakeChat({
       } else if (err instanceof ApiError && err.status === 401) {
         onUnauthorized();
       } else if (err instanceof ApiError) {
-        setNotice({
-          tone: "error",
-          message: `Intake failed (${err.status}): ${err.message}`,
-        });
+        addMsg("assistant", `Intake failed (${err.status}): ${err.message}`, "error");
       } else {
-        setNotice({ tone: "error", message: "Could not reach the gateway." });
+        addMsg("assistant", "Could not reach the gateway.", "error");
       }
     } finally {
       setApproving(false);
@@ -207,18 +233,18 @@ export function IntakeChat({
     <section className="intake" aria-label="Intake">
       <div className="intake-intro fleet-panel">
         <div className="fleet-panel-head">
-          <h2>Intake — converse → distill → review → approve</h2>
+          <h2>Intake — describe the work, review the plan, approve</h2>
         </div>
         <p className="intake-help fleet-panel-body">
-          Describe the work in plain language. The assistant proposes shape-validated
-          scenarios for you to review and edit; nothing is persisted until you approve.
+          Chat the work in plain language. The assistant proposes shape-validated scenarios (or
+          asks for more detail); nothing is persisted until you approve the plan.
         </p>
       </div>
 
       {!hasProjects && (
         <p role="status" className="intake-empty">
-          No projects yet. Onboard a project from the Fleet view first, then return here
-          to intake work into it.
+          No projects yet. Onboard a project from the board first, then return here to intake work
+          into it.
         </p>
       )}
 
@@ -242,15 +268,38 @@ export function IntakeChat({
                 </select>
               </label>
 
+              {messages.length > 0 && (
+                <div className="intake-thread" role="log" aria-label="Intake conversation">
+                  {messages.map((m) => (
+                    <div
+                      key={m.id}
+                      className={`intake-msg ${m.role}${m.tone ? ` ${m.tone}` : ""}`}
+                      data-testid="intake-msg"
+                    >
+                      <span className="intake-msg-role">
+                        {m.role === "you" ? "You" : "Assistant"}
+                      </span>
+                      <span className="intake-msg-text">{m.text}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <label className="intake-field">
-                <span className="intake-label">Conversation</span>
+                <span className="intake-label">Message</span>
                 <textarea
                   className="intake-textarea"
-                  aria-label="Conversation"
-                  placeholder="Describe the work: what to build, acceptance criteria, the capability lane, the risk tier…"
-                  rows={8}
-                  value={conversation}
-                  onChange={(e) => setConversation(e.target.value)}
+                  aria-label="Message"
+                  placeholder="Describe the work: what to build, acceptance criteria, the capability lane, the risk tier…  (⌘/Ctrl+Enter to send)"
+                  rows={5}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                      e.preventDefault();
+                      send();
+                    }
+                  }}
                 />
               </label>
 
@@ -258,14 +307,10 @@ export function IntakeChat({
                 <button
                   type="button"
                   className="fleet-btn primary"
-                  disabled={!canDistill}
-                  onClick={() => void runDistill()}
+                  disabled={!canSend}
+                  onClick={send}
                 >
-                  {distilling
-                    ? "Distilling…"
-                    : proposal !== null
-                      ? "Re-distill"
-                      : "Distill"}
+                  {distilling ? "Sending…" : "Send"}
                 </button>
                 <span className="intake-or">or</span>
                 <button
@@ -284,24 +329,6 @@ export function IntakeChat({
               </div>
             </div>
           </div>
-
-          {notice !== null && (
-            <div
-              className={`intake-notice ${notice.tone}`}
-              role={notice.tone === "error" ? "alert" : "status"}
-              aria-live="polite"
-            >
-              <span>{notice.message}</span>
-              <button
-                type="button"
-                className="intake-notice-dismiss"
-                aria-label="Dismiss"
-                onClick={() => setNotice(null)}
-              >
-                <X size={15} strokeWidth={2.4} />
-              </button>
-            </div>
-          )}
 
           {result !== null && (
             <div className="intake-result fleet-panel" data-testid="intake-result">
@@ -347,24 +374,22 @@ export function IntakeChat({
           {showEditor && (
             <div className="intake-proposal">
               {proposal !== null && (
-              <div className="fleet-panel">
-                <div className="fleet-panel-head">
-                  <h2>Proposed scenarios — review before approving</h2>
-                  <span className="muted intake-proposal-note">
-                    The assistant proposed these. Review the holdout refs and edit the
-                    YAML below; nothing is in the ledger yet.
-                  </span>
+                <div className="fleet-panel">
+                  <div className="fleet-panel-head">
+                    <h2>Proposed plan — review before approving</h2>
+                    <span className="muted intake-proposal-note">
+                      The assistant proposed these. Review the holdout refs and edit the YAML
+                      below; nothing is in the ledger yet.
+                    </span>
+                  </div>
+                  <div className="fleet-panel-body intake-cards">
+                    {proposal.scenarios.length === 0 ? (
+                      <p className="fleet-empty">No scenarios in the proposal.</p>
+                    ) : (
+                      proposal.scenarios.map((s) => <ScenarioCard key={s.id} scenario={s} />)
+                    )}
+                  </div>
                 </div>
-                <div className="fleet-panel-body intake-cards">
-                  {proposal.scenarios.length === 0 ? (
-                    <p className="fleet-empty">No scenarios in the proposal.</p>
-                  ) : (
-                    proposal.scenarios.map((s) => (
-                      <ScenarioCard key={s.id} scenario={s} />
-                    ))
-                  )}
-                </div>
-              </div>
               )}
 
               <div className="fleet-panel">
