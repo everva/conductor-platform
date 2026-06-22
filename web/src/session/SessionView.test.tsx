@@ -101,6 +101,32 @@ describe("SessionView", () => {
     expect(onBack).toHaveBeenCalled();
   });
 
+  it("a done task with no scenario/events shows honest empty states, not 'Loading…'/'Awaiting…' (Q4.1)", async () => {
+    const doneTask: Task = { ...TASK, id: "T-9", status: "done", scenario_id: "" };
+    render(
+      <SessionView
+        task={doneTask}
+        token="t"
+        onBack={vi.fn()}
+        onUnauthorized={() => {}}
+        makeScenarioClient={() => ({ listScenarios: async () => [] })}
+        makeHistory={() => ({ listEvents: async () => [] })}
+        eventTransport={noopTransport}
+      />,
+    );
+
+    // SPEC: a task with no scenario_id must NOT show a perpetual "Loading spec…" (the Q4.1 bug);
+    // it reports that there is no spec to load.
+    expect(await screen.findByText("No spec recorded for this task.")).toBeInTheDocument();
+    expect(screen.queryByText("Loading spec…")).not.toBeInTheDocument();
+
+    // VERDICT / DIFF: a settled (done) task with no such event reads as "recorded" — not as if the
+    // gate were still pending ("Awaiting the gate…" / "emitted once the gate passes").
+    expect(screen.getByText("No verdict recorded for this task.")).toBeInTheDocument();
+    expect(screen.getByText("No diff recorded for this task.")).toBeInTheDocument();
+    expect(screen.queryByText(/Awaiting the gate/)).not.toBeInTheDocument();
+  });
+
   it("replays the verdict + diff as of a selected timeline entry, then returns to live (E4)", async () => {
     const user = userEvent.setup();
     render(

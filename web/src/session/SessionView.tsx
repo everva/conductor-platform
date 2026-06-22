@@ -109,26 +109,36 @@ export function SessionView({
     ...(eventTransport ? { eventTransport, enabled: true } : {}),
   });
 
-  // The scenario carries the SPEC (acceptance criteria). Fetched once per task.
+  // The scenario carries the SPEC (acceptance criteria). Fetched once per task. `specLoading`
+  // tracks the fetch so the SPEC panel can tell "still loading" apart from "nothing to load"
+  // (Q4.1 BUG FIX: a task with no scenario_id — e.g. a done task — used to show "Loading spec…"
+  // FOREVER because the effect early-returned leaving scenario=null; now it reports "no spec").
   const [scenario, setScenario] = useState<Scenario | null>(null);
+  const [specLoading, setSpecLoading] = useState(false);
   useEffect(() => {
     if (!enabled || !task.scenario_id) {
+      // Nothing to fetch (not connected, or this task has no scenario): not loading, no spec.
+      setScenario(null);
+      setSpecLoading(false);
       return;
     }
     const client: ScenarioClient = makeScenarioClient
       ? makeScenarioClient(token)
       : new ApiClient({ token });
     let cancelled = false;
+    setSpecLoading(true);
     client
       .listScenarios(task.project_id)
       .then((scs) => {
         if (!cancelled) {
           setScenario(scs.find((s) => s.id === task.scenario_id) ?? null);
+          setSpecLoading(false);
         }
       })
       .catch(() => {
         if (!cancelled) {
           setScenario(null);
+          setSpecLoading(false);
         }
       });
     return () => {
@@ -175,6 +185,9 @@ export function SessionView({
   const held = isAwaitingApproval(task);
   const busy = controls?.isTaskBusy(task.project_id, task.id) ?? false;
   const title = scenario?.title || task.id;
+  // Q4.1: a finished task's empty verdict/diff panels shouldn't read as "still pending" — when
+  // a done task has no such event (data absent), say "recorded" not "awaiting/emitted once…".
+  const settled = task.status === "done";
 
   return (
     <section className="sv" aria-label="Session">
@@ -213,7 +226,11 @@ export function SessionView({
               </ul>
             ) : (
               <SvEmpty icon={FileText}>
-                {scenario ? "No acceptance criteria recorded." : "Loading spec…"}
+                {specLoading
+                  ? "Loading spec…"
+                  : scenario
+                    ? "No acceptance criteria recorded."
+                    : "No spec recorded for this task."}
               </SvEmpty>
             )}
             {scenario?.hidden_holdout_ref && (
@@ -274,7 +291,11 @@ export function SessionView({
                 </ul>
               </>
             ) : (
-              <SvEmpty icon={Clock}>Awaiting the gate…</SvEmpty>
+              <SvEmpty icon={Clock}>
+                {settled && replayTs === null
+                  ? "No verdict recorded for this task."
+                  : "Awaiting the gate…"}
+              </SvEmpty>
             )}
           </section>
         </div>
@@ -373,7 +394,11 @@ export function SessionView({
                 )}
               </>
             ) : (
-              <SvEmpty icon={GitCompare}>No diff yet — emitted once the gate passes.</SvEmpty>
+              <SvEmpty icon={GitCompare}>
+                {settled && replayTs === null
+                  ? "No diff recorded for this task."
+                  : "No diff yet — emitted once the gate passes."}
+              </SvEmpty>
             )}
           </section>
         </div>
