@@ -96,10 +96,18 @@ görüntülerine dayan.
   tutar; `openStoredDiff` → 1 dosya `vscode.diff` / çoklu quick-pick / binary→unified fallback; deep-link split
   primary (prompt'suz). **BACKEND'SİZ** (frozen-additive trivially). editör gate vitest 226/3 + electron smoke
   yeşil. KALAN: kullanıcı görsel capstone (gerçek task diff'inde native yan-yana red-green).
-- **P2b KARARI BEKLENİYOR (kullanıcı P2b seçti):** full-file diff. **YENİDEN-DEĞERLENDİRME (kod'a-dayalı, dürüst):
-  "küçük" DEĞİL** — `cmd/conductor-api` (gateway, PG var, repo YOK) ≠ `cmd/conductor` (worker, repo/worktree var);
-  worktree view-time'da SİLİNMİŞ (branch survives ama worker'ın repo'sunda, gateway'de değil). ⇒ full content
-  GATE-TIME'da PG'ye PERSIST + yeni gateway endpoint'le servis gerek = 4-katman (goose migration + worker persist
-  full-context patch + conductor-api route + editör fetch). Migration = canlı-PG/geri-dönüşü-zor → açık onay şart.
-  Alternatifler: P2a yeter→P3; veya P2b-lite (patch context/budget artır, migration'sız, kısmi). → KULLANICIYA SOR.
-- **P3 (alternatif/sonraki):** agentic/uyum (tree context-menü + keybinding + context-key + Welcome). Editör-only, hafif.
+- **P2b ✅ SEVK EDİLDİ — full-file native diff** (kullanıcı P2b-full'u onayladı; develop `bc9eb23`, **CI 3-job
+  YEŞİL**; ADR-0041). 4-katman additive: (1) statestore `TaskDiff` + AYRI dar `TaskDiffStore` seam (frozen
+  StateStore DOKUNULMADI) + migration `00008_task_diffs`; (2) worker `GitDiffer.FullPatch` (`--unified=1000000`,
+  1MiB cap) + `FullDiffer` seam + `emitDiff→persistFullDiff` best-effort (tick'i değiştirmez); (3) gateway authed
+  `GET /projects/{id}/tasks/{task}/diff` (404→bounded fallback, 501→no-persistence); (4) editör host-side
+  `DiffContentClient.fetchFullDiff` (token header-only, leak-guard) + `openStoredDiff` açılışta fetch→
+  `DiffStore.upgradeFiles` full-file reconstruct (P2a reuse), miss→bounded. `fetchFull` OPSİYONEL→P2a testleri
+  değişmedi. **Doğrulama:** Go gate (build+vet+golangci-lint-0+`-race`) + **GERÇEK-PG conformance** (docker PG:
+  migration 00008 + TaskDiff round-trip memory+PG) + conductor/gateway/editör testleri + editör gate (vitest 238/3)
+  + electron smoke yeşil. **web/src + Go-frozen-StateStore + KindDiff event DOKUNULMADI.** KALAN: (a) `00008`
+  migration CANLI conductor-PG'ye deploy'da uygulanır = **kullanıcı ops adımı** (ben canlı-PG'ye DOKUNMADIM;
+  editör 404→bounded fallback olduğundan deploy-öncesi güvenli); (b) deploy sonrası kullanıcı görsel capstone
+  (gerçek task diff tam-dosya native).
+- **SIRADAKİ: P3 agentic/uyum** (tree `view/item/context` menüleri + keybinding seti + context-key/when + Welcome
+  doğrula). Editör-only, hafif, backend yok. Her faz GERÇEK fork runtime + kullanıcı onayı.
