@@ -127,3 +127,40 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionNode
     this.#emitter.dispose();
   }
 }
+
+/**
+ * Extracts the project id from a sessions-tree node passed to a `view/item/context` command (P3
+ * agentic): a project node → its id, a task node → its owning projectId, anything else →
+ * undefined. The argument is the UNTYPED command argument VS Code hands a context-menu command
+ * (the tree element), so this narrows defensively. Token-free (ids only). Exported pure for tests.
+ */
+export function nodeProjectId(node: unknown): string | undefined {
+  if (node === null || typeof node !== "object") {
+    return undefined;
+  }
+  const n = node as { kind?: unknown; project?: unknown; projectId?: unknown };
+  if (n.kind === "project") {
+    const p = n.project as { id?: unknown } | undefined;
+    return typeof p?.id === "string" ? p.id : undefined;
+  }
+  if (n.kind === "task" && typeof n.projectId === "string") {
+    return n.projectId;
+  }
+  return undefined;
+}
+
+/**
+ * Extracts a {project, task} ref from a sessions-tree TASK node passed to a context-menu command
+ * (P3); undefined for a non-task node. Defensive (untyped arg); token-free. Exported pure for tests.
+ */
+export function nodeTaskRef(node: unknown): { readonly project: string; readonly task: string } | undefined {
+  if (node === null || typeof node !== "object") {
+    return undefined;
+  }
+  const n = node as { kind?: unknown; projectId?: unknown; task?: unknown };
+  if (n.kind !== "task" || typeof n.projectId !== "string") {
+    return undefined;
+  }
+  const t = n.task as { id?: unknown } | undefined;
+  return typeof t?.id === "string" ? { project: n.projectId, task: t.id } : undefined;
+}

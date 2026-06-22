@@ -59,6 +59,11 @@
         "category": "Conductor"
       },
       {
+        "command": "conductor.openSession",
+        "title": "Conductor: Open Session",
+        "category": "Conductor"
+      },
+      {
         "command": "conductor.refreshSessions",
         "title": "Conductor: Refresh Conductors",
         "category": "Conductor",
@@ -98,6 +103,12 @@
         "command": "conductor.showDiff",
         "title": "Conductor: Show Task Diff",
         "category": "Conductor"
+      },
+      {
+        "command": "conductor.openTaskDiff",
+        "title": "Conductor: Open Task Diff",
+        "category": "Conductor",
+        "icon": "$(git-compare)"
       }
     ],
     "menus": {
@@ -107,6 +118,48 @@
           "when": "view == conductor.sessions",
           "group": "navigation"
         }
+      ],
+      "view/item/context": [
+        {
+          "command": "conductor.openSession",
+          "when": "view == conductor.sessions && viewItem == conductorTask",
+          "group": "navigation@1"
+        },
+        {
+          "command": "conductor.openTaskDiff",
+          "when": "view == conductor.sessions && viewItem == conductorTask",
+          "group": "navigation@2"
+        },
+        {
+          "command": "conductor.approve",
+          "when": "view == conductor.sessions && viewItem == conductorProject",
+          "group": "1_control@1"
+        },
+        {
+          "command": "conductor.pause",
+          "when": "view == conductor.sessions && viewItem == conductorProject",
+          "group": "1_control@2"
+        },
+        {
+          "command": "conductor.resume",
+          "when": "view == conductor.sessions && viewItem == conductorProject",
+          "group": "1_control@3"
+        },
+        {
+          "command": "conductor.abort",
+          "when": "view == conductor.sessions && viewItem == conductorProject",
+          "group": "1_control@4"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "conductor.openSession",
+          "when": "false"
+        },
+        {
+          "command": "conductor.openTaskDiff",
+          "when": "false"
+        }
       ]
     },
     "keybindings": [
@@ -114,6 +167,18 @@
         "command": "conductor.open",
         "key": "ctrl+alt+c",
         "mac": "cmd+alt+c"
+      },
+      {
+        "command": "conductor.showDiff",
+        "key": "ctrl+alt+d",
+        "mac": "cmd+alt+d",
+        "when": "conductor.connected"
+      },
+      {
+        "command": "conductor.refreshSessions",
+        "key": "ctrl+alt+r",
+        "mac": "cmd+alt+r",
+        "when": "conductor.connected"
       }
     ]
   },

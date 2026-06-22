@@ -33,7 +33,7 @@ import { DiffObserver, type TaskDiff } from "./diffObserver";
 import { reconstructDiffFiles } from "./diffReconstruct";
 import { DiffContentClient, type FullTaskDiff } from "./diffContentClient";
 import { FleetReadClient } from "./fleetReadClient";
-import { SessionsTreeProvider, SESSIONS_VIEW_ID } from "./sessionsTree";
+import { SessionsTreeProvider, SESSIONS_VIEW_ID, nodeProjectId, nodeTaskRef } from "./sessionsTree";
 
 /** Command id for the gateway-connect action. */
 export const CONNECT_COMMAND = "conductor.connect";
@@ -71,6 +71,17 @@ export const REFRESH_SESSIONS_COMMAND = "conductor.refreshSessions";
  * sessions-tree task click with `[projectId, taskId]` arguments: it opens/reveals the panel
  * and navigates its cockpit to that task's SessionView. */
 export const OPEN_SESSION_COMMAND = "conductor.openSession";
+
+/** Command id that opens a specific task's diff (P3 agentic): the sessions-tree TASK
+ * `view/item/context` "Open Diff" action. Invoked with the task node; opens that task's
+ * most-recent native diff (or a clear info message if none). */
+export const OPEN_TASK_DIFF_COMMAND = "conductor.openTaskDiff";
+
+/** when-clause context key (P3): true while the gateway connection is live. Set via the
+ * built-in `setContext` on every connection-state change; the sessions-tree context menus +
+ * the control keybindings gate on it (`when: conductor.connected`) so they don't offer
+ * actions that can only fail while disconnected. */
+export const CONTEXT_CONNECTED = "conductor.connected";
 
 /** globalState key marking that the first-launch Conductor layout reveal has run (N5): the
  * activity-bar container is revealed ONCE (a fresh install) so the native "Conductors" sessions
@@ -1278,37 +1289,47 @@ export async function runControl(
   api: VscodeApi,
   control: Control,
   action: ControlAction,
+  preselectedProjectId?: string,
 ): Promise<void> {
   const label = actionLabel(action);
 
-  let projects: { id: string }[];
-  try {
-    projects = await control.listProjects();
-  } catch (err) {
-    // listProjects failed before any action — branch on the closed reason (no token in
-    // the message). "not-connected"/"unauthorized" guide the user to Connect; anything
-    // else is an unreachable gateway.
-    if (err instanceof ControlListError && err.reason === "not-connected") {
-      await api.window.showErrorMessage("Connect to the gateway first.");
-    } else if (err instanceof ControlListError && err.reason === "unauthorized") {
-      await api.window.showErrorMessage("The gateway rejected the stored token. Reconnect.");
-    } else {
-      await api.window.showErrorMessage("Could not reach the gateway.");
+  // P3: a preselected project (the sessions-tree context menu passes the clicked project) acts
+  // on it DIRECTLY — no listProjects, no quick-pick. The palette path (no preselection) keeps
+  // the original list-then-pick flow.
+  let pick: string;
+  if (preselectedProjectId !== undefined && preselectedProjectId !== "") {
+    pick = preselectedProjectId;
+  } else {
+    let projects: { id: string }[];
+    try {
+      projects = await control.listProjects();
+    } catch (err) {
+      // listProjects failed before any action — branch on the closed reason (no token in
+      // the message). "not-connected"/"unauthorized" guide the user to Connect; anything
+      // else is an unreachable gateway.
+      if (err instanceof ControlListError && err.reason === "not-connected") {
+        await api.window.showErrorMessage("Connect to the gateway first.");
+      } else if (err instanceof ControlListError && err.reason === "unauthorized") {
+        await api.window.showErrorMessage("The gateway rejected the stored token. Reconnect.");
+      } else {
+        await api.window.showErrorMessage("Could not reach the gateway.");
+      }
+      return;
     }
-    return;
-  }
 
-  if (projects.length === 0) {
-    await api.window.showInformationMessage("No projects.");
-    return;
-  }
+    if (projects.length === 0) {
+      await api.window.showInformationMessage("No projects.");
+      return;
+    }
 
-  const pick = await api.window.showQuickPick(
-    projects.map((p) => p.id),
-    { placeHolder: "Select a project" },
-  );
-  if (pick === undefined) {
-    return; // cancelled — quiet no-op.
+    const picked = await api.window.showQuickPick(
+      projects.map((p) => p.id),
+      { placeHolder: "Select a project" },
+    );
+    if (picked === undefined) {
+      return; // cancelled — quiet no-op.
+    }
+    pick = picked;
   }
 
   if (needsConfirm(action)) {
@@ -1384,8 +1405,10 @@ export function registerConductor(
   // confirms, then fires the authed control POST host-side. The token stays in the
   // ControlClient's Authorization header — never in a message.
   const controlDisposables = (["pause", "resume", "abort", "approve"] as const).map((action) =>
-    api.commands.registerCommand(controlCommandId(action), () => {
-      void runControl(api, control, action);
+    api.commands.registerCommand(controlCommandId(action), (arg?: unknown) => {
+      // P3: from the sessions-tree project context menu VS Code passes the clicked node →
+      // act on THAT project (no quick-pick). From the palette `arg` is undefined → list+pick.
+      void runControl(api, control, action, nodeProjectId(arg));
     }),
   );
   // 4C-1b: the read-only diff scheme + the show-diff command. The content provider serves the
@@ -1411,13 +1434,27 @@ export function registerConductor(
   // N3: deep-link to a session — invoked by a sessions-tree task click with [projectId, taskId].
   // Opens/reveals the Command Center and navigates its cockpit to that task's SessionView.
   const openSession = api.commands.registerCommand(OPEN_SESSION_COMMAND, (...args: unknown[]) => {
-    const [project, task] = args;
-    if (typeof project === "string" && typeof task === "string") {
+    // Two callers: the tree CLICK passes [projectId, taskId] (set in getTreeItem.command); the
+    // task `view/item/context` "Open Session" passes the task NODE (P3). Resolve both.
+    const ref =
+      typeof args[0] === "string" && typeof args[1] === "string"
+        ? { project: args[0], task: args[1] }
+        : nodeTaskRef(args[0]);
+    if (ref !== undefined) {
       // N3a: navigate the Command Center's cockpit to the session (the editor area, column One).
-      commandCenter?.navigateToSession(project, task);
+      commandCenter?.navigateToSession(ref.project, ref.task);
       // N3b: open that task's native diff BESIDE it (column Two) — the session=workspace split.
       // Quiet when no diff is retained yet (a deep-link shouldn't nag); reuses the preview tab.
-      void openTaskDiffBeside(api, diffStore, project, task, vscode.ViewColumn.Beside, fetchFullDiff);
+      void openTaskDiffBeside(api, diffStore, ref.project, ref.task, vscode.ViewColumn.Beside, fetchFullDiff);
+    }
+  });
+  // P3: the sessions-tree TASK "Open Diff" context action — opens THAT task's most-recent native
+  // diff (a clear info message if none retained). Distinct from openSession (which also navigates
+  // the cockpit + splits): this is the focused "just show me the change" action.
+  const openTaskDiff = api.commands.registerCommand(OPEN_TASK_DIFF_COMMAND, (arg?: unknown) => {
+    const ref = nodeTaskRef(arg);
+    if (ref !== undefined) {
+      void runShowDiffForTask(api, diffStore, ref.project, ref.task, fetchFullDiff);
     }
   });
   // The Fleet view attaches the host↔webview bridge on resolve. When a config is
@@ -1433,6 +1470,7 @@ export function registerConductor(
     showDiff,
     open,
     openSession,
+    openTaskDiff,
     fleetView,
   ];
   // Dispose the Command Center panel (+ its bridge) on deactivate when it was built.
@@ -1545,6 +1583,9 @@ export function activate(context: vscode.ExtensionContext): void {
     gateway: makeGatewayProbe(gatewayUrl),
     onStateChange: (state) => {
       statusBar.text = statusBarText(state);
+      // P3: publish the `conductor.connected` when-clause context key so the sessions-tree
+      // context menus + the control keybindings only offer actions while the gateway is live.
+      void vscode.commands.executeCommand("setContext", CONTEXT_CONNECTED, state === "connected");
       // 4C-3 + 4C-1b: tie the host WS subscriptions to the link state — open them on
       // "connected", tear them down otherwise. Extends the SAME onStateChange the status bar
       // uses (no second manager). start() is fire-and-forget (reads the token, never

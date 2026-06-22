@@ -3,7 +3,13 @@
 // a fake FleetReadClient drives getChildren without a network. No electron, no display.
 import { describe, expect, it, vi } from "vitest";
 import { TreeItemCollapsibleState } from "../test/vscode-mock";
-import { SessionsTreeProvider, taskStatusPresentation, SESSIONS_VIEW_ID } from "./sessionsTree";
+import {
+  SessionsTreeProvider,
+  taskStatusPresentation,
+  SESSIONS_VIEW_ID,
+  nodeProjectId,
+  nodeTaskRef,
+} from "./sessionsTree";
 import type { FleetReadClient, FleetProject, FleetTask } from "./fleetReadClient";
 
 const OPEN = "conductor.open";
@@ -132,5 +138,27 @@ describe("SessionsTreeProvider", () => {
 
   it("exposes the contributed view id", () => {
     expect(SESSIONS_VIEW_ID).toBe("conductor.sessions");
+  });
+});
+
+describe("nodeProjectId / nodeTaskRef (P3 context-menu arg resolution)", () => {
+  const projectNode = { kind: "project", project: { id: "proj-a", readiness: "ready", paused: false } };
+  const taskNode = { kind: "task", projectId: "proj-a", task: { id: "T-1", lane: "x", tier: "T2", status: "running" } };
+
+  it("nodeProjectId resolves a project node, a task node, and rejects junk", () => {
+    expect(nodeProjectId(projectNode)).toBe("proj-a");
+    expect(nodeProjectId(taskNode)).toBe("proj-a"); // a task's owning project
+    expect(nodeProjectId(undefined)).toBeUndefined();
+    expect(nodeProjectId(null)).toBeUndefined();
+    expect(nodeProjectId("p")).toBeUndefined();
+    expect(nodeProjectId({ kind: "task" })).toBeUndefined(); // no projectId
+    expect(nodeProjectId({ kind: "project", project: {} })).toBeUndefined(); // no id
+  });
+
+  it("nodeTaskRef resolves a task node only", () => {
+    expect(nodeTaskRef(taskNode)).toEqual({ project: "proj-a", task: "T-1" });
+    expect(nodeTaskRef(projectNode)).toBeUndefined(); // a project node is not a task
+    expect(nodeTaskRef(undefined)).toBeUndefined();
+    expect(nodeTaskRef({ kind: "task", projectId: "p" })).toBeUndefined(); // no task.id
   });
 });

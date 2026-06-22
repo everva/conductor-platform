@@ -35,6 +35,7 @@ import {
   COMMAND_CENTER_TITLE,
   OPEN_COMMAND,
   OPEN_SESSION_COMMAND,
+  OPEN_TASK_DIFF_COMMAND,
   REFRESH_SESSIONS_COMMAND,
   FIRST_LAUNCH_KEY,
   OPEN_CONDUCTOR_ACTION,
@@ -174,8 +175,8 @@ describe("registerConductor", () => {
     );
 
     // connect + disconnect + pause + resume + abort + approve + diff-provider + show-diff +
-    // open (N0) + openSession (N3) + fleet view = 11 (no fleetConfig → no panel disposable).
-    expect(disposables).toHaveLength(11);
+    // open (N0) + openSession (N3) + openTaskDiff (P3) + fleet view = 12 (no fleetConfig → no panel).
+    expect(disposables).toHaveLength(12);
     expect(commands.registerCommand).toHaveBeenCalledWith(CONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(DISCONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(PAUSE_COMMAND, expect.any(Function));
@@ -191,6 +192,8 @@ describe("registerConductor", () => {
     // N0: the editor-area Command Center open command + N3: the deep-link openSession command.
     expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_SESSION_COMMAND, expect.any(Function));
+    // P3: the task context-menu "Open Diff" command.
+    expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_TASK_DIFF_COMMAND, expect.any(Function));
     expect(window.registerWebviewViewProvider).toHaveBeenCalledWith(
       FLEET_VIEW_ID,
       expect.any(FleetViewProvider),
@@ -294,6 +297,28 @@ describe("runControl", () => {
     expect(control.pause).toHaveBeenCalledWith("p1");
     expect(window.showWarningMessage).not.toHaveBeenCalled(); // pause is not confirm-gated.
     expect(window.showInformationMessage).toHaveBeenCalledWith("Pause requested for p1.");
+  });
+
+  it("P3: a preselected project (context menu) acts directly — NO listProjects, NO quick-pick", async () => {
+    const control = makeControl({ projects: [{ id: "p1" }, { id: "p2" }] });
+
+    await runControl({ commands, window }, control, "pause", "p2");
+
+    expect(control.listProjects).not.toHaveBeenCalled();
+    expect(window.showQuickPick).not.toHaveBeenCalled();
+    expect(control.pause).toHaveBeenCalledWith("p2");
+    expect(window.showInformationMessage).toHaveBeenCalledWith("Pause requested for p2.");
+  });
+
+  it("P3: a preselected confirm-gated action still confirms before firing", async () => {
+    window.showWarningMessage.mockResolvedValueOnce("Yes");
+    const control = makeControl();
+
+    await runControl({ commands, window }, control, "abort", "p9");
+
+    expect(control.listProjects).not.toHaveBeenCalled();
+    expect(window.showWarningMessage).toHaveBeenCalledWith("Abort p9?", { modal: true }, "Yes");
+    expect(control.abort).toHaveBeenCalledWith("p9");
   });
 
   it("resume: happy path calls control.resume with no confirm", async () => {
@@ -1092,8 +1117,9 @@ describe("activate", () => {
       REFRESH_SESSIONS_COMMAND,
       expect.any(Function),
     );
-    // …prior + N2 sessions view + refresh command + tree provider + N3 openSession command = 20.
-    expect(subscriptions).toHaveLength(20);
+    // …prior + N2 sessions view + refresh command + tree provider + N3 openSession + P3
+    // openTaskDiff command = 21.
+    expect(subscriptions).toHaveLength(21);
   });
 
   it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {
