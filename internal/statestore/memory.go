@@ -36,7 +36,8 @@ type MemoryStore struct {
 	tasks     map[string]Task
 	leases    map[string]Lease // keyed by ProjectID
 	scenarios map[string]Scenario
-	hosts     map[string]Host // keyed by Host.ID (ADR-0024 registry)
+	hosts     map[string]Host     // keyed by Host.ID (ADR-0024 registry)
+	taskDiffs map[string]TaskDiff // keyed by taskDiffKey(projectID, taskID) (P2b, ADR-0041)
 }
 
 // NewMemoryStore returns an empty, ready-to-use in-memory StateStore.
@@ -47,6 +48,7 @@ func NewMemoryStore() *MemoryStore {
 		leases:    make(map[string]Lease),
 		scenarios: make(map[string]Scenario),
 		hosts:     make(map[string]Host),
+		taskDiffs: make(map[string]TaskDiff),
 	}
 }
 

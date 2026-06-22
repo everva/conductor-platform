@@ -31,6 +31,7 @@ import { ControlClient, ControlListError, type ControlAction } from "./controlCl
 import { InterventionNotifier, type Intervention } from "./notifier";
 import { DiffObserver, type TaskDiff } from "./diffObserver";
 import { reconstructDiffFiles } from "./diffReconstruct";
+import { DiffContentClient, type FullTaskDiff } from "./diffContentClient";
 import { FleetReadClient } from "./fleetReadClient";
 import { SessionsTreeProvider, SESSIONS_VIEW_ID } from "./sessionsTree";
 
@@ -849,6 +850,24 @@ export class DiffStore {
     return entry.uri;
   }
 
+  /** Replaces a stored entry's per-file reconstruction with one derived from a FULLER patch
+   * (P2b): the editor fetches the FULL-context patch on open and upgrades the entry IN PLACE, so
+   * the content provider then serves whole-file before/after (full-file native diff) instead of
+   * the bounded hunk view. No-op if `n` is unknown/evicted. The entry object is mutated, so a
+   * caller holding the same reference (recents()/latestForTask()) sees the upgraded files. */
+  upgradeFiles(n: number, patch: string): void {
+    const entry = this.#byN.get(n);
+    if (entry === undefined) {
+      return;
+    }
+    entry.files = reconstructDiffFiles(patch).map((f) => ({
+      path: f.path,
+      before: f.before,
+      after: f.after,
+      diffable: f.diffable,
+    }));
+  }
+
   /** The content for a `conductor-diff:` URI: the unified fallback body, or one file's before/
    * after side (P2a), or undefined if unknown/evicted (the provider maps that to a placeholder). */
   content(uri: string): string | undefined {
@@ -908,6 +927,14 @@ export function makeDiffContentProvider(store: DiffStore): DiffContentProvider {
 }
 
 /**
+ * Fetches a task's FULL-context diff for the full-file native view (P2b). Resolves undefined when
+ * none is available (no endpoint / 404 / no token / error), in which case the open flow keeps the
+ * bounded P2a hunk reconstruction. Wired in activate to {@link DiffContentClient.fetchFullDiff};
+ * the diff open flows take it as an OPTIONAL param so the P2a tests (which omit it) are unchanged.
+ */
+export type FetchFullDiff = (project: string, task: string) => Promise<FullTaskDiff | undefined>;
+
+/**
  * Opens ONE changed file as a NATIVE diff (P2a): `vscode.diff` between the file's before/after
  * `conductor-diff:` side URIs (the content provider fills each from the store). The diff editor
  * gives red-green gutters, side-by-side/inline toggle, and F7 change navigation — the "native
@@ -963,10 +990,27 @@ async function openUnifiedDiffDoc(
  */
 async function openStoredDiff(
   api: DiffVscodeApi,
+  store: DiffStore,
   entry: StoredDiff,
   interactive: boolean,
+  fetchFull?: FetchFullDiff,
   column?: vscode.ViewColumn,
 ): Promise<void> {
+  // P2b: prefer the FULL-context patch (full-file native diff). Fetch it on open and, on success,
+  // UPGRADE this entry's per-file reconstruction so the content provider serves whole files. Any
+  // failure (no endpoint / 404 / no token / network) leaves the bounded P2a reconstruction in
+  // place — a graceful fallback to the hunk view. The token never leaves the host fetch client.
+  if (fetchFull !== undefined) {
+    let full: FullTaskDiff | undefined;
+    try {
+      full = await fetchFull(entry.project, entry.task);
+    } catch {
+      full = undefined;
+    }
+    if (full !== undefined && full.patch !== "") {
+      store.upgradeFiles(entry.n, full.patch);
+    }
+  }
   const diffable = entry.files.filter((f) => f.diffable);
   if (diffable.length === 0) {
     await openUnifiedDiffDoc(api, entry.uri, column); // nothing to render side-by-side.
@@ -996,14 +1040,18 @@ async function openStoredDiff(
  * exactly one it opens it directly; with none it shows an info message. The quick-pick label is
  * index-aligned to the recents list. Token-free throughout (the store is token-free).
  */
-export async function runShowDiff(api: DiffVscodeApi, store: DiffStore): Promise<void> {
+export async function runShowDiff(
+  api: DiffVscodeApi,
+  store: DiffStore,
+  fetchFull?: FetchFullDiff,
+): Promise<void> {
   const recents = store.recents();
   if (recents.length === 0) {
     await api.window.showInformationMessage("No task diffs yet.");
     return;
   }
   if (recents.length === 1) {
-    await openStoredDiff(api, recents[0]!, true);
+    await openStoredDiff(api, store, recents[0]!, true, fetchFull);
     return;
   }
   const labels = recents.map((d) => diffQuickPickLabel(d));
@@ -1015,7 +1063,7 @@ export async function runShowDiff(api: DiffVscodeApi, store: DiffStore): Promise
   if (idx < 0) {
     return; // defensive: the picked label isn't one we offered.
   }
-  await openStoredDiff(api, recents[idx]!, true);
+  await openStoredDiff(api, store, recents[idx]!, true, fetchFull);
 }
 
 /** Labels a stored diff for the quick-pick: `<task> (<n> file[s])`. Pure; token-free. */
@@ -1035,13 +1083,14 @@ export async function runShowDiffForTask(
   store: DiffStore,
   project: string,
   task: string,
+  fetchFull?: FetchFullDiff,
 ): Promise<void> {
   const d = store.latestForTask(project, task);
   if (d === undefined) {
     await api.window.showInformationMessage(`No diff yet for ${project}/${task}.`);
     return;
   }
-  await openStoredDiff(api, d, true);
+  await openStoredDiff(api, store, d, true, fetchFull);
 }
 
 /**
@@ -1059,12 +1108,13 @@ export async function openTaskDiffBeside(
   project: string,
   task: string,
   column: vscode.ViewColumn,
+  fetchFull?: FetchFullDiff,
 ): Promise<void> {
   const d = store.latestForTask(project, task);
   if (d === undefined) {
     return;
   }
-  await openStoredDiff(api, d, false, column);
+  await openStoredDiff(api, store, d, false, fetchFull, column);
 }
 
 /**
@@ -1321,6 +1371,7 @@ export function registerConductor(
   gatewayUrl: string,
   control: Control,
   diffStore: DiffStore,
+  fetchFullDiff?: FetchFullDiff,
   fleetConfig?: FleetViewConfig,
 ): vscode.Disposable[] {
   const connect = api.commands.registerCommand(CONNECT_COMMAND, () => {
@@ -1345,7 +1396,7 @@ export function registerConductor(
     makeDiffContentProvider(diffStore),
   );
   const showDiff = api.commands.registerCommand(SHOW_DIFF_COMMAND, () => {
-    void runShowDiff(api, diffStore);
+    void runShowDiff(api, diffStore, fetchFullDiff);
   });
   // N0 (ADR-0036): the editor-area Command Center. A singleton WebviewPanel that reuses the
   // SAME cockpit bundle + bridge as the Fleet view but lives in the MAIN editor area (the
@@ -1366,7 +1417,7 @@ export function registerConductor(
       commandCenter?.navigateToSession(project, task);
       // N3b: open that task's native diff BESIDE it (column Two) — the session=workspace split.
       // Quiet when no diff is retained yet (a deep-link shouldn't nag); reuses the preview tab.
-      void openTaskDiffBeside(api, diffStore, project, task, vscode.ViewColumn.Beside);
+      void openTaskDiffBeside(api, diffStore, project, task, vscode.ViewColumn.Beside, fetchFullDiff);
     }
   });
   // The Fleet view attaches the host↔webview bridge on resolve. When a config is
@@ -1465,7 +1516,7 @@ export function activate(context: vscode.ExtensionContext): void {
       // intervention fires, by which point both are initialized.
       void handleIntervention(vscode, interventionBar, pendingInterventions, intervention, {
         approve: (project, task) => runApproveTask(vscode, control, project, task),
-        openDiff: (project, task) => runShowDiffForTask(vscode, diffStore, project, task),
+        openDiff: (project, task) => runShowDiffForTask(vscode, diffStore, project, task, fetchFullDiff),
       });
     },
   });
@@ -1522,10 +1573,19 @@ export function activate(context: vscode.ExtensionContext): void {
     getToken: () => Promise.resolve(context.secrets.get(GATEWAY_TOKEN_KEY)),
   });
 
+  // P2b (ADR-0041): the host-side authed client for a task's FULL-context diff. When the editor
+  // opens a diff it first fetches this (whole-file native diff); on any miss (404 / pre-P2b task /
+  // no token / network) the open flow keeps the bounded KindDiff patch (the P2a hunk view). Same
+  // TokenProvider seam — the token rides only in the Authorization header, never to a webview.
+  const diffContent = new DiffContentClient(normalizeBaseUrl(gatewayUrl), {
+    getToken: () => Promise.resolve(context.secrets.get(GATEWAY_TOKEN_KEY)),
+  });
+  const fetchFullDiff: FetchFullDiff = (project, task) => diffContent.fetchFullDiff(project, task);
+
   // The Fleet view's bridge reads the token from SecretStorage (per request) and talks
   // to the gateway at the configured URL; the token never reaches the webview. The
   // extensionUri lets the provider build the cockpit bundle's webview resource URIs.
-  const disposables = registerConductor(vscode, manager, gatewayUrl, control, diffStore, {
+  const disposables = registerConductor(vscode, manager, gatewayUrl, control, diffStore, fetchFullDiff, {
     secrets: context.secrets,
     gatewayUrl,
     extensionUri: context.extensionUri,

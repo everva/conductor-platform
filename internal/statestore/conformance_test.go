@@ -51,6 +51,7 @@ func runConformanceSuite(t *testing.T, newStore storeFactory) {
 		{"ReleaseLeaseIdempotent", confReleaseIdempotent},
 		{"ReleaseLeaseOwnedFencesByOwner", confReleaseLeaseOwned},
 		{"AcquireLeaseConcurrentOneWinner", confAcquireConcurrent},
+		{"TaskDiffStoreRoundTrip", confTaskDiffRoundTrip},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -58,6 +59,62 @@ func runConformanceSuite(t *testing.T, newStore storeFactory) {
 			defer cleanup()
 			tc.fn(t, s)
 		})
+	}
+}
+
+// confTaskDiffRoundTrip exercises the ADDITIVE TaskDiffStore seam (P2b, ADR-0041): both stores
+// implement it (type-asserted from StateStore). It proves put→get round-trip, upsert (a second
+// put for the same (project, task) overwrites), per-task scoping, ErrNotFound for a missing pair,
+// and ErrInvalid on an empty id — identically across MemoryStore and PostgresStore.
+func confTaskDiffRoundTrip(t *testing.T, s StateStore) {
+	t.Helper()
+	ctx := context.Background()
+	tds, ok := s.(TaskDiffStore)
+	if !ok {
+		t.Fatalf("%T does not implement TaskDiffStore", s)
+	}
+
+	// Missing → ErrNotFound (the editor then falls back to the bounded KindDiff patch).
+	if _, err := tds.GetTaskDiff(ctx, "p1", "t1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetTaskDiff(missing) err = %v, want ErrNotFound", err)
+	}
+
+	// Put → Get round-trip (TaskDiff is all-comparable, so == checks every field).
+	d := TaskDiff{ProjectID: "p1", TaskID: "t1", Base: "develop", Branch: "conductor/t1", Patch: "FULL\nPATCH\n", Truncated: true}
+	if err := tds.PutTaskDiff(ctx, d); err != nil {
+		t.Fatalf("PutTaskDiff: %v", err)
+	}
+	got, err := tds.GetTaskDiff(ctx, "p1", "t1")
+	if err != nil {
+		t.Fatalf("GetTaskDiff: %v", err)
+	}
+	if got != d {
+		t.Fatalf("round-trip mismatch: got %+v, want %+v", got, d)
+	}
+
+	// Upsert: a second put for the same (project, task) overwrites.
+	d2 := d
+	d2.Patch = "NEWER\nPATCH\n"
+	d2.Truncated = false
+	if err := tds.PutTaskDiff(ctx, d2); err != nil {
+		t.Fatalf("PutTaskDiff(upsert): %v", err)
+	}
+	got, err = tds.GetTaskDiff(ctx, "p1", "t1")
+	if err != nil {
+		t.Fatalf("GetTaskDiff after upsert: %v", err)
+	}
+	if got.Patch != "NEWER\nPATCH\n" || got.Truncated {
+		t.Fatalf("upsert did not overwrite: %+v", got)
+	}
+
+	// Scoped by (project, task): a different task is independent.
+	if _, err := tds.GetTaskDiff(ctx, "p1", "other"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetTaskDiff(other task) err = %v, want ErrNotFound", err)
+	}
+
+	// Empty id → ErrInvalid (guards a malformed write).
+	if err := tds.PutTaskDiff(ctx, TaskDiff{ProjectID: "", TaskID: "t1"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("PutTaskDiff(empty project) err = %v, want ErrInvalid", err)
 	}
 }
 

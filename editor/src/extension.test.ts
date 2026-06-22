@@ -888,6 +888,48 @@ describe("runShowDiff", () => {
     expect(workspace.openTextDocument).toHaveBeenCalledTimes(1);
     expect(languages.setTextDocumentLanguage).toHaveBeenCalledWith(expect.any(Object), "diff");
   });
+
+  it("P2b: upgrades to the FULL-context patch (full-file) when fetchFull returns one", async () => {
+    const store = new DiffStore();
+    // Bounded patch = a 1-line hunk (only the change); full patch = the whole file with context.
+    store.add(makeTaskDiff({ patch: "diff --git a/src/a.ts b/src/a.ts\n@@ -2 +2 @@\n-old\n+new\n" }));
+    const fullPatch = "diff --git a/src/a.ts b/src/a.ts\n@@ -1,3 +1,3 @@\n line1\n-old\n+new\n line3\n";
+    const fetchFull = vi.fn(() =>
+      Promise.resolve({ patch: fullPatch, base: "develop", branch: "b", truncated: false }),
+    );
+
+    await runShowDiff(diffApi, store, fetchFull);
+
+    expect(fetchFull).toHaveBeenCalledWith("alpha", "t-1");
+    // The content provider now serves the FULL reconstruction (context lines included), not the
+    // bounded 1-line hunk — the editor renders a full-file native diff.
+    const provider = makeDiffContentProvider(store);
+    const before = provider.provideTextDocumentContent(
+      Uri.parse(diffSideUri(1, 0, "before", "src/a.ts")) as never,
+    );
+    const after = provider.provideTextDocumentContent(
+      Uri.parse(diffSideUri(1, 0, "after", "src/a.ts")) as never,
+    );
+    expect(before).toBe("line1\nold\nline3");
+    expect(after).toBe("line1\nnew\nline3");
+  });
+
+  it("P2b: keeps the bounded reconstruction when fetchFull misses (graceful fallback)", async () => {
+    const store = new DiffStore();
+    store.add(makeTaskDiff()); // bounded src/a.ts: before "old", after "new"
+    const fetchFull = vi.fn(() => Promise.resolve(undefined)); // 404 / no token / network.
+
+    await runShowDiff(diffApi, store, fetchFull);
+
+    expect(fetchFull).toHaveBeenCalled();
+    // Still opens natively from the bounded patch (vscode.diff); the bounded content stands.
+    const call = commands.executeCommand.mock.calls.find((c) => c[0] === "vscode.diff");
+    expect(call?.[3]).toContain("src/a.ts");
+    const provider = makeDiffContentProvider(store);
+    expect(
+      provider.provideTextDocumentContent(Uri.parse(diffSideUri(1, 0, "before", "src/a.ts")) as never),
+    ).toBe("old");
+  });
 });
 
 describe("DiffStore.latestForTask (4C-3 take over)", () => {

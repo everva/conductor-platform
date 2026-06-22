@@ -90,6 +90,7 @@ func (s *apiServer) routes() http.Handler {
 	// Protected read endpoints.
 	mux.Handle("GET /projects", s.requireAuth(http.HandlerFunc(s.handleProjects)))
 	mux.Handle("GET /projects/{id}/tasks", s.requireAuth(http.HandlerFunc(s.handleProjectTasks)))
+	mux.Handle("GET /projects/{id}/tasks/{task}/diff", s.requireAuth(http.HandlerFunc(s.handleProjectTaskDiff)))
 	mux.Handle("GET /projects/{id}/scenarios", s.requireAuth(http.HandlerFunc(s.handleProjectScenarios)))
 	mux.Handle("GET /hosts", s.requireAuth(http.HandlerFunc(s.handleHosts)))
 	mux.Handle("GET /status", s.requireAuth(http.HandlerFunc(s.handleStatus)))
@@ -166,6 +167,15 @@ type taskDTO struct {
 	RetryCount     int      `json:"retry_count"`
 	AbortRequested bool     `json:"abort_requested"`
 	Approved       bool     `json:"approved"`
+}
+
+type taskDiffDTO struct {
+	ProjectID string `json:"project_id"`
+	TaskID    string `json:"task_id"`
+	Base      string `json:"base"`
+	Branch    string `json:"branch"`
+	Patch     string `json:"patch"`
+	Truncated bool   `json:"truncated"`
 }
 
 type hostDTO struct {
@@ -255,6 +265,39 @@ func (s *apiServer) handleProjectTasks(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleProjectTaskDiff: GET /projects/{id}/tasks/{task}/diff → the persisted FULL-context
+// diff (P2b, ADR-0041) for the editor's full-file native vscode.diff. 404 when none is stored
+// (the editor falls back to the bounded KindDiff event patch), 501 when the configured store has
+// no diff persistence (a non-PG/non-memory store). Additive read; the gateway stays a pure
+// projection of the store and never sees the worktree (the worker persists at the gate).
+func (s *apiServer) handleProjectTaskDiff(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	taskID := r.PathValue("task")
+
+	tds, ok := s.store.(statestore.TaskDiffStore)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "diff storage not configured")
+		return
+	}
+	d, err := tds.GetTaskDiff(r.Context(), id, taskID)
+	if errors.Is(err, statestore.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "diff not found")
+		return
+	}
+	if err != nil {
+		s.serverError(w, "task diff: get", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, taskDiffDTO{
+		ProjectID: d.ProjectID,
+		TaskID:    d.TaskID,
+		Base:      d.Base,
+		Branch:    d.Branch,
+		Patch:     d.Patch,
+		Truncated: d.Truncated,
+	})
 }
 
 // handleProjectScenarios: GET /projects/{id}/scenarios → JSON array of that

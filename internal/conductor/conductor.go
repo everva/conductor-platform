@@ -198,6 +198,17 @@ type Differ interface {
 	Diff(ctx context.Context, project statestore.Project, ws engine.Workspace) (events.DiffSummary, error)
 }
 
+// FullDiffer is the OPTIONAL P2b extension of the diff source (ADR-0041): a Differ that can
+// ALSO produce the task's FULL-context patch (whole-file context) for OUT-OF-BAND persistence,
+// so the editor renders a full-file NATIVE diff beyond the bounded KindDiff event. emitDiff
+// type-asserts the injected Differ to this — additive, so a Differ that doesn't implement it
+// (or a nil store) just means no full diff is persisted and the editor falls back to the
+// bounded patch. conductor.GitDiffer implements it; fakes need not. Like Diff, it NEVER fails
+// the tick (a full-patch error is swallowed + logged — observability only).
+type FullDiffer interface {
+	FullPatch(ctx context.Context, project statestore.Project, ws engine.Workspace) (patch string, truncated bool, err error)
+}
+
 // Policy is the OPTIONAL governance seam (ADR-0003, N-10): AFTER the independent
 // verify gate PASSES, the tick consults it to decide whether the task's risk tier
 // permits an automatic merge or requires a HUMAN approval first. It is narrowed to
@@ -513,6 +524,43 @@ func (c *Conductor) emitDiff(ctx context.Context, project statestore.Project, ta
 		return
 	}
 	c.emit(ctx, task, events.PhaseReview, events.KindDiff, summary.Payload())
+	// P2b (ADR-0041): ALSO persist the FULL-context patch out-of-band (best-effort) so the
+	// editor can fetch it and render a full-file native diff, beyond the bounded event above.
+	c.persistFullDiff(ctx, project, task, ws)
+}
+
+// persistFullDiff stores the task's FULL-context patch for the editor's full-file native diff
+// (P2b, ADR-0041). It is OBSERVABILITY-ONLY and best-effort, mirroring emitDiff: it runs only
+// when the injected Differ also satisfies FullDiffer AND the store satisfies TaskDiffStore
+// (both true in production: GitDiffer + the PG/memory store); otherwise it is a clean no-op and
+// the editor falls back to the bounded KindDiff patch. A full-patch or persist error is swallowed
+// + logged and NEVER alters the tick. The patch is out-of-band (not over the NOTIFY bus).
+func (c *Conductor) persistFullDiff(ctx context.Context, project statestore.Project, task statestore.Task, ws engine.Workspace) {
+	fd, ok := c.differ.(FullDiffer)
+	if !ok {
+		return // the diff source doesn't produce full patches → nothing to persist.
+	}
+	tds, ok := c.store.(statestore.TaskDiffStore)
+	if !ok {
+		return // the store has no full-diff persistence → editor uses the bounded patch.
+	}
+	patch, truncated, err := fd.FullPatch(ctx, project, ws)
+	if err != nil {
+		slog.Warn("conductor: full-diff computation failed; skipping persist (observability only)",
+			slog.String("project", task.ProjectID), slog.String("task", task.ID), slog.String("error", err.Error()))
+		return
+	}
+	if err := tds.PutTaskDiff(ctx, statestore.TaskDiff{
+		ProjectID: task.ProjectID,
+		TaskID:    task.ID,
+		Base:      project.BaseBranch,
+		Branch:    ws.Branch,
+		Patch:     patch,
+		Truncated: truncated,
+	}); err != nil {
+		slog.Warn("conductor: persist full diff failed (observability only)",
+			slog.String("project", task.ProjectID), slog.String("task", task.ID), slog.String("error", err.Error()))
+	}
 }
 
 // maxVerdictChecks bounds the number of per-gate checks carried in a verdict

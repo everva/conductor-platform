@@ -40,6 +40,10 @@ type GitDiffer struct {
 	// json.Marshal(Payload()) fits this. Default defaultMaxPayloadBytes, chosen
 	// below the PG NOTIFY ~8KB limit with headroom for the Event envelope.
 	maxPayloadBytes int
+	// maxFullPatchBytes caps the FULL-context patch (P2b) FullPatch produces; it is
+	// persisted out-of-band, so it is far larger than maxPatchBytes. Default
+	// defaultMaxFullPatchBytes.
+	maxFullPatchBytes int
 }
 
 // Diff caps (ADR-0030): defaults chosen so the TOTAL marshaled DiffSummary
@@ -53,6 +57,12 @@ const (
 	// defaultMaxPayloadBytes is the final total-budget guard on the marshaled
 	// payload — the hard guarantee the NOTIFY bound holds regardless of path names.
 	defaultMaxPayloadBytes = 7000
+	// defaultMaxFullPatchBytes caps the FULL-context patch (P2b, ADR-0041) that is
+	// persisted OUT-OF-BAND (not over NOTIFY) for the editor's full-file native diff. It
+	// is far larger than the NOTIFY-bounded caps above (whole-file context is the point)
+	// but still bounded so a pathological diff can't store an unbounded blob; over it, the
+	// patch is cut on a line boundary and Truncated is set (the editor still renders what fit).
+	defaultMaxFullPatchBytes = 1 << 20 // 1 MiB
 )
 
 // DiffOption configures a GitDiffer at construction (additive; ADR-0021). Options
@@ -90,14 +100,25 @@ func WithMaxPayloadBytes(n int) DiffOption {
 	}
 }
 
+// WithMaxFullPatchBytes overrides the FULL-context patch byte cap (P2b). A non-positive
+// value is ignored (keeps the default).
+func WithMaxFullPatchBytes(n int) DiffOption {
+	return func(d *GitDiffer) {
+		if n > 0 {
+			d.maxFullPatchBytes = n
+		}
+	}
+}
+
 // NewGitDiffer returns a GitDiffer with the bounded-diff caps defaulted to fit
 // the PG NOTIFY budget (ADR-0030). Options override individual caps; with none it
 // is the production-safe default.
 func NewGitDiffer(opts ...DiffOption) *GitDiffer {
 	d := &GitDiffer{
-		maxPatchBytes:   defaultMaxPatchBytes,
-		maxFiles:        defaultMaxFiles,
-		maxPayloadBytes: defaultMaxPayloadBytes,
+		maxPatchBytes:     defaultMaxPatchBytes,
+		maxFiles:          defaultMaxFiles,
+		maxPayloadBytes:   defaultMaxPayloadBytes,
+		maxFullPatchBytes: defaultMaxFullPatchBytes,
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -155,6 +176,36 @@ func (d *GitDiffer) Diff(ctx context.Context, project statestore.Project, ws eng
 	// holds regardless of long path names that name-status/numstat may have emitted.
 	d.fitBudget(&summary)
 	return summary, nil
+}
+
+// Compile-time assertion that *GitDiffer also satisfies the OPTIONAL P2b FullDiffer seam
+// (full-file native diff source), in addition to the bounded Differ.
+var _ FullDiffer = (*GitDiffer)(nil)
+
+// FullPatch computes the FULL-context unified patch of the task branch vs the project base
+// (P2b, ADR-0041) for OUT-OF-BAND persistence — the editor fetches it to render a full-file
+// NATIVE diff, beyond the bounded KindDiff event. Unlike Diff (capped for the NOTIFY bus),
+// it runs `git diff --unified=<huge>` so each changed file's ENTIRE content rides along as
+// context, letting the editor reconstruct whole-file before/after. It uses the SAME three-dot
+// range (<base>...HEAD) and base-resolution as Diff, and caps the result at maxFullPatchBytes
+// (cut on a line boundary), reporting truncation. Read-only; never mutates the worktree.
+func (d *GitDiffer) FullPatch(ctx context.Context, project statestore.Project, ws engine.Workspace) (string, bool, error) {
+	base := project.BaseBranch
+	if base == "" {
+		return "", false, fmt.Errorf("git differ: project %q has no base branch", project.ID)
+	}
+	if _, err := gitOut(ctx, ws.Path, "rev-parse", "--verify", "--quiet", base); err != nil {
+		return "", false, fmt.Errorf("git differ: resolve base %q in %q: %w", base, ws.Path, err)
+	}
+	// --unified with a very large context count includes each changed file's whole content as
+	// context (git clamps to the file length), so reconstruction yields the full file, not just
+	// hunks. Same three-dot range as Diff (robust to base drift).
+	out, err := gitOut(ctx, ws.Path, "diff", "--unified=1000000", base+"...HEAD")
+	if err != nil {
+		return "", false, fmt.Errorf("git differ: full patch %q...HEAD: %w", base, err)
+	}
+	patch, truncated := capPatch(out, d.maxFullPatchBytes)
+	return patch, truncated, nil
 }
 
 // changedFiles builds the per-file change list for the range by merging numstat
