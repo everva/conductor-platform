@@ -70,6 +70,12 @@ export const REFRESH_SESSIONS_COMMAND = "conductor.refreshSessions";
  * and navigates its cockpit to that task's SessionView. */
 export const OPEN_SESSION_COMMAND = "conductor.openSession";
 
+/** globalState key marking that the first-launch Conductor layout reveal has run (N5): the
+ * activity-bar container is revealed ONCE (a fresh install) so the native "Conductors" sessions
+ * rail shows alongside the auto-opened Command Center; later launches respect the user's
+ * last-used view container (we don't re-grab the sidebar every window). */
+export const FIRST_LAUNCH_KEY = "conductor.firstLaunchRevealed";
+
 /** Custom URI scheme for the read-only diff virtual documents (4C-1b). Registered with a
  * TextDocumentContentProvider; the diff body is served from a bounded in-memory store. */
 export const DIFF_SCHEME = "conductor-diff";
@@ -1400,6 +1406,16 @@ export function activate(context: vscode.ExtensionContext): void {
   // singleton open ARE the default-surface flip. Fire-and-forget — `conductor.open` is registered
   // above (in registerConductor); the panel is a singleton, so a later open just reveals it.
   void vscode.commands.executeCommand(OPEN_COMMAND);
+
+  // N5 (Conductor layout default): on the FIRST launch only, also reveal the Conductor
+  // activity-bar container so the native "Conductors" sessions rail is shown together with the
+  // auto-opened Command Center — a fresh window lands on the Conductor layout, not a generic one.
+  // Gated on globalState so later launches respect the user's last-used view (we never re-grab
+  // the sidebar). Fire-and-forget; the flag is set first so a failed reveal still won't nag again.
+  if (context.globalState.get(FIRST_LAUNCH_KEY) !== true) {
+    void context.globalState.update(FIRST_LAUNCH_KEY, true);
+    void vscode.commands.executeCommand(REVEAL_CONTAINER_COMMAND);
+  }
 
   // Silent restore: re-validate a stored token (if any) and mirror the result onto the
   // status bar via onStateChange. Fire-and-forget; never throws, never logs the token.

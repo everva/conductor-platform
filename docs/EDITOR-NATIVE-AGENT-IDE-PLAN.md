@@ -148,7 +148,13 @@ Canlı optiway/xirigo'ya DOKUNMA. isolation:"worktree" KULLANMA.
   item zaten 4C'de entegreydi (yeniden yapılmadı; dürüst). Web gate (vitest 17/17 session + **Playwright e2e 15/15
   incl. CANLI arrow-key testi `session.spec.ts:105` — KENDİM tarayıcıda klavyeyle doğruladım**) + editör gate
   (203/3) + electron smoke (keybinding contribution parse + aktive) YEŞİL.
-- **SIRADAKİ: N5** — fork layout-default (Code-OSS overlay ince patch: ilk açılışta Conductor activity-bar +
-  Command Center editör-alanı default) + imzalı fork rebuild + **gerçek runtime capstone** (electron smoke + elle
-  take-over ekran-görüntüsü + Devin-referans + **KULLANICI ONAYI**). **N5 KULLANICIYA BAĞLI** (fork rebuild + imza
-  cert + onun host'u + görsel onay). Her faz GERÇEK runtime KENDİM.
+- **N5a ✅ (bu commit) + N5b ✅ (fork `5b67cbc`) — Conductor layout-default.** N5a (extension): ilk-açılışta
+  Conductor activity-bar container reveal (`workbench.view.extension.conductor`, **globalState-gated** → sonraki
+  açılışlar kullanıcının son view'ini korur) + CC zaten N1'de auto-open ⇒ fresh window = Conductor layout (sessions
+  rayı + CC), generic VS Code değil. N5b (fork `patches/0003-default-layout.patch`): product.json
+  `configurationDefaults: workbench.startupEditor=none` ⇒ Welcome sekmesi açılmaz, CC ilk yüzey. Editör gate (vitest
+  204/3) + electron smoke YEŞİL; fork patch `git apply --check` temiz (post-0001 tail anchor) + JSON valid.
+- **SIRADAKİ: N5c (KULLANICIYA BAĞLI)** — imzalı fork rebuild (`build/all.sh package` + `sign.sh`/`notarize.sh`,
+  **Apple cert sende**) + **gerçek runtime görsel capstone** (canlı gateway'le tüm akış + elle take-over ekran-
+  görüntüsü + Devin-referans yan-yana) + **KULLANICI ONAYI** (kabul barı). Bunu ben üretemem (imza cert + görsel
+  onay sende). Her faz GERÇEK runtime KENDİM. **→ N5'in tüm OTONOM kısmı (a+b) bitti; kalan yalnız imza + görsel onay.**

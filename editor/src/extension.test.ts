@@ -16,6 +16,7 @@ import {
   __reset,
   __makeWebviewView,
   __makeSecretStorage,
+  __makeGlobalState,
   __makeExtensionUri,
   __setConfig,
   type Disposable,
@@ -35,6 +36,7 @@ import {
   OPEN_COMMAND,
   OPEN_SESSION_COMMAND,
   REFRESH_SESSIONS_COMMAND,
+  FIRST_LAUNCH_KEY,
   OPEN_CONDUCTOR_ACTION,
   APPROVE_ACTION,
   OPEN_DIFF_ACTION,
@@ -898,10 +900,12 @@ describe("activate", () => {
   it("creates a status bar, registers commands + view, and pushes all disposables", async () => {
     __setConfig({ "conductor.gatewayUrl": "http://localhost:8080" });
     const subscriptions: Disposable[] = [];
+    const globalState = __makeGlobalState();
     const context = {
       subscriptions,
       secrets: __makeSecretStorage(),
       extensionUri: __makeExtensionUri(),
+      globalState,
     } as ExtensionContext;
 
     activate(context as never);
@@ -943,6 +947,9 @@ describe("activate", () => {
     expect(commands.executeCommand).toHaveBeenCalledWith(OPEN_COMMAND);
     // N3: the deep-link openSession command is registered.
     expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_SESSION_COMMAND, expect.any(Function));
+    // N5: a fresh install reveals the Conductor activity-bar container once + records the flag.
+    expect(commands.executeCommand).toHaveBeenCalledWith(REVEAL_CONTAINER_COMMAND);
+    expect(globalState._map.get(FIRST_LAUNCH_KEY)).toBe(true);
     // N2: the native sessions tree view + its refresh command are registered.
     expect(window.createTreeView).toHaveBeenCalledWith(SESSIONS_VIEW_ID, {
       treeDataProvider: expect.anything(),
@@ -953,6 +960,24 @@ describe("activate", () => {
     );
     // …prior + N2 sessions view + refresh command + tree provider + N3 openSession command = 20.
     expect(subscriptions).toHaveLength(20);
+  });
+
+  it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {
+    __setConfig({ "conductor.gatewayUrl": "http://localhost:8080" });
+    const context = {
+      subscriptions: [] as Disposable[],
+      secrets: __makeSecretStorage(),
+      extensionUri: __makeExtensionUri(),
+      globalState: __makeGlobalState({ [FIRST_LAUNCH_KEY]: true }),
+    } as ExtensionContext;
+
+    activate(context as never);
+    await Promise.resolve();
+
+    // The Command Center still auto-opens (N1)…
+    expect(commands.executeCommand).toHaveBeenCalledWith(OPEN_COMMAND);
+    // …but a returning user's last-used view container is respected — no re-reveal (N5).
+    expect(commands.executeCommand).not.toHaveBeenCalledWith(REVEAL_CONTAINER_COMMAND);
   });
 });
 

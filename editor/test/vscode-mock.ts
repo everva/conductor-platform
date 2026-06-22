@@ -18,12 +18,20 @@ export interface SecretStorageLike {
   delete(key: string): Thenable<void>;
 }
 
+/** The slice of vscode.Memento the extension uses (N5 first-launch flag): get + update. */
+export interface GlobalStateLike {
+  get(key: string): unknown;
+  update(key: string, value: unknown): Thenable<void>;
+}
+
 export interface ExtensionContext {
   subscriptions: Disposable[];
   secrets: SecretStorageLike;
   // The installed extension root; the FleetViewProvider (4B-3) joins it to build the
   // cockpit bundle's webview resource URIs. A fake Uri suffices for the headless tests.
   extensionUri: UriLike;
+  // N5: the globalState memento backing the first-launch layout-reveal flag.
+  globalState: GlobalStateLike;
 }
 
 // Minimal structural stand-in for vscode.Uri: just enough for joinPath + asWebviewUri +
@@ -326,6 +334,22 @@ export function __makeSecretStorage(initial: Record<string, string> = {}): {
     },
     delete: (key) => {
       map.delete(key);
+      return Promise.resolve();
+    },
+    _map: map,
+  };
+}
+
+/** In-memory globalState memento (Map-backed) for the N5 first-launch flag. Pre-seed via
+ * `initial` to simulate a returning user; assert state via `_map`. */
+export function __makeGlobalState(initial: Record<string, unknown> = {}): GlobalStateLike & {
+  _map: Map<string, unknown>;
+} {
+  const map = new Map<string, unknown>(Object.entries(initial));
+  return {
+    get: (key) => map.get(key),
+    update: (key, value) => {
+      map.set(key, value);
       return Promise.resolve();
     },
     _map: map,
