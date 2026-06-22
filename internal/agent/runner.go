@@ -1,0 +1,268 @@
+// Package agent is the host-agent execution loop (ADR-0048, Faz A): the gateway-
+// mediated analogue of the daemon's Conductor.Tick. It leases a task over HTTP,
+// develops + verifies it locally (reusing the engine/verify/merger packages via the
+// Executor seam), reports the verdict to the gateway, and — honoring held-for-review —
+// either merges (auto) or waits for the director's approval before merging. It NEVER
+// touches Postgres: every piece of state crosses the Gateway HTTP seam.
+//
+// The Runner orchestrates over two seams so the loop logic is testable without a real
+// gateway, a real LLM, or real git:
+//
+//   - Gateway: the conductor-api agent-API (agentclient.Client satisfies it).
+//   - Executor: provision+develop+verify (Run), squash-merge (Merge), worktree cleanup.
+package agent
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/everva/conductor-platform/internal/agentclient"
+)
+
+// Gateway is the conductor-api agent-API surface the Runner consumes. *agentclient.Client
+// satisfies it; tests inject a fake.
+type Gateway interface {
+	Lease(ctx context.Context, projectID, hostID string, capabilities []string) (agentclient.LeasedTask, bool, error)
+	Scenarios(ctx context.Context, projectID string) ([]agentclient.ScenarioInfo, error)
+	Report(ctx context.Context, projectID, taskID, phase, kind string, payload map[string]any) error
+	Result(ctx context.Context, projectID, taskID string, report agentclient.ResultReport) (string, error)
+	Decision(ctx context.Context, projectID, taskID string) (string, error)
+	Merged(ctx context.Context, projectID, taskID, sha string) error
+	Release(ctx context.Context, projectID, hostID, taskID string) error
+	Heartbeat(ctx context.Context, hostID string) error
+}
+
+// RunOutcome is the result of an Executor.Run (provision+develop+verify).
+type RunOutcome struct {
+	// Result is the gate verdict: pass | changes-requested | blocked.
+	Result string
+	// Branch is the verified per-task branch (recorded if the task is held).
+	Branch string
+	// Summary is a short, secret-free description for the verdict event.
+	Summary string
+	// Checks are the individual gate checks (for the KindDecision event).
+	Checks []agentclient.Check
+	// DiffPatch is the unified diff of the change (optional, for a KindDiff event).
+	DiffPatch string
+}
+
+// Executor runs the local, git-and-LLM-native half of a task. The real adapter wires
+// the provisioner + engine + verify + merger; tests inject a fake.
+type Executor interface {
+	// Run provisions a worktree, develops (the performer), and verifies (the gate),
+	// returning the outcome. It holds the worktree for a later Merge/Cleanup.
+	Run(ctx context.Context, task agentclient.TaskInfo, scenario agentclient.ScenarioInfo) (RunOutcome, error)
+	// Merge squash-merges the verified branch and returns the merge SHA. When approved
+	// is true (a held task the director approved) it re-verifies against the current
+	// base first (drift guard) before merging.
+	Merge(ctx context.Context, task agentclient.TaskInfo, branch string, approved bool) (string, error)
+	// Cleanup removes the task's worktree (best-effort).
+	Cleanup(ctx context.Context, task agentclient.TaskInfo)
+}
+
+// Config configures a Runner.
+type Config struct {
+	ProjectID    string
+	HostID       string
+	Capabilities []string
+	// PollInterval is how often a held task's decision is polled. Defaults to 15s.
+	PollInterval time.Duration
+	Logger       *slog.Logger
+}
+
+// Runner is the host-agent's one-task orchestrator.
+type Runner struct {
+	gw   Gateway
+	ex   Executor
+	cfg  Config
+	log  *slog.Logger
+	poll time.Duration
+}
+
+// Outcome classifies what RunOnce did, for the loop + logging.
+type Outcome string
+
+const (
+	OutcomeNoWork  Outcome = "no-work"
+	OutcomeMerged  Outcome = "merged"
+	OutcomeHeld    Outcome = "held" // returned only when the held poll is interrupted (ctx done)
+	OutcomeBlocked Outcome = "blocked"
+	OutcomeAborted Outcome = "aborted"
+)
+
+// New returns a Runner over the gateway + executor.
+func New(gw Gateway, ex Executor, cfg Config) *Runner {
+	log := cfg.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	poll := cfg.PollInterval
+	if poll <= 0 {
+		poll = 15 * time.Second
+	}
+	return &Runner{gw: gw, ex: ex, cfg: cfg, log: log, poll: poll}
+}
+
+// RunOnce leases at most one task and drives it to a terminal outcome (merged,
+// blocked, aborted) or returns no-work. The lease is ALWAYS released (defer), so a
+// crash mid-task frees the repo for the reaper. Observability reports are best-effort.
+func (r *Runner) RunOnce(ctx context.Context) (Outcome, error) {
+	lt, ok, err := r.gw.Lease(ctx, r.cfg.ProjectID, r.cfg.HostID, r.cfg.Capabilities)
+	if err != nil {
+		return "", fmt.Errorf("agent: lease: %w", err)
+	}
+	if !ok {
+		return OutcomeNoWork, nil
+	}
+	task := lt.Task
+
+	// Always release the lease, on every path. Cleanup the worktree too.
+	defer func() {
+		r.ex.Cleanup(context.WithoutCancel(ctx), task)
+		if rerr := r.gw.Release(context.WithoutCancel(ctx), r.cfg.ProjectID, r.cfg.HostID, task.ID); rerr != nil {
+			r.log.Warn("agent: lease release failed", "task", task.ID, "err", rerr)
+		}
+	}()
+
+	scenario := r.scenarioFor(ctx, task)
+	r.report(ctx, task.ID, "develop", "started", map[string]any{"task": task.ID})
+
+	out, err := r.ex.Run(ctx, task, scenario)
+	if err != nil {
+		// An infra failure (provision/develop/verify error) is reported as blocked —
+		// never fake-green — so the task is re-runnable, not silently lost.
+		r.log.Warn("agent: run failed; reporting blocked", "task", task.ID, "err", err)
+		out = RunOutcome{Result: "blocked", Summary: "agent run failed: " + err.Error()}
+	}
+	if out.DiffPatch != "" {
+		r.report(ctx, task.ID, "review", "diff", map[string]any{"patch": out.DiffPatch})
+	}
+
+	decision, err := r.gw.Result(ctx, r.cfg.ProjectID, task.ID, agentclient.ResultReport{
+		Result: out.Result, Branch: out.Branch, Summary: out.Summary, Checks: out.Checks,
+	})
+	if err != nil {
+		return "", fmt.Errorf("agent: report result: %w", err)
+	}
+
+	switch decision {
+	case "blocked":
+		return OutcomeBlocked, nil
+	case "merge":
+		return r.merge(ctx, task, out.Branch, false)
+	case "hold":
+		return r.awaitAndMaybeMerge(ctx, task, out.Branch)
+	default:
+		return "", fmt.Errorf("agent: unknown decision %q", decision)
+	}
+}
+
+// merge squash-merges the verified branch and reports it merged → task done.
+func (r *Runner) merge(ctx context.Context, task agentclient.TaskInfo, branch string, approved bool) (Outcome, error) {
+	sha, err := r.ex.Merge(ctx, task, branch, approved)
+	if err != nil {
+		return "", fmt.Errorf("agent: merge %q: %w", task.ID, err)
+	}
+	if err := r.gw.Merged(ctx, r.cfg.ProjectID, task.ID, sha); err != nil {
+		return "", fmt.Errorf("agent: report merged %q: %w", task.ID, err)
+	}
+	return OutcomeMerged, nil
+}
+
+// awaitAndMaybeMerge polls the held task's decision until the director approves (then
+// re-verify-and-merge) or aborts. It returns OutcomeHeld if ctx is cancelled while
+// still pending (the task stays held for the next agent run — nothing is lost).
+func (r *Runner) awaitAndMaybeMerge(ctx context.Context, task agentclient.TaskInfo, branch string) (Outcome, error) {
+	for {
+		state, err := r.gw.Decision(ctx, r.cfg.ProjectID, task.ID)
+		if err != nil {
+			return "", fmt.Errorf("agent: poll decision %q: %w", task.ID, err)
+		}
+		switch state {
+		case "approved":
+			return r.merge(ctx, task, branch, true)
+		case "aborted":
+			return OutcomeAborted, nil
+		}
+		select {
+		case <-ctx.Done():
+			return OutcomeHeld, nil // still pending; release frees the lease, task stays held
+		case <-time.After(r.poll):
+		}
+	}
+}
+
+// scenarioFor fetches the task's scenario (acceptance + holdout). A missing scenario
+// is not fatal — the agent develops against whatever the recipe encodes — so a fetch
+// error yields an empty scenario and a warning.
+func (r *Runner) scenarioFor(ctx context.Context, task agentclient.TaskInfo) agentclient.ScenarioInfo {
+	if task.ScenarioID == "" {
+		return agentclient.ScenarioInfo{}
+	}
+	scenarios, err := r.gw.Scenarios(ctx, r.cfg.ProjectID)
+	if err != nil {
+		r.log.Warn("agent: fetch scenarios failed", "task", task.ID, "err", err)
+		return agentclient.ScenarioInfo{}
+	}
+	for _, s := range scenarios {
+		if s.ID == task.ScenarioID {
+			return s
+		}
+	}
+	return agentclient.ScenarioInfo{}
+}
+
+// report is a best-effort observability emit (failures are logged, never fatal).
+func (r *Runner) report(ctx context.Context, taskID, phase, kind string, payload map[string]any) {
+	if err := r.gw.Report(ctx, r.cfg.ProjectID, taskID, phase, kind, payload); err != nil {
+		r.log.Debug("agent: report failed", "task", taskID, "phase", phase, "kind", kind, "err", err)
+	}
+}
+
+// Loop runs RunOnce repeatedly, heart-beating in the background and sleeping idle
+// between no-work polls, until ctx is cancelled. It is the agent's main loop.
+func (r *Runner) Loop(ctx context.Context, idle time.Duration) error {
+	if idle <= 0 {
+		idle = 10 * time.Second
+	}
+	go r.heartbeatLoop(ctx)
+	for {
+		outcome, err := r.RunOnce(ctx)
+		if err != nil {
+			r.log.Error("agent: run-once error", "err", err)
+		} else if outcome != OutcomeNoWork {
+			r.log.Info("agent: task outcome", "outcome", string(outcome))
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// Only idle-sleep when there was nothing to do; otherwise loop straight to the
+		// next lease (there may be more ready work).
+		if outcome == OutcomeNoWork {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(idle):
+			}
+		}
+	}
+}
+
+// heartbeatLoop advances host liveness every 20s so the reaper does not free the
+// agent's lease mid-task.
+func (r *Runner) heartbeatLoop(ctx context.Context) {
+	t := time.NewTicker(20 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := r.gw.Heartbeat(ctx, r.cfg.HostID); err != nil {
+				r.log.Debug("agent: heartbeat failed", "err", err)
+			}
+		}
+	}
+}

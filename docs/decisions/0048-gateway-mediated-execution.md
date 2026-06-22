@@ -56,7 +56,27 @@ Faz O optiway ilk held-run).
   (status=blocked) + decision-aborted + bad-requests(400/404) + report(202/400 invalid-event). Merge AGENT'ta olur;
   gateway yalnız state + verdict-event. Mevcut gateway testleri değişmedi (frozen-additive).
 
+## Sonuçlar (Faz A — conductor-agent host binary; bu commit)
+- **`internal/agentclient`** (PROVEN): gateway agent-API'nin tipli HTTP client'ı (Lease 200/204/409 + Heartbeat +
+  Scenarios + Report + Result + Decision + Merged + Release). **Token YALNIZ Authorization header'da, log/error'a sızmaz**
+  (test: 404-error token içermez). httptest'e karşı 9 test (auth header + 204/409 no-work + error-map).
+- **`internal/agent`** (orchestration PROVEN): `Runner` iki seam üstünde (`Gateway`=agentclient, `Executor`=develop/
+  verify/merge) `Conductor.Tick`'in gateway-mediated analoğu. `RunOnce`: lease→scenario→develop→verify→Result→karar:
+  **merge** (auto) | **hold→Decision-poll→approved→re-verify+merge | aborted** | **blocked** (never-fake-green) — lease
+  HER yolda release (defer). 7 fake-test TÜM yolları + run-error→blocked + merge-error→yine-release kanıtlar.
+- **`internal/agent` RealExecutor** (wiring; compile-PROVEN, runtime-validation davinci ilk-run): provisioner+engine+
+  verify+merger'ı AYNEN reuse eder (compiler API-doğruluğunu teyit etti). Run=Workspace→Develop(claude stdin)→Verify
+  (gate); Merge=approved ise base-merge-in+re-verify (drift guard, daemon mergeApproved aynası)+SquashMerge(+push).
+  optiway main DOKUNULMAZ (base=conductor/optiway). Holdout noop (Faz G3 follow-up).
+- **`cmd/conductor-agent`**: flag'ler (-gateway/-project/-repo/-base/-recipe-dir/-capabilities/-root/-develop-cmd/...);
+  token+gh-token ENV'den (process-table'da değil); recipe `scaffolder.LoadRecipe`'tan (gate=tek merge-otoritesi, gate-siz
+  recipe REDDEDİLİR); signal-handled `Loop` + heartbeat goroutine. **PG client YOK.**
+- **Doğrulama:** Go gate (golangci 0 + gofmt) + `-race`. **DÜRÜST KAPSAM:** orchestration + client GERÇEKTEN test-edildi;
+  RealExecutor compile-edildi + kanıtlı paketleri reuse eder ama develop/verify/merge'in optiway-recipe+claude ile
+  uçtan uca koşusu **davinci ilk-run'da doğrulanır** (claude auth gerekir, otonom yapılamaz). Stub-performer entegrasyon
+  testi = follow-up.
+
 ## Kalan
 - **Faz G3 (ops.):** holdout-serve endpoint (gateway HoldoutStore) — ilk optiway run holdout'suz gate ile başlar.
-- **Faz A:** `cmd/conductor-agent` host binary (engine/verify/merger reuse + agent HTTP client; PG'siz).
-- **Faz D/O:** deploy (gateway redeploy + davinci kurulum) + optiway held-for-review ilk gerçek run.
+- **Faz D/O:** deploy (gateway redeploy + davinci kurulum: claude login[KULLANICI] + agent systemd) + optiway
+  held-for-review ilk gerçek run (KULLANICI onayı).
