@@ -75,6 +75,16 @@ export interface HttpRequest {
 // fork webview never holds the token (ADR-0027).
 export interface HttpTransport {
   send(req: HttpRequest): Promise<HttpResponse>;
+  // sendStream is the OPTIONAL Server-Sent-Events seam (Q3c.4): it performs an SSE
+  // request, invoking onEvent(event, data) for each parsed frame, and resolves with
+  // the status + (for a non-stream/error response) the full body for normal error
+  // mapping. A transport that cannot stream (the fork postMessage bridge — the webview
+  // never holds the token, so it cannot fetch directly) OMITS this; callers then fall
+  // back to send(). Web's FetchTransport implements it via the response body reader.
+  sendStream?(
+    req: HttpRequest,
+    onEvent: (event: string, data: string) => void,
+  ): Promise<HttpResponse>;
 }
 
 // defaultBaseUrl reads the build-time API base, falling back to same-origin "".
@@ -107,6 +117,59 @@ export class FetchTransport implements HttpTransport {
 
     const res = await fetch(`${this.baseUrl}${req.path}`, init);
     return { status: res.status, ok: res.ok, body: await res.text() };
+  }
+
+  // sendStream performs an SSE request and dispatches each parsed frame to onEvent.
+  // A non-2xx or non-event-stream response (a pre-stream error) is returned with its
+  // full body for the caller's normal error mapping — no frames are dispatched.
+  async sendStream(
+    req: HttpRequest,
+    onEvent: (event: string, data: string) => void,
+  ): Promise<HttpResponse> {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.token}`,
+    };
+    const init: RequestInit = { method: req.method, headers };
+    if (req.body !== undefined) {
+      headers["Content-Type"] = req.contentType ?? "text/plain; charset=utf-8";
+      init.body = req.body;
+    }
+
+    const res = await fetch(`${this.baseUrl}${req.path}`, init);
+    const ct = res.headers.get("Content-Type") ?? "";
+    if (!res.ok || !ct.includes("text/event-stream") || res.body === null) {
+      return { status: res.status, ok: res.ok, body: await res.text() };
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buf += decoder.decode(value, { stream: true });
+      let sep = buf.indexOf("\n\n");
+      while (sep >= 0) {
+        const frame = buf.slice(0, sep);
+        buf = buf.slice(sep + 2);
+        let ev = "";
+        let data = "";
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("event: ")) {
+            ev = line.slice(7);
+          } else if (line.startsWith("data: ")) {
+            data = line.slice(6);
+          }
+        }
+        if (ev !== "") {
+          onEvent(ev, data);
+        }
+        sep = buf.indexOf("\n\n");
+      }
+    }
+    return { status: res.status, ok: true, body: "" };
   }
 }
 
@@ -194,6 +257,69 @@ export class ApiClient {
       }
       throw err;
     });
+  }
+
+  // distillStream is the STREAMING variant of distill (Q3c.4): it POSTs the same
+  // conversation to /distill/stream and surfaces live progress (the model-output line
+  // COUNT, never content) via onProgress while the model works, resolving with the
+  // SAME DistillResult (scenarios OR clarifying questions). When the transport cannot
+  // stream (the fork postMessage bridge), it transparently FALLS BACK to the
+  // non-streaming distill — onProgress simply never fires. The 422 never-fabricate
+  // contract is preserved (DistillNoScenariosError); conversation/token are never logged.
+  async distillStream(
+    projectId: string,
+    conversation: string,
+    onProgress?: (lines: number) => void,
+  ): Promise<DistillResult> {
+    const transport = this.transport;
+    if (transport.sendStream === undefined) {
+      return this.distill(projectId, conversation);
+    }
+    let result: DistillResult | undefined;
+    let streamErr: Error | undefined;
+    const res = await transport.sendStream(
+      {
+        method: "POST",
+        path: `/projects/${encodeURIComponent(projectId)}/distill/stream`,
+        body: JSON.stringify({ conversation }),
+        contentType: "application/json",
+      },
+      (event, data) => {
+        if (event === "progress") {
+          try {
+            const p = JSON.parse(data) as { lines?: number };
+            if (typeof p.lines === "number") {
+              onProgress?.(p.lines);
+            }
+          } catch {
+            // advisory only — ignore a malformed progress frame.
+          }
+        } else if (event === "result") {
+          try {
+            result = JSON.parse(data) as DistillResult;
+          } catch {
+            streamErr = new ApiError(502, "distiller returned a malformed result");
+          }
+        } else if (event === "error") {
+          streamErr = sseDistillError(data);
+        }
+      },
+    );
+    // A pre-stream HTTP failure (401/404/400/501): map like a normal request.
+    if (!res.ok) {
+      const msg = errorMessageFromBody(res.body, res.status);
+      if (res.status === 422) {
+        throw new DistillNoScenariosError(msg);
+      }
+      throw new ApiError(res.status, msg);
+    }
+    if (streamErr !== undefined) {
+      throw streamErr;
+    }
+    if (result !== undefined) {
+      return result;
+    }
+    throw new ApiError(502, "distill stream ended without a result");
   }
 
   // intake POSTs RAW scenario YAML (text/plain), not JSON — mirrors handleIntake
@@ -298,6 +424,22 @@ function errorMessageFromBody(body: string, status: number): string {
     // non-JSON / empty body — fall through to the generic message.
   }
   return `request failed with status ${status}`;
+}
+
+// sseDistillError maps a distill-stream `error` frame ({status,error}) to a typed
+// error: a 422 is the never-fabricate DistillNoScenariosError (guidance), anything
+// else an ApiError. A malformed frame degrades to an opaque 502 ApiError.
+function sseDistillError(data: string): Error {
+  try {
+    const e = JSON.parse(data) as { status?: number; error?: string };
+    const msg = typeof e.error === "string" ? e.error : "distiller failed";
+    if (e.status === 422) {
+      return new DistillNoScenariosError(msg);
+    }
+    return new ApiError(typeof e.status === "number" ? e.status : 502, msg);
+  } catch {
+    return new ApiError(502, "distiller failed");
+  }
 }
 
 // eventQueryString builds the GET /events query string from an EventQuery,

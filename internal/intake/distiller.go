@@ -41,6 +41,14 @@ var ErrMalformedScenarios = errors.New("intake: distiller produced malformed sce
 // offline.
 type distillRunner func(ctx context.Context, conversation string) (stdout []byte, err error)
 
+// streamRunner is the STREAMING subprocess seam (ADR-0047, Q3c.4): it runs one
+// distillation invocation, invokes onLine for each line of the model's output AS IT
+// is produced (for coarse progress — the caller counts lines, it does NOT forward
+// their content), and returns the full accumulated stdout for deterministic parsing.
+// Production wires it to a line-scanning `claude -p`; tests pass a stub that replays
+// crafted lines + returns crafted full output, with no real LLM. onLine may be nil.
+type streamRunner func(ctx context.Context, conversation string, onLine func(line string)) (stdout []byte, err error)
+
 // CommandDistiller is the CommandEngine-style Distiller: it runs a distillation
 // command as a subprocess and deterministically parses the model's prose+YAML
 // output into validated scenarios (the analogue of engine.CommandEngine +
@@ -53,12 +61,16 @@ type CommandDistiller struct {
 	// scenarios OR clarifying questions). It is a SEPARATE runner because it
 	// prepends a different prompt; the frozen Distill path is unaffected (ADR-0047).
 	clarifyRun distillRunner
+	// clarifyStreamRun backs the additive STREAMING DistillOrClarifyStream path
+	// (Q3c.4): same clarifyPrompt, but it surfaces per-line progress while running.
+	clarifyStreamRun streamRunner
 }
 
-// Compile-time assertions that *CommandDistiller satisfies both seams.
+// Compile-time assertions that *CommandDistiller satisfies all three seams.
 var (
 	_ Distiller           = (*CommandDistiller)(nil)
 	_ ClarifyingDistiller = (*CommandDistiller)(nil)
+	_ StreamingDistiller  = (*CommandDistiller)(nil)
 )
 
 // NewCommandDistillerWithRunner returns a CommandDistiller driven by the given
@@ -76,6 +88,13 @@ func NewCommandDistillerWithRunner(run distillRunner) *CommandDistiller {
 // fixture stdout (a fenced scenarios OR questions block) with no real `claude -p`.
 func NewClarifyingDistillerWithRunner(clarifyRun distillRunner) *CommandDistiller {
 	return &CommandDistiller{clarifyRun: clarifyRun}
+}
+
+// NewStreamingDistillerWithRunner returns a CommandDistiller whose streaming
+// DistillOrClarifyStream path is driven by the given stream runner (Q3c.4 test seam).
+// A stub replays crafted lines via onLine + returns crafted full output, no real LLM.
+func NewStreamingDistillerWithRunner(clarifyStreamRun streamRunner) *CommandDistiller {
+	return &CommandDistiller{clarifyStreamRun: clarifyStreamRun}
 }
 
 // Distill runs the distillation subprocess over the conversation and parses its
@@ -125,6 +144,31 @@ func (d *CommandDistiller) DistillOrClarify(ctx context.Context, conversation st
 		return DistillOutcome{}, errors.New("intake: distiller: empty conversation")
 	}
 	stdout, runErr := runner(ctx, conversation)
+	if runErr != nil && len(strings.TrimSpace(string(stdout))) == 0 {
+		return DistillOutcome{}, fmt.Errorf("%w: %v", ErrNoScenarios, runErr)
+	}
+	return ParseOutcome(stdout)
+}
+
+// DistillOrClarifyStream is the streaming variant of DistillOrClarify (Q3c.4): it runs
+// the clarifying distill while invoking onLine for each line of model output as it is
+// produced, so a caller can surface live progress during a long `claude -p` call. The
+// PARSING is identical (ParseOutcome over the full accumulated output) — streaming is
+// transport only, so the deterministic contract is unchanged. onLine is for coarse
+// progress (e.g. a line counter); callers MUST NOT forward the line content to an
+// untrusted client (the model's prose may echo the conversation — see handleDistillStream).
+//
+// With no stream runner configured it gracefully DEGRADES to the non-streaming
+// DistillOrClarify (no progress lines), so *CommandDistiller is a coherent
+// StreamingDistiller for every constructor.
+func (d *CommandDistiller) DistillOrClarifyStream(ctx context.Context, conversation string, onLine func(line string)) (DistillOutcome, error) {
+	if d.clarifyStreamRun == nil {
+		return d.DistillOrClarify(ctx, conversation)
+	}
+	if strings.TrimSpace(conversation) == "" {
+		return DistillOutcome{}, errors.New("intake: distiller: empty conversation")
+	}
+	stdout, runErr := d.clarifyStreamRun(ctx, conversation, onLine)
 	if runErr != nil && len(strings.TrimSpace(string(stdout))) == 0 {
 		return DistillOutcome{}, fmt.Errorf("%w: %v", ErrNoScenarios, runErr)
 	}

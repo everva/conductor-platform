@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -234,51 +235,160 @@ func (s *apiServer) handleDistill(w http.ResponseWriter, r *http.Request) {
 		outcome.Scenarios = scenarios
 	}
 	if err != nil {
-		switch {
-		case errors.Is(err, intake.ErrNoScenarios):
-			writeError(w, http.StatusUnprocessableEntity, "no scenarios could be distilled from the conversation")
-		case errors.Is(err, intake.ErrMalformedScenarios), errors.Is(err, intake.ErrMalformedQuestions):
-			// Descriptive and secret-free (validation/decode detail of the model's
-			// OUTPUT), never the conversation or a command line.
-			writeError(w, http.StatusUnprocessableEntity, err.Error())
-		default:
-			// Runner/exec failure: do NOT leak command or secret details.
-			writeError(w, http.StatusBadGateway, "distiller failed")
-		}
+		status, msg := distillErrorResponse(err)
+		writeError(w, status, msg)
 		return
 	}
 
-	// Clarifying turn: the model asked for more detail instead of distilling.
-	// Return the structured questions (ADDITIVE field); there are no scenarios or
-	// intake YAML to render yet. The director answers, then re-distills.
+	// A clarifying turn returns questions (ADDITIVE field, empty scenarios); a
+	// scenarios proposal returns {scenarios, yaml} UNCHANGED (questions omitempty).
+	dto, err := distillResultDTOFromOutcome(outcome)
+	if err != nil {
+		s.serverError(w, "distill: marshal yaml", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dto)
+}
+
+// distillErrorResponse maps a distiller error to an HTTP status + secret-free message
+// (never the conversation or a command line). Shared by handleDistill and the
+// streaming variant so the honest never-fake-green mapping is identical:
+//   - intake.ErrNoScenarios                     → 422
+//   - intake.ErrMalformed{Scenarios,Questions}  → 422 (validation/decode detail)
+//   - any other (runner/exec) error             → 502 (opaque "distiller failed")
+func distillErrorResponse(err error) (int, string) {
+	switch {
+	case errors.Is(err, intake.ErrNoScenarios):
+		return http.StatusUnprocessableEntity, "no scenarios could be distilled from the conversation"
+	case errors.Is(err, intake.ErrMalformedScenarios), errors.Is(err, intake.ErrMalformedQuestions):
+		return http.StatusUnprocessableEntity, err.Error()
+	default:
+		return http.StatusBadGateway, "distiller failed"
+	}
+}
+
+// distillResultDTOFromOutcome builds the wire DTO for a successful distill outcome: a
+// clarifying turn (questions + empty scenarios) or a scenarios proposal (scenarios +
+// intake-ready yaml). Shared by handleDistill and handleDistillStream.
+func distillResultDTOFromOutcome(outcome intake.DistillOutcome) (distillResultDTO, error) {
 	if len(outcome.Questions) > 0 {
 		qd := make([]questionDTO, 0, len(outcome.Questions))
 		for _, q := range outcome.Questions {
 			qd = append(qd, toQuestionDTO(q))
 		}
-		writeJSON(w, http.StatusOK, distillResultDTO{
-			Scenarios: []scenarioDTO{},
-			Questions: qd,
-		})
-		return
+		return distillResultDTO{Scenarios: []scenarioDTO{}, Questions: qd}, nil
 	}
-
-	// Scenarios path — response shape UNCHANGED ({scenarios, yaml}); the additive
-	// `questions` field is omitted (omitempty) so legacy clients see the old body.
 	yamlStr, err := marshalIntakeYAML(outcome.Scenarios)
 	if err != nil {
-		s.serverError(w, "distill: marshal yaml", err)
-		return
+		return distillResultDTO{}, err
 	}
-
 	dtos := make([]scenarioDTO, 0, len(outcome.Scenarios))
 	for _, sc := range outcome.Scenarios {
 		dtos = append(dtos, toScenarioDTO(sc))
 	}
-	writeJSON(w, http.StatusOK, distillResultDTO{
-		Scenarios: dtos,
-		YAML:      yamlStr,
-	})
+	return distillResultDTO{Scenarios: dtos, YAML: yamlStr}, nil
+}
+
+// handleDistillStream: POST /projects/{id}/distill/stream — the STREAMING variant of
+// handleDistill (Q3c.4). It runs the same distill but emits Server-Sent Events so the
+// UI can show live progress during a long model call:
+//
+//   - event: progress  data: {"lines":N}   — N lines of model output produced so far
+//   - event: result    data: <distillResultDTO>  — the final scenarios OR questions
+//   - event: error     data: {"status":S,"error":M}  — an honest 422/502 outcome
+//
+// SECURITY: only the line COUNT is streamed, NEVER the line content — the model's
+// prose may echo the (possibly sensitive) conversation, which is never logged or
+// echoed. Pre-stream failures (bad body, unknown project, no distiller) are normal
+// HTTP errors; once the SSE stream opens (200) the distill outcome is in-band.
+func (s *apiServer) handleDistillStream(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	if s.distiller == nil {
+		writeError(w, http.StatusNotImplemented, "distiller not configured")
+		return
+	}
+	var req distillRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if strings.TrimSpace(req.Conversation) == "" {
+		writeError(w, http.StatusBadRequest, "conversation is required")
+		return
+	}
+
+	ctx := r.Context()
+	if _, err := s.store.GetProject(ctx, id); err != nil {
+		if errors.Is(err, statestore.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		s.serverError(w, "distill stream: get project", err)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		s.serverError(w, "distill stream", errors.New("streaming unsupported by the response writer"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // disable proxy buffering of the stream
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	// sendEvent writes one SSE frame and flushes. It returns false once a write fails
+	// (client gone) so the caller stops trying. onLine runs on THIS goroutine (the
+	// runner scans synchronously), so no locking is needed.
+	clientGone := false
+	sendEvent := func(event string, payload any) {
+		if clientGone {
+			return
+		}
+		b, mErr := json.Marshal(payload)
+		if mErr != nil {
+			return
+		}
+		if _, wErr := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b); wErr != nil {
+			clientGone = true
+			return
+		}
+		flusher.Flush()
+	}
+
+	lines := 0
+	onLine := func(string) {
+		lines++
+		sendEvent("progress", map[string]int{"lines": lines}) // COUNT only — never content
+	}
+
+	var outcome intake.DistillOutcome
+	var derr error
+	switch d := s.distiller.(type) {
+	case intake.StreamingDistiller:
+		outcome, derr = d.DistillOrClarifyStream(ctx, req.Conversation, onLine)
+	case intake.ClarifyingDistiller:
+		outcome, derr = d.DistillOrClarify(ctx, req.Conversation)
+	default:
+		var sc []intake.Scenario
+		sc, derr = s.distiller.Distill(ctx, req.Conversation)
+		outcome.Scenarios = sc
+	}
+
+	if derr != nil {
+		status, msg := distillErrorResponse(derr)
+		sendEvent("error", map[string]any{"status": status, "error": msg})
+		return
+	}
+	dto, err := distillResultDTOFromOutcome(outcome)
+	if err != nil {
+		sendEvent("error", map[string]any{"status": http.StatusInternalServerError, "error": "could not render result"})
+		return
+	}
+	sendEvent("result", dto)
 }
 
 // handlePause: POST /projects/{id}/pause — set the project's first-class paused

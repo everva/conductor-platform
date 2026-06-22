@@ -174,6 +174,35 @@ describe("IntakeChat", () => {
     expect(screen.queryByTestId("question-card")).not.toBeInTheDocument();
   });
 
+  it("streaming distill shows the live line count while the model works (Q3c.4)", async () => {
+    const user = userEvent.setup({ delay: null });
+    // distillStream emits two progress events synchronously, then stays pending until
+    // we resolve it — so we can observe the live line count mid-flight.
+    let resolveDistill!: (r: DistillResult) => void;
+    const distillStream = vi.fn(
+      (_p: string, _c: string, onProgress?: (n: number) => void): Promise<DistillResult> => {
+        onProgress?.(1);
+        onProgress?.(3);
+        return new Promise<DistillResult>((res) => {
+          resolveDistill = res;
+        });
+      },
+    );
+    const client = fakeClient({ distillStream });
+    render(<IntakeChat projects={[project()]} client={client} onUnauthorized={vi.fn()} />);
+
+    await user.type(screen.getByLabelText("Message"), "build it");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    // Mid-flight: the spinner shows the live line count, and the plain distill was NOT used.
+    expect(await screen.findByText(/Distilling… \(3 lines\)/)).toBeInTheDocument();
+    expect(client.distill).not.toHaveBeenCalled();
+
+    // Resolve → the proposal lands and the spinner clears.
+    resolveDistill(PROPOSAL);
+    expect(await screen.findByTestId("scenario-card")).toBeInTheDocument();
+  });
+
   it("editing the YAML then Approve posts the EDITED yaml and shows created ids", async () => {
     const user = userEvent.setup({ delay: null });
     const client = fakeClient();

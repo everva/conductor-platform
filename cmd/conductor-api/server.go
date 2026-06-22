@@ -103,6 +103,7 @@ func (s *apiServer) routes() http.Handler {
 	// Drafting helper (3B-4a): conversation → PROPOSED scenarios + intake-ready YAML
 	// for human review. It persists NOTHING; approval flows through POST /intake.
 	mux.Handle("POST /projects/{id}/distill", s.requireAuth(http.HandlerFunc(s.handleDistill)))
+	mux.Handle("POST /projects/{id}/distill/stream", s.requireAuth(http.HandlerFunc(s.handleDistillStream)))
 	mux.Handle("POST /projects/{id}/pause", s.requireAuth(http.HandlerFunc(s.handlePause)))
 	mux.Handle("POST /projects/{id}/resume", s.requireAuth(http.HandlerFunc(s.handleResume)))
 	mux.Handle("POST /projects/{id}/abort", s.requireAuth(http.HandlerFunc(s.handleAbort)))

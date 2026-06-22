@@ -90,6 +90,32 @@ döndürür (model karar verir; varsayma → sor).
 - **#5 (CC-gibi intake) KAPANDI:** Q3b konuşmalı + Q3c gerçek AskUserQuestion (LLM-üretimli spesifik yapılı
   clarifying sorular) → kullanıcı denetiminin "eksik" bulduğu imza mekanizması artık var.
 
+## Sonuçlar (Q3c.4a — streaming distill, SAFE progress-only SSE; bu commit)
+- **GÜVENLİK KARARI:** model'in stdout PROSE'u konuşmayı yankılayabilir (sensitive) → "konuşma asla
+  loglanmaz/yankılanmaz" kuralı gereği RAW İÇERİK STREAM EDİLMEZ; yalnız **satır SAYISI** akıtılır (içerik
+  süreç-içinde kalır). Faithful-CC için streaming gerekli değildi (AskUserQuestion atomik); bu salt-ilerleme
+  sinyali uzun model çağrısında "çalışıyor" geri-bildirimi verir.
+- **backend** (`internal/intake`): `streamRunner` tipi + `StreamingDistiller.DistillOrClarifyStream(onLine)` seam
+  (AYRI; Distill/DistillOrClarify dokunulmadı) + `claudeClarifyStreamRunner` (stdout `bufio.Scanner` satır-satır →
+  onLine; full output → AYNI `ParseOutcome`) + `clarifyStreamRun` yoksa DistillOrClarify'a graceful-degrade.
+  `NewCommandDistiller` üç runner'ı bağlar. 6 streaming intake testi (stub stream runner, offline).
+- **gateway** (`control.go`): `POST /projects/{id}/distill/stream` SSE — `event: progress {lines:N}` (yalnız SAYI) →
+  `event: result <distillResultDTO>` | `event: error {status,error}`. Pre-stream hatalar normal HTTP (400/404/501/401);
+  stream açıldıktan sonra outcome in-band. `handleDistill` error-map + DTO-builder paylaşılan helper'lara çıkarıldı
+  (davranış birebir; eski 11 distill testi değişmeden geçer). Auth `requireAuth` header (fetch-stream, EventSource
+  değil → token query'ye GİRMEZ). 6 streaming gateway testi (SSE parse + içerik-sızmaz doğrulaması + fallback + 422).
+- **web** (`client.ts`): `HttpTransport.sendStream?` OPSİYONEL seam + `FetchTransport.sendStream` (`res.body` reader,
+  SSE frame parse) + `ApiClient.distillStream(onProgress)` (sendStream yoksa → distill'e FALLBACK). `IntakeChat`
+  distillStream'i tercih eder + canlı "Distilling… (N lines)" gösterir. 5 client + 1 IntakeChat streaming testi.
+- **FORK NOTU (dürüst):** fork postMessage-bridge transport token'ı webview'e VERMEZ → `sendStream` YOK → editör
+  intake'i non-streaming distill'e graceful-degrade eder (satır-sayacı yalnız web'de yanar). Bridge-streaming
+  (chunked postMessage, token-hassas) KASITLI yapılmadı — donmuş kanala düşük-değer/yüksek-risk cerrahi (plan
+  "riskliyse ATLA"). Editör davranışı = değişmeden çalışır.
+- **Doğrulama:** Go gate GREEN (build+vet+golangci-0+gofmt) + `-race` (intake+conductor-api) + **GERÇEK-PG** +
+  web gate **vitest 176** + **Playwright e2e 16/16 KENDİM** (intake.spec + dashboard.spec artık `/distill/stream`
+  SSE mock'u; progress+result frame'leri) + editör gate (vitest 251/3 + esbuild bundle streaming client'ı içerir) +
+  **GERÇEK fork electron smoke YEŞİL** (New Work açılır, exit 0). Token DONMUŞ; konuşma-içeriği SSE'ye sızmaz (test).
+
 ## Kalan (yalnız kullanıcı / opsiyonel)
-- **Q3c.4** (ops.) streaming + fork re-inject (inject SONRASI `codesign --force --deep --sign -` + `open -n`) +
-  canlı gateway görsel capstone (CC-tarzı soru-çipleri gerçek fork'ta) + kullanıcı görsel onayı.
+- **Q3c.4b** fork re-inject (inject SONRASI `codesign --force --deep --sign -` + `open -n`) + canlı gateway görsel
+  capstone (CC-tarzı soru-çipleri gerçek fork'ta) + kullanıcı görsel onayı. (İmzalı release = Apple cert kullanıcıda.)

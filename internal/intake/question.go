@@ -63,6 +63,18 @@ type ClarifyingDistiller interface {
 	DistillOrClarify(ctx context.Context, conversation string) (DistillOutcome, error)
 }
 
+// StreamingDistiller is the additive STREAMING seam (ADR-0047, Q3c.4): same outcome as
+// DistillOrClarify, but it invokes onLine for each line of model output as it is
+// produced so callers can surface live progress during a long model call. It sits
+// ALONGSIDE the other seams (all untouched). The line content is for coarse progress
+// only — callers MUST NOT forward it to an untrusted client (it may echo the
+// conversation); the gateway streams line COUNTS, never the lines.
+type StreamingDistiller interface {
+	// DistillOrClarifyStream is DistillOrClarify with per-line progress via onLine
+	// (which may be nil). The parsed outcome is identical to DistillOrClarify.
+	DistillOrClarifyStream(ctx context.Context, conversation string, onLine func(line string)) (DistillOutcome, error)
+}
+
 // ErrNoQuestions means the model output contained no parseable questions block. It
 // is internal to ParseOutcome's fallthrough (a missing questions block is not by
 // itself an error when scenarios were the intent); callers see ErrNoScenarios when

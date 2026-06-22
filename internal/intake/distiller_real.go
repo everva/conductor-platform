@@ -1,6 +1,7 @@
 package intake
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -97,7 +98,11 @@ Conversation:
 // reaches this. Both seams are wired: Distill uses distillPrompt, DistillOrClarify
 // uses clarifyPrompt (ADR-0047).
 func NewCommandDistiller() *CommandDistiller {
-	return &CommandDistiller{run: claudeDistillRunner, clarifyRun: claudeClarifyRunner}
+	return &CommandDistiller{
+		run:              claudeDistillRunner,
+		clarifyRun:       claudeClarifyRunner,
+		clarifyStreamRun: claudeClarifyStreamRunner,
+	}
 }
 
 // claudeDistillRunner runs the REAL `claude -p` over distillPrompt+conversation,
@@ -141,4 +146,65 @@ func claudeRunnerWithPrompt(ctx context.Context, prompt, conversation string) ([
 		return nil, errors.New("intake: claude produced no output: " + err.Error())
 	}
 	return buf.Bytes(), err
+}
+
+// claudeClarifyStreamRunner runs the REAL `claude -p` over clarifyPrompt+conversation,
+// scanning stdout line-by-line and invoking onLine per line (Q3c.4 streaming). It
+// backs DistillOrClarifyStream; the full accumulated output is returned for the SAME
+// deterministic ParseOutcome.
+func claudeClarifyStreamRunner(ctx context.Context, conversation string, onLine func(string)) ([]byte, error) {
+	return claudeStreamRunnerWithPrompt(ctx, clarifyPrompt, conversation, onLine)
+}
+
+// claudeStreamRunnerWithPrompt runs `claude -p` over prompt+conversation, streaming
+// stdout lines through onLine as they arrive and returning the full combined output.
+// Same auth/env contract as claudeRunnerWithPrompt (subscription claude, sanitized
+// env). stdout is line-scanned for progress; stderr is captured and appended after so
+// a non-zero exit with a usable block still parses (engine leniency). The fenced
+// answer lives in stdout, so ParseOutcome's last-fence rule is unaffected by ordering.
+func claudeStreamRunnerWithPrompt(ctx context.Context, prompt, conversation string, onLine func(string)) ([]byte, error) {
+	if _, err := exec.LookPath("claude"); err != nil {
+		return nil, fmt.Errorf("intake: claude CLI not found: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, "claude", "-p") //nolint:gosec // fixed subscription claude command; no shell, no API key.
+	cmd.Env = envsafe.Sanitize(os.Environ())
+	cmd.Stdin = bytes.NewReader([]byte(prompt + conversation))
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("intake: stdout pipe: %w", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("intake: start claude: %w", err)
+	}
+
+	var acc bytes.Buffer
+	scanner := bufio.NewScanner(stdoutPipe)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // tolerate long lines (1 MiB)
+	for scanner.Scan() {
+		line := scanner.Text()
+		acc.WriteString(line)
+		acc.WriteByte('\n')
+		if onLine != nil {
+			onLine(line)
+		}
+	}
+	scanErr := scanner.Err()
+	waitErr := cmd.Wait()
+	if stderr.Len() > 0 {
+		acc.Write(stderr.Bytes())
+	}
+
+	out := acc.Bytes()
+	runErr := waitErr
+	if runErr == nil {
+		runErr = scanErr
+	}
+	if runErr != nil && len(out) == 0 {
+		return nil, errors.New("intake: claude produced no output: " + runErr.Error())
+	}
+	return out, runErr
 }

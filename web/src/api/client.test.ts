@@ -116,11 +116,115 @@ describe("ApiClient", () => {
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).status).toBe(401);
   });
+
+  it("distillStream streams progress line counts and resolves the result (Q3c.4)", async () => {
+    const result = {
+      scenarios: [
+        {
+          id: "A-1",
+          title: "First",
+          lane: "backend",
+          tier: "T1",
+          deps: [],
+          acceptance: ["does a thing"],
+          hidden_holdout_ref: "store://holdouts/A-1/holdout_test.go",
+        },
+      ],
+      yaml: "id: A-1\n",
+    };
+    const sse =
+      'event: progress\ndata: {"lines":1}\n\n' +
+      'event: progress\ndata: {"lines":2}\n\n' +
+      `event: result\ndata: ${JSON.stringify(result)}\n\n`;
+    const fetchFn = mockFetch(() => sseResponse(200, sse));
+    const client = new ApiClient({ baseUrl: "https://gw.test", token: TEST_TOKEN });
+
+    const progress: number[] = [];
+    const res = await client.distillStream("proj", "build it", (n) => progress.push(n));
+
+    expect(progress).toEqual([1, 2]);
+    expect(res.scenarios[0].id).toBe("A-1");
+    const [url, init] = fetchFn.mock.calls[0];
+    expect(String(url)).toBe("https://gw.test/projects/proj/distill/stream");
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers.Authorization).toBe(`Bearer ${TEST_TOKEN}`);
+  });
+
+  it("distillStream resolves a clarifying-questions result", async () => {
+    const result = {
+      scenarios: [],
+      yaml: "",
+      questions: [
+        {
+          question: "Which datastore?",
+          header: "Datastore",
+          multi_select: false,
+          options: [
+            { label: "Postgres", description: "relational" },
+            { label: "Redis", description: "cache" },
+          ],
+        },
+      ],
+    };
+    mockFetch(() => sseResponse(200, `event: result\ndata: ${JSON.stringify(result)}\n\n`));
+    const client = new ApiClient({ baseUrl: "https://gw.test", token: TEST_TOKEN });
+
+    const res = await client.distillStream("proj", "hi");
+    expect(res.questions?.length).toBe(1);
+    expect(res.questions?.[0].header).toBe("Datastore");
+  });
+
+  it("distillStream maps a 422 error frame to DistillNoScenariosError (never-fabricate)", async () => {
+    mockFetch(() =>
+      sseResponse(200, 'event: error\ndata: {"status":422,"error":"no scenarios"}\n\n'),
+    );
+    const client = new ApiClient({ baseUrl: "https://gw.test", token: TEST_TOKEN });
+
+    const err = await client.distillStream("proj", "hi").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DistillNoScenariosError);
+  });
+
+  it("distillStream maps a pre-stream 422 (non-SSE body) to DistillNoScenariosError", async () => {
+    mockFetch(() => jsonResponse(422, { error: "no scenarios could be distilled" }));
+    const client = new ApiClient({ baseUrl: "https://gw.test", token: TEST_TOKEN });
+
+    const err = await client.distillStream("proj", "hi").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DistillNoScenariosError);
+  });
+
+  it("distillStream falls back to distill when the transport cannot stream (fork bridge)", async () => {
+    const send = vi.fn(() =>
+      Promise.resolve({ status: 200, ok: true, body: JSON.stringify({ scenarios: [], yaml: "" }) }),
+    );
+    const client = new ApiClient({ transport: { send } });
+
+    const progress: number[] = [];
+    const res = await client.distillStream("proj", "hi", (n) => progress.push(n));
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(progress).toEqual([]); // no streaming transport → no progress events
+    expect(res.scenarios).toEqual([]);
+  });
 });
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
+  });
+}
+
+// sseResponse builds a streamed text/event-stream Response (explicit ReadableStream
+// so res.body.getReader() works in the test environment).
+function sseResponse(status: number, body: string): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(body));
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    status,
+    headers: { "Content-Type": "text/event-stream" },
   });
 }

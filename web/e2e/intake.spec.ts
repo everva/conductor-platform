@@ -20,6 +20,16 @@ function json(body: unknown) {
   return { status: 200, contentType: "application/json", body: JSON.stringify(body) };
 }
 
+// sseBody fulfills an SSE (text/event-stream) response from the given frames — the
+// shape POST /projects/{id}/distill/stream returns (Q3c.4).
+function sseBody(...frames: Array<{ event: string; data: unknown }>) {
+  return {
+    status: 200,
+    contentType: "text/event-stream",
+    body: frames.map((f) => `event: ${f.event}\ndata: ${JSON.stringify(f.data)}\n\n`).join(""),
+  };
+}
+
 test("'+ New work' → Write spec directly opens the authoritative YAML editor (claude-free)", async ({ page }) => {
   await mockWebSocket(page);
   await page.route("**/status", (r) => r.fulfill(json(STATUS)));
@@ -55,46 +65,59 @@ test("'+ New work' → distill asks a clarifying question; answering re-distills
   await page.route("**/projects/*/tasks", (r) => r.fulfill(json([])));
   await page.route("**/projects", (r) => r.fulfill(json(PROJECTS)));
 
-  // Stateful distill mock (ADR-0047): the 1st call asks a clarifying question
-  // (AskUserQuestion), the 2nd — once the director has answered — returns scenarios.
+  // Stateful streaming-distill mock (ADR-0047 + Q3c.4 SSE): the 1st call streams a
+  // progress event then asks a clarifying question; the 2nd — once answered — streams
+  // progress then returns scenarios. The app consumes /distill/stream (SSE).
   let distillCalls = 0;
-  await page.route("**/projects/*/distill", (r) => {
+  await page.route("**/projects/*/distill/stream", (r) => {
     distillCalls += 1;
     if (distillCalls === 1) {
       void r.fulfill(
-        json({
-          scenarios: [],
-          yaml: "",
-          questions: [
-            {
-              question: "Which datastore should it use?",
-              header: "Datastore",
-              multi_select: false,
-              options: [
-                { label: "Postgres", description: "Relational, the platform default." },
-                { label: "Redis", description: "In-memory key-value cache." },
+        sseBody(
+          { event: "progress", data: { lines: 2 } },
+          {
+            event: "result",
+            data: {
+              scenarios: [],
+              yaml: "",
+              questions: [
+                {
+                  question: "Which datastore should it use?",
+                  header: "Datastore",
+                  multi_select: false,
+                  options: [
+                    { label: "Postgres", description: "Relational, the platform default." },
+                    { label: "Redis", description: "In-memory key-value cache." },
+                  ],
+                },
               ],
             },
-          ],
-        }),
+          },
+        ),
       );
       return;
     }
     void r.fulfill(
-      json({
-        scenarios: [
-          {
-            id: "A-1",
-            title: "Data service",
-            lane: "backend",
-            tier: "T2",
-            deps: [],
-            acceptance: ["stores records"],
-            hidden_holdout_ref: "store://holdouts/A-1/holdout_test.go",
+      sseBody(
+        { event: "progress", data: { lines: 4 } },
+        {
+          event: "result",
+          data: {
+            scenarios: [
+              {
+                id: "A-1",
+                title: "Data service",
+                lane: "backend",
+                tier: "T2",
+                deps: [],
+                acceptance: ["stores records"],
+                hidden_holdout_ref: "store://holdouts/A-1/holdout_test.go",
+              },
+            ],
+            yaml: "id: A-1\ntitle: Data service\n",
           },
-        ],
-        yaml: "id: A-1\ntitle: Data service\n",
-      }),
+        },
+      ),
     );
   });
 

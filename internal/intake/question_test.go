@@ -271,3 +271,80 @@ func TestDistillOrClarify_RunErrorWithOutput_StillParses(t *testing.T) {
 		t.Fatalf("expected 1 question, got: %+v", out)
 	}
 }
+
+// stubStreamRunner replays crafted lines through onLine, then returns crafted full
+// output — exercising the streaming seam fully offline (no real LLM).
+func stubStreamRunner(lines []string, full string, err error) streamRunner {
+	return func(_ context.Context, _ string, onLine func(string)) ([]byte, error) {
+		for _, l := range lines {
+			if onLine != nil {
+				onLine(l)
+			}
+		}
+		return []byte(full), err
+	}
+}
+
+func TestDistillOrClarifyStream_Questions_EmitsLines(t *testing.T) {
+	lines := []string{"thinking...", "let me ask", "<<<QUESTIONS"}
+	var got []string
+	d := NewStreamingDistillerWithRunner(stubStreamRunner(lines, validQuestionsOutput, nil))
+	out, err := d.DistillOrClarifyStream(context.Background(), "vague request", func(l string) {
+		got = append(got, l)
+	})
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	if len(out.Questions) != 1 || len(out.Scenarios) != 0 {
+		t.Fatalf("expected a questions outcome, got: %+v", out)
+	}
+	if len(got) != len(lines) {
+		t.Fatalf("onLine called %d times, want %d", len(got), len(lines))
+	}
+}
+
+func TestDistillOrClarifyStream_Scenarios(t *testing.T) {
+	d := NewStreamingDistillerWithRunner(stubStreamRunner([]string{"x"}, validDistillerOutput, nil))
+	out, err := d.DistillOrClarifyStream(context.Background(), "an in-memory state store", nil)
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	if len(out.Scenarios) != 1 || len(out.Questions) != 0 {
+		t.Fatalf("expected a scenarios outcome, got: %+v", out)
+	}
+}
+
+func TestDistillOrClarifyStream_NilOnLine_Safe(t *testing.T) {
+	d := NewStreamingDistillerWithRunner(stubStreamRunner([]string{"a", "b"}, validQuestionsOutput, nil))
+	if _, err := d.DistillOrClarifyStream(context.Background(), "x", nil); err != nil {
+		t.Fatalf("nil onLine must be safe: %v", err)
+	}
+}
+
+func TestDistillOrClarifyStream_DegradesWithoutStreamRunner(t *testing.T) {
+	// No stream runner, but a clarify runner: stream degrades to DistillOrClarify.
+	d := NewClarifyingDistillerWithRunner(stubRunner(validQuestionsOutput, nil))
+	out, err := d.DistillOrClarifyStream(context.Background(), "x", func(string) {
+		t.Fatal("onLine must not be called when there is no stream runner")
+	})
+	if err != nil {
+		t.Fatalf("degrade: %v", err)
+	}
+	if len(out.Questions) != 1 {
+		t.Fatalf("expected questions via non-streaming fallback, got: %+v", out)
+	}
+}
+
+func TestDistillOrClarifyStream_EmptyConversation_Rejected(t *testing.T) {
+	d := NewStreamingDistillerWithRunner(stubStreamRunner(nil, validQuestionsOutput, nil))
+	if _, err := d.DistillOrClarifyStream(context.Background(), "  ", nil); err == nil {
+		t.Fatal("expected error for empty conversation")
+	}
+}
+
+func TestDistillOrClarifyStream_RunErrorEmptyOutput_NoScenarios(t *testing.T) {
+	d := NewStreamingDistillerWithRunner(stubStreamRunner(nil, "", errors.New("boom")))
+	if _, err := d.DistillOrClarifyStream(context.Background(), "x", nil); !errors.Is(err, ErrNoScenarios) {
+		t.Fatalf("expected ErrNoScenarios on run error + empty output, got: %v", err)
+	}
+}

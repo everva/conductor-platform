@@ -224,8 +224,14 @@ test("intake tab: converse → distill → review proposed scenario + holdout (3
   await page.route("**/hosts", (route) => route.fulfill(json(HOSTS)));
   await page.route("**/projects", (route) => route.fulfill(json(PROJECTS)));
   await page.route("**/projects/*/tasks", (route) => route.fulfill(json(TASKS)));
-  await page.route("**/projects/*/distill", (route) =>
-    route.fulfill(json(DISTILL_RESULT)),
+  // The app distills over SSE (POST /distill/stream, Q3c.4); fulfill one `result`
+  // frame carrying the proposal.
+  await page.route("**/projects/*/distill/stream", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: `event: result\ndata: ${JSON.stringify(DISTILL_RESULT)}\n\n`,
+    }),
   );
 
   await page.goto("/");

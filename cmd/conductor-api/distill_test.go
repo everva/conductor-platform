@@ -431,6 +431,187 @@ QUESTIONS>>>
 	}
 }
 
+// parseSSE splits an SSE body into a map of event-name → list of data payloads.
+func parseSSE(body string) map[string][]string {
+	out := map[string][]string{}
+	for _, frame := range strings.Split(body, "\n\n") {
+		frame = strings.TrimSpace(frame)
+		if frame == "" {
+			continue
+		}
+		var ev, data string
+		for _, line := range strings.Split(frame, "\n") {
+			switch {
+			case strings.HasPrefix(line, "event: "):
+				ev = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data: "):
+				data = strings.TrimPrefix(line, "data: ")
+			}
+		}
+		out[ev] = append(out[ev], data)
+	}
+	return out
+}
+
+const scenariosStreamStdout = `Here is the plan.
+
+<<<SCENARIOS
+scenarios:
+  - id: S-1
+    title: "Streamed distilled scenario"
+    lane: backend
+    tier: T2
+    deps: []
+    acceptance:
+      - "does the thing"
+    hidden_holdout_ref: "store://holdouts/S-1/holdout_test.go"
+SCENARIOS>>>
+`
+
+const questionsStreamStdout = `I need to clarify first.
+
+<<<QUESTIONS
+questions:
+  - question: "Which datastore should the service use?"
+    header: "Datastore"
+    multi_select: false
+    options:
+      - label: "Postgres"
+        description: "Relational, the platform default."
+      - label: "Redis"
+        description: "In-memory key-value cache."
+QUESTIONS>>>
+`
+
+// streamingRunner builds a CommandDistiller (a real intake.StreamingDistiller) whose
+// stream runner replays the given lines via onLine then returns full as stdout. The
+// func literal is assignable to intake's unexported streamRunner at the call site.
+func streamingDistiller(lines []string, full string) intake.Distiller {
+	return intake.NewStreamingDistillerWithRunner(func(_ context.Context, _ string, onLine func(string)) ([]byte, error) {
+		for _, l := range lines {
+			onLine(l)
+		}
+		return []byte(full), nil
+	})
+}
+
+func TestDistillStreamScenarios(t *testing.T) {
+	s, store := distillServer(streamingDistiller([]string{"thinking", "done"}, scenariosStreamStdout))
+	mustCreate(t, store.CreateProject(context.Background(), statestore.Project{ID: "proj-z", Repo: "owner/z", BaseBranch: "develop"}))
+
+	rec := doBody(t, s, http.MethodPost, "/projects/proj-z/distill/stream", bearer(), `{"conversation":"build something"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("content-type = %q, want text/event-stream", ct)
+	}
+	ev := parseSSE(rec.Body.String())
+	if len(ev["progress"]) != 2 {
+		t.Fatalf("progress events = %d, want 2; body=%s", len(ev["progress"]), rec.Body.String())
+	}
+	// Progress carries the line COUNT only — never the line content.
+	if !strings.Contains(ev["progress"][1], `"lines":2`) {
+		t.Fatalf("last progress = %q, want lines:2", ev["progress"][1])
+	}
+	if strings.Contains(rec.Body.String(), "thinking") || strings.Contains(rec.Body.String(), "done") {
+		t.Fatalf("SSE leaked model line content: %s", rec.Body.String())
+	}
+	if len(ev["result"]) != 1 {
+		t.Fatalf("result events = %d, want 1", len(ev["result"]))
+	}
+	var res distillResultDTO
+	if err := json.Unmarshal([]byte(ev["result"][0]), &res); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if len(res.Scenarios) != 1 || res.Scenarios[0].ID != "S-1" || res.YAML == "" {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+}
+
+func TestDistillStreamQuestions(t *testing.T) {
+	s, store := distillServer(streamingDistiller([]string{"x"}, questionsStreamStdout))
+	mustCreate(t, store.CreateProject(context.Background(), statestore.Project{ID: "proj-z", Repo: "owner/z", BaseBranch: "develop"}))
+
+	rec := doBody(t, s, http.MethodPost, "/projects/proj-z/distill/stream", bearer(), `{"conversation":"build a db thing"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	ev := parseSSE(rec.Body.String())
+	if len(ev["result"]) != 1 {
+		t.Fatalf("result events = %d, want 1; body=%s", len(ev["result"]), rec.Body.String())
+	}
+	var res distillResultDTO
+	if err := json.Unmarshal([]byte(ev["result"][0]), &res); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if len(res.Questions) != 1 || res.Questions[0].Header != "Datastore" {
+		t.Fatalf("unexpected questions: %+v", res.Questions)
+	}
+}
+
+func TestDistillStreamError422(t *testing.T) {
+	s, store := distillServer(streamingDistiller([]string{"hmm"}, "no fenced block here"))
+	mustCreate(t, store.CreateProject(context.Background(), statestore.Project{ID: "proj-z", Repo: "owner/z", BaseBranch: "develop"}))
+
+	rec := doBody(t, s, http.MethodPost, "/projects/proj-z/distill/stream", bearer(), `{"conversation":"vague"}`)
+	if rec.Code != http.StatusOK { // the SSE stream opened; the failure is in-band.
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	ev := parseSSE(rec.Body.String())
+	if len(ev["result"]) != 0 {
+		t.Fatalf("must not emit a result on error; body=%s", rec.Body.String())
+	}
+	if len(ev["error"]) != 1 || !strings.Contains(ev["error"][0], `"status":422`) {
+		t.Fatalf("error event = %v, want a 422; body=%s", ev["error"], rec.Body.String())
+	}
+}
+
+// TestDistillStreamNonStreamingDistiller proves the fallback: a distiller that only
+// knows Distill streams no progress but still returns a result.
+func TestDistillStreamNonStreamingDistiller(t *testing.T) {
+	s, store := distillServer(stubDistiller{scenarios: sampleScenarios()})
+	mustCreate(t, store.CreateProject(context.Background(), statestore.Project{ID: "proj-z", Repo: "owner/z", BaseBranch: "develop"}))
+
+	rec := doBody(t, s, http.MethodPost, "/projects/proj-z/distill/stream", bearer(), `{"conversation":"build a backend"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	ev := parseSSE(rec.Body.String())
+	if len(ev["progress"]) != 0 {
+		t.Fatalf("non-streaming distiller must emit no progress, got %d", len(ev["progress"]))
+	}
+	if len(ev["result"]) != 1 {
+		t.Fatalf("result events = %d, want 1", len(ev["result"]))
+	}
+}
+
+func TestDistillStreamPreStreamErrors(t *testing.T) {
+	s, store := distillServer(streamingDistiller([]string{"x"}, scenariosStreamStdout))
+	mustCreate(t, store.CreateProject(context.Background(), statestore.Project{ID: "proj-z", Repo: "owner/z", BaseBranch: "develop"}))
+
+	// Empty conversation → 400 (before the SSE stream opens).
+	if rec := doBody(t, s, http.MethodPost, "/projects/proj-z/distill/stream", bearer(), `{"conversation":"  "}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty conversation status = %d, want 400", rec.Code)
+	}
+	// Unknown project → 404.
+	if rec := doBody(t, s, http.MethodPost, "/projects/nope/distill/stream", bearer(), `{"conversation":"x"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown project status = %d, want 404", rec.Code)
+	}
+	// No token → 401.
+	if rec := doBody(t, s, http.MethodPost, "/projects/proj-z/distill/stream", "", `{"conversation":"x"}`); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no-token status = %d, want 401", rec.Code)
+	}
+}
+
+func TestDistillStreamNilDistiller501(t *testing.T) {
+	s, store := distillServer(nil)
+	mustCreate(t, store.CreateProject(context.Background(), statestore.Project{ID: "proj-z", Repo: "owner/z", BaseBranch: "develop"}))
+	if rec := doBody(t, s, http.MethodPost, "/projects/proj-z/distill/stream", bearer(), `{"conversation":"x"}`); rec.Code != http.StatusNotImplemented {
+		t.Fatalf("nil distiller status = %d, want 501", rec.Code)
+	}
+}
+
 // bodyHasError reports whether the JSON error body's "error" field contains sub.
 func bodyHasError(t *testing.T, body []byte, sub string) bool {
 	t.Helper()

@@ -39,6 +39,15 @@ import "./intake.css";
 // accumulated turns); a structured multi-turn request is a frozen-additive follow-up.
 export interface IntakeClient {
   distill(projectId: string, conversation: string): Promise<DistillResult>;
+  // distillStream is the OPTIONAL streaming distill (Q3c.4): the SAME result, with
+  // live progress (the model-output line COUNT) via onProgress while the model works.
+  // When absent — or when the transport can't stream (the fork postMessage bridge) —
+  // IntakeChat uses distill and shows a plain spinner. ApiClient implements it.
+  distillStream?(
+    projectId: string,
+    conversation: string,
+    onProgress?: (lines: number) => void,
+  ): Promise<DistillResult>;
   intake(projectId: string, yaml: string): Promise<IntakeResult>;
 }
 
@@ -96,6 +105,9 @@ export function IntakeChat({
   // distilled yaml, then freely edited by the human. We POST it verbatim.
   const [editedYaml, setEditedYaml] = useState<string>("");
   const [distilling, setDistilling] = useState<boolean>(false);
+  // progressLines is the live model-output line count during a streaming distill
+  // (Q3c.4); null when not streaming (or before the first progress event).
+  const [progressLines, setProgressLines] = useState<number | null>(null);
   const [approving, setApproving] = useState<boolean>(false);
   // yamlError holds the inline parse error from a 400 on /intake so the human can fix it in place.
   const [yamlError, setYamlError] = useState<string | null>(null);
@@ -137,10 +149,15 @@ export function IntakeChat({
     setDistilling(true);
     setResult(null);
     setYamlError(null);
+    setProgressLines(null);
     // Each distill starts clean: drop any stale clarifying questions from a prior turn.
     setPendingQuestions(null);
     try {
-      const res = await client.distill(projectId, conversation);
+      // Prefer the streaming distill (live progress) when the client supports it;
+      // otherwise the plain distill. Both resolve to the SAME DistillResult.
+      const res = client.distillStream
+        ? await client.distillStream(projectId, conversation, (n) => setProgressLines(n))
+        : await client.distill(projectId, conversation);
       // Clarifying turn (Q3c): the distiller asked for more detail instead of drafting.
       if (res.questions !== undefined && res.questions.length > 0) {
         setPendingQuestions(res.questions);
@@ -365,7 +382,9 @@ export function IntakeChat({
                 </button>
                 {distilling && (
                   <span className="intake-spinner" role="status" aria-live="polite">
-                    Distilling…
+                    {progressLines !== null
+                      ? `Distilling… (${progressLines} ${progressLines === 1 ? "line" : "lines"})`
+                      : "Distilling…"}
                   </span>
                 )}
               </div>
