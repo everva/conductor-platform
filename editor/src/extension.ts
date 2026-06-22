@@ -1031,7 +1031,12 @@ async function openStoredDiff(
     await openFileVscodeDiff(api, entry, diffable[0]!, column); // single, or the primary (no prompt).
     return;
   }
-  // Several diffable files + interactive: let the user pick which to open.
+  // P2c: several diffable files + interactive → open the NATIVE MULTI-FILE diff editor (every
+  // changed file in ONE scrollable view — the GitHub-PR / Devin review surface). If the host's
+  // multi-diff command is unavailable it returns false and we fall back to a per-file quick-pick.
+  if (await openMultiFileDiff(api, entry, diffable)) {
+    return;
+  }
   const labels = diffable.map((f) => f.path);
   const picked = await api.window.showQuickPick(labels, { placeHolder: "Select a changed file" });
   if (picked === undefined) {
@@ -1042,6 +1047,37 @@ async function openStoredDiff(
     return; // defensive: the picked label isn't one we offered.
   }
   await openFileVscodeDiff(api, entry, file, column);
+}
+
+/**
+ * Opens ALL of a task's diffable files in the NATIVE MULTI-FILE diff editor (P2c): one scrollable
+ * tab listing every changed file, each rendered as a native diff (red/green, F7 to jump, file
+ * headers collapse) — the way you actually review a 10-file change, instead of opening them one at
+ * a time. It uses the built-in multi-diff editor over the SAME `conductor-diff:` before/after side
+ * URIs (so the content provider — and the P2b full-file upgrade already applied to entry.files —
+ * back every pane). Returns true if it opened; false (the command threw → unavailable on an older
+ * host) so the caller can fall back to a per-file quick-pick. Token-free (the URIs key the store).
+ */
+async function openMultiFileDiff(
+  api: DiffVscodeApi,
+  entry: StoredDiff,
+  files: StoredDiffFile[],
+): Promise<boolean> {
+  const resources = files.map((f) => {
+    const idx = entry.files.indexOf(f);
+    return {
+      originalUri: api.Uri.parse(diffSideUri(entry.n, idx, "before", f.path)),
+      modifiedUri: api.Uri.parse(diffSideUri(entry.n, idx, "after", f.path)),
+    };
+  });
+  const title = `${entry.task} — ${files.length} files`;
+  try {
+    // The built-in multi-file diff editor (the surface the SCM "Open All Changes" uses).
+    await api.commands.executeCommand("_workbench.openMultiDiffEditor", { title, resources });
+    return true;
+  } catch {
+    return false; // unavailable on this host → caller falls back to a per-file quick-pick.
+  }
 }
 
 /**

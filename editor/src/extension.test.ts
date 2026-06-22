@@ -870,30 +870,52 @@ describe("runShowDiff", () => {
     expect(workspace.openTextDocument).not.toHaveBeenCalled();
   });
 
-  it("quick-picks the FILE when a diff touches several, opening the chosen natively", async () => {
+  // A two-file diff fixture (P2c).
+  function twoFileDiff(): TaskDiff {
+    return makeTaskDiff({
+      files: [
+        { path: "x.ts", status: "M", additions: 1, deletions: 1 },
+        { path: "y.ts", status: "M", additions: 1, deletions: 1 },
+      ],
+      patch: "diff --git a/x.ts b/x.ts\n@@ -1 +1 @@\n-a\n+b\n" + "diff --git a/y.ts b/y.ts\n@@ -1 +1 @@\n-c\n+d\n",
+    });
+  }
+
+  it("P2c: opens the NATIVE MULTI-FILE diff editor when a diff touches several files (no per-file pick)", async () => {
     const store = new DiffStore();
-    const twoFilePatch =
-      "diff --git a/x.ts b/x.ts\n@@ -1 +1 @@\n-a\n+b\n" +
-      "diff --git a/y.ts b/y.ts\n@@ -1 +1 @@\n-c\n+d\n";
-    store.add(
-      makeTaskDiff({
-        files: [
-          { path: "x.ts", status: "M", additions: 1, deletions: 1 },
-          { path: "y.ts", status: "M", additions: 1, deletions: 1 },
-        ],
-        patch: twoFilePatch,
-      }),
-    );
+    store.add(twoFileDiff());
+
+    await runShowDiff(diffApi, store);
+
+    // One retained diff → no diff-level pick; several files → the multi-diff editor, NOT a file pick.
+    expect(window.showQuickPick).not.toHaveBeenCalled();
+    const call = commands.executeCommand.mock.calls.find((c) => c[0] === "_workbench.openMultiDiffEditor");
+    expect(call, "the multi-file diff editor should open").toBeDefined();
+    const arg = call?.[1] as {
+      title: string;
+      resources: { originalUri: { path: string }; modifiedUri: { path: string } }[];
+    };
+    expect(arg.resources).toHaveLength(2);
+    expect(arg.resources[0]!.originalUri.path).toContain("/file/0/before/x.ts");
+    expect(arg.resources[1]!.modifiedUri.path).toContain("/file/1/after/y.ts");
+    expect(arg.title).toContain("2 files");
+  });
+
+  it("P2c: falls back to a per-file quick-pick when the multi-diff editor is unavailable", async () => {
+    const store = new DiffStore();
+    store.add(twoFileDiff());
+    // Simulate an older host where the multi-diff command is unknown (rejects); the next
+    // executeCommand (vscode.diff) uses the default resolving impl.
+    commands.executeCommand.mockImplementationOnce(() => Promise.reject(new Error("no command")));
     window.showQuickPick.mockResolvedValueOnce("y.ts");
 
     await runShowDiff(diffApi, store);
 
-    // One retained diff → no diff-level pick; two diffable files → a FILE pick.
     expect(window.showQuickPick).toHaveBeenCalledTimes(1);
     const labels = window.showQuickPick.mock.calls[0]?.[0] as string[];
     expect(labels).toEqual(["x.ts", "y.ts"]);
     const call = commands.executeCommand.mock.calls.find((c) => c[0] === "vscode.diff");
-    expect((call?.[1] as { path: string }).path).toContain("/file/1/before/y.ts"); // y.ts = index 1
+    expect((call?.[1] as { path: string }).path).toContain("/file/1/before/y.ts");
     expect(call?.[3]).toContain("y.ts");
   });
 
