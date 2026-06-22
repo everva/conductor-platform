@@ -65,4 +65,40 @@ describe("webview bundle (ADR-0029 single React)", () => {
     expect(css).toMatch(/--bg:/);
     expect(css).toMatch(/--space-2:/);
   }, 30_000);
+
+  // Guards Faz-P/P1: the VS Code theme bridge (webview/theme-vscode.css) must be bundled AFTER
+  // the foundation and RE-MAP the cockpit's chrome tokens onto the editor's `--vscode-*` theme,
+  // so the fork cockpit follows the user's editor theme (light/dark/HC) instead of a fixed
+  // foreign dark. Without this import the cockpit reverts to the cool-gray dark tokens and clashes
+  // with a light/HC editor. We assert the bridge is an input AND that the EMITTED css re-maps the
+  // load-bearing chrome tokens to `--vscode-*` (each keeping the web token as a fallback).
+  it("bundles the VS Code theme bridge so the cockpit follows the editor theme (P1)", async () => {
+    const { webviewOptions } = await import("../esbuild.config.mjs");
+    const result = await esbuild.build({
+      ...webviewOptions,
+      write: false, // in-memory; inspect outputFiles, don't touch dist/
+      metafile: true,
+      sourcemap: false,
+      logLevel: "silent",
+    });
+
+    const inputs = Object.keys(result.metafile?.inputs ?? {});
+    expect(
+      inputs.some((i) => i.includes("webview/theme-vscode.css")),
+      "theme-vscode.css must be bundled — the --vscode-* chrome bridge",
+    ).toBe(true);
+
+    const css = result.outputFiles?.find((f) => f.path.endsWith(".css"))?.text ?? "";
+    // Surfaces follow the editor background; text the editor foreground; the UI font the editor
+    // font — each with a web fallback (so a missing var degrades, and the web App is unaffected).
+    expect(css, "surfaces follow the editor background").toMatch(
+      /--bg:\s*var\(\s*--vscode-editor-background\s*,/,
+    );
+    expect(css, "text follows the editor foreground").toMatch(
+      /--text-1:\s*var\(\s*--vscode-foreground\s*,/,
+    );
+    expect(css, "the UI font follows the editor font").toMatch(
+      /--font-sans:\s*var\(\s*--vscode-font-family\s*,/,
+    );
+  }, 30_000);
 });

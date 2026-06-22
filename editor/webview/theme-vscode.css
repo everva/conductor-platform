@@ -1,0 +1,91 @@
+/* ============================================================================
+   Fork-webview VS Code theme bridge (Faz-P / P1)
+   ----------------------------------------------------------------------------
+   The shared cockpit (web/src) styles itself with a FIXED cool-gray DARK token
+   set (theme/tokens.css) — right for the standalone web App, but a foreign dark
+   panel when embedded in the Conductor editor, whose theme the USER controls
+   (light / dark / high-contrast). VS Code injects its active theme as `--vscode-*`
+   custom properties on every webview root; this file RE-MAPS the cockpit's
+   SEMANTIC CHROME tokens onto those, so the cockpit adopts the editor's surfaces,
+   text, borders and font — and follows a live theme switch with ZERO JS (the
+   `--vscode-*` values change under us, and `var()` resolves at use-time).
+
+   SCOPE: imported ONLY by the fork entry (webview/main.tsx), AFTER tokens.css +
+   index.css, so these `:root` redefinitions WIN the cascade (later, same
+   specificity) and the scrollbar overrides win over index.css. The standalone web
+   App never imports this file, so its branded dark look is untouched — the cockpit
+   stays shared + host-unaware (ADR-0029).
+
+   PRINCIPLE:
+     • CHROME (bg / surface / text / border / font / focus / scrollbar) FOLLOWS the
+       editor theme — this is what makes the cockpit "fit".
+     • BRAND identity (indigo→violet accent, gradient, soft fills) is KEPT — like
+       Devin keeps its accent across light/dark. Only BRAND-TEXT is re-mapped, so
+       links stay readable on a themed (possibly light) background.
+     • Every map carries the ORIGINAL web token as the FALLBACK, so a missing
+       `--vscode-*` var degrades to the brand dark look instead of breaking.
+
+   No token-discipline concern: this is pure presentation; it carries no token.
+   See ADR-0039 (docs/decisions/0039-vscode-theme-bridge.md).
+   ========================================================================== */
+
+:root {
+  /* ---- SURFACES → the editor's theme-tuned background ramp ---------------- */
+  /* Dedicated VS Code bg vars (not a derived ramp): the theme author tuned these
+     for the right elevation DIRECTION in both light (raised = lighter cards) and
+     dark (raised = lighter panels), which a foreground-mix can't get right on light. */
+  --bg: var(--vscode-editor-background, #101319);
+  --surface-1: var(--vscode-editor-background, #14171d);
+  --surface-2: var(--vscode-sideBar-background, #181c23);
+  --surface-3: var(--vscode-editorWidget-background, #20252e);
+  --surface-4: var(--vscode-list-hoverBackground, #2a3039);
+  --surface-inset: var(--vscode-input-background, rgba(0, 0, 0, 0.22));
+
+  /* ---- BORDERS → foreground-relative hairlines (theme-correct + hierarchy) - */
+  /* color-mix on the editor foreground: a subtle LIGHT hairline on dark, a subtle
+     DARK hairline on light — both correct, with real soft/default/strong steps.
+     (White-alpha borders, the web default, vanish on a light theme.) Supported by
+     the Chromium VS Code ships; falls back to the var only if foreground is unset. */
+  --border: color-mix(in srgb, var(--vscode-foreground, #fff) 14%, transparent);
+  --border-soft: color-mix(in srgb, var(--vscode-foreground, #fff) 8%, transparent);
+  --border-strong: color-mix(in srgb, var(--vscode-contrastBorder, var(--vscode-foreground, #fff)) 24%, transparent);
+
+  /* ---- TEXT → the editor's foreground ramp ------------------------------- */
+  --text-1: var(--vscode-foreground, #e8ebf1);
+  --text-2: var(--vscode-foreground, #aab2c0);
+  --text-3: var(--vscode-descriptionForeground, #8b94a3);
+  --text-faint: var(--vscode-disabledForeground, #6b7484);
+  /* --text-on-accent stays #fff: it sits over the (kept) indigo/violet brand fills,
+     which are dark enough for white in every theme — so it is intentionally NOT remapped. */
+
+  /* ---- BRAND → KEEP identity; only link-text must read on a themed bg ----- */
+  --brand-text: var(--vscode-textLink-foreground, #818cf8);
+
+  /* ---- STATUS → theme chart colors (the translucent soft/border alphas kept) */
+  --success: var(--vscode-charts-green, #34d399);
+  --warn: var(--vscode-charts-yellow, #fbbf24);
+  --danger: var(--vscode-charts-red, #f87171);
+  --info: var(--vscode-charts-blue, #60a5fa);
+
+  /* ---- TYPE → honor the editor's UI + monospace fonts -------------------- */
+  --font-sans: var(--vscode-font-family, "Geist Variable", system-ui, -apple-system,
+      "Segoe UI", Roboto, sans-serif);
+  --font-mono: var(--vscode-editor-font-family, "Geist Mono Variable", ui-monospace,
+      "SF Mono", SFMono-Regular, Menlo, monospace);
+
+  /* ---- FOCUS → the editor's focus border --------------------------------- */
+  --focus-ring: 0 0 0 1px var(--vscode-editor-background, var(--bg)),
+    0 0 0 3px var(--vscode-focusBorder, var(--brand-ring));
+}
+
+/* ---- SCROLLBARS → the editor's slider (index.css hard-codes --gray-700) ---- */
+/* These re-declare the index.css `*` / webkit rules; imported AFTER it, they win. */
+* {
+  scrollbar-color: var(--vscode-scrollbarSlider-background, #3b424e) transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background, #3b424e);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground, #515a68);
+}

@@ -25,12 +25,18 @@ import { createRoot } from "react-dom/client";
 // design TOKENS (`:root` custom properties) + base styles — the web App imports the same in its
 // entry (web/src/main.tsx). The `@cockpit` barrel pulls in the COMPONENT css but NOT this
 // foundation, so without these imports the fork webview's hundreds of `var(--…)` resolve to
-// nothing → a fully UNSTYLED cockpit. Imported here (the fork entry, mirroring web's) BEFORE
-// `@cockpit` so esbuild bundles the tokens ahead of the component rules. (The Geist webfonts are
-// a follow-up; the tokens' font-family falls back to system-ui until @fontsource is wired into
-// the editor build.)
+// nothing → a fully UNSTYLED cockpit.
+//
+// Faz-P/P1 (VS Code theme bridge): theme-vscode.css re-maps the cockpit's CHROME tokens (bg /
+// surface / text / border / font / focus / scrollbar) onto the editor's `--vscode-*` theme, so
+// the cockpit ADOPTS the user's editor theme (light / dark / high-contrast) instead of a fixed
+// foreign dark. It is imported LAST so its `:root` redefinitions win over tokens.css AND its
+// scrollbar rules win over index.css; every map keeps the web token as a fallback. The standalone
+// web App never imports it, so its branded look is untouched. (Honoring --vscode-font-family also
+// makes the Geist webfont an optional extra, not a requirement — the editor's UI font is used.)
 import "../../web/src/theme/tokens.css";
 import "../../web/src/index.css";
+import "./theme-vscode.css";
 import { createBridgeTransports, subscribeToMessages } from "../src/bridge/webviewTransport";
 import { isHostNavigate } from "../src/bridge/protocol";
 import { forkClientFactories } from "./connect";
