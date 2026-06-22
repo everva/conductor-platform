@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/everva/conductor-platform/internal/events"
 	"github.com/everva/conductor-platform/internal/statestore"
 )
 
@@ -182,5 +184,171 @@ func TestAgentReleaseLease(t *testing.T) {
 	}
 	if _, err := store.GetLease(ctx, "p"); err == nil {
 		t.Fatalf("owner release must drop the lease")
+	}
+}
+
+// seedRunningTask creates a task in the running state (post-lease) for result tests.
+func seedRunningTask(t *testing.T, store statestore.StateStore, proj, id, tier string) {
+	t.Helper()
+	mustCreate(t, store.CreateTask(context.Background(), statestore.Task{
+		ID: id, ProjectID: proj, Lane: "backend", Tier: tier, Status: "running",
+	}))
+}
+
+// TestAgentResult_HeldForReview_FullFlow is the gateway-mediated held-for-review proof:
+// pass → hold (record branch) → director /approve → agent /decision sees approved →
+// agent /merged → done. No auto-merge of optiway's work ever happens at the gateway.
+func TestAgentResult_HeldForReview_FullFlow(t *testing.T) {
+	s, store := agentServer(t)
+	ctx := context.Background()
+	// Empty GovernancePolicy → fail-safe HELD (held-for-review, optiway's mode).
+	mustCreate(t, store.CreateProject(ctx, statestore.Project{ID: "opt", Repo: "everva/optiway", BaseBranch: "conductor/optiway", Readiness: "ready"}))
+	seedRunningTask(t, store, "opt", "T-1", "T2")
+
+	rec := doBody(t, s, http.MethodPost, "/projects/opt/agent/tasks/T-1/result", bearer(),
+		`{"result":"pass","branch":"conductor/opt/T-1","summary":"done","checks":[{"name":"go build","result":"pass","evidence":"exit 0"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("result status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var rr agentResultResponse
+	json.Unmarshal(rec.Body.Bytes(), &rr) //nolint:errcheck
+	if rr.Decision != "hold" {
+		t.Fatalf("decision = %q, want hold", rr.Decision)
+	}
+	task, _ := store.GetTask(ctx, "T-1")
+	if task.Status != "awaiting-approval" || task.Branch != "conductor/opt/T-1" || task.Approved {
+		t.Fatalf("task not held with branch: %+v", task)
+	}
+
+	// Agent polls decision → pending.
+	dec := do(t, s, http.MethodGet, "/projects/opt/agent/tasks/T-1/decision", bearer())
+	if !decisionStateIs(t, dec, "pending") {
+		t.Fatalf("decision before approve should be pending; body=%s", dec.Body.String())
+	}
+
+	// Director approves via the EXISTING control endpoint.
+	if ap := doBody(t, s, http.MethodPost, "/projects/opt/approve", bearer(), `{"task_id":"T-1"}`); ap.Code != http.StatusOK {
+		t.Fatalf("approve status = %d, want 200; body=%s", ap.Code, ap.Body.String())
+	}
+	dec2 := do(t, s, http.MethodGet, "/projects/opt/agent/tasks/T-1/decision", bearer())
+	if !decisionStateIs(t, dec2, "approved") {
+		t.Fatalf("decision after approve should be approved; body=%s", dec2.Body.String())
+	}
+
+	// Agent merged → task done, approval cleared.
+	m := doBody(t, s, http.MethodPost, "/projects/opt/agent/tasks/T-1/merged", bearer(), `{"sha":"9f2c1ab"}`)
+	if m.Code != http.StatusOK {
+		t.Fatalf("merged status = %d, want 200; body=%s", m.Code, m.Body.String())
+	}
+	task, _ = store.GetTask(ctx, "T-1")
+	if task.Status != "done" || task.Approved {
+		t.Fatalf("task not done after merged: %+v", task)
+	}
+}
+
+func decisionStateIs(t *testing.T, rec *httptest.ResponseRecorder, want string) bool {
+	t.Helper()
+	var dr agentDecisionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &dr); err != nil {
+		t.Fatalf("decode decision: %v", err)
+	}
+	return dr.State == want
+}
+
+func TestAgentResult_AutoMerge(t *testing.T) {
+	s, store := agentServer(t)
+	mustCreate(t, store.CreateProject(context.Background(), statestore.Project{ID: "auto", Repo: "o/auto", BaseBranch: "main", Readiness: "ready", GovernancePolicy: "auto"}))
+	seedRunningTask(t, store, "auto", "T-1", "T3") // even T3 auto-merges under "auto" policy
+
+	rec := doBody(t, s, http.MethodPost, "/projects/auto/agent/tasks/T-1/result", bearer(),
+		`{"result":"pass","branch":"b","summary":"ok"}`)
+	var rr agentResultResponse
+	json.Unmarshal(rec.Body.Bytes(), &rr) //nolint:errcheck
+	if rec.Code != http.StatusOK || rr.Decision != "merge" {
+		t.Fatalf("auto-merge: status=%d decision=%q, want 200/merge; body=%s", rec.Code, rr.Decision, rec.Body.String())
+	}
+}
+
+func TestAgentResult_RiskLayered(t *testing.T) {
+	s, store := agentServer(t)
+	mustCreate(t, store.CreateProject(context.Background(), statestore.Project{ID: "rl", Repo: "o/rl", BaseBranch: "main", Readiness: "ready", GovernancePolicy: "risk-layered"}))
+	seedRunningTask(t, store, "rl", "T-low", "T1")
+	seedRunningTask(t, store, "rl", "T-high", "T4")
+
+	low := doBody(t, s, http.MethodPost, "/projects/rl/agent/tasks/T-low/result", bearer(), `{"result":"pass","branch":"b"}`)
+	var lr agentResultResponse
+	json.Unmarshal(low.Body.Bytes(), &lr) //nolint:errcheck
+	if lr.Decision != "merge" {
+		t.Fatalf("T1 risk-layered decision = %q, want merge", lr.Decision)
+	}
+	high := doBody(t, s, http.MethodPost, "/projects/rl/agent/tasks/T-high/result", bearer(), `{"result":"pass","branch":"b"}`)
+	var hr agentResultResponse
+	json.Unmarshal(high.Body.Bytes(), &hr) //nolint:errcheck
+	if hr.Decision != "hold" {
+		t.Fatalf("T4 risk-layered decision = %q, want hold", hr.Decision)
+	}
+}
+
+func TestAgentResult_Blocked(t *testing.T) {
+	s, store := agentServer(t)
+	mustCreate(t, store.CreateProject(context.Background(), statestore.Project{ID: "p", Repo: "o/p", BaseBranch: "main", Readiness: "ready"}))
+	seedRunningTask(t, store, "p", "T-1", "T2")
+
+	rec := doBody(t, s, http.MethodPost, "/projects/p/agent/tasks/T-1/result", bearer(), `{"result":"changes-requested","summary":"tests failed"}`)
+	var rr agentResultResponse
+	json.Unmarshal(rec.Body.Bytes(), &rr) //nolint:errcheck
+	if rec.Code != http.StatusOK || rr.Decision != "blocked" {
+		t.Fatalf("blocked: status=%d decision=%q; body=%s", rec.Code, rr.Decision, rec.Body.String())
+	}
+	task, _ := store.GetTask(context.Background(), "T-1")
+	if task.Status != "blocked" {
+		t.Fatalf("task status = %q, want blocked (never fake-green)", task.Status)
+	}
+}
+
+func TestAgentDecision_Aborted(t *testing.T) {
+	s, store := agentServer(t)
+	ctx := context.Background()
+	mustCreate(t, store.CreateProject(ctx, statestore.Project{ID: "p", Repo: "o/p", BaseBranch: "main", Readiness: "ready"}))
+	mustCreate(t, store.CreateTask(ctx, statestore.Task{ID: "T-1", ProjectID: "p", Lane: "backend", Tier: "T2", Status: "running", AbortRequested: true}))
+
+	dec := do(t, s, http.MethodGet, "/projects/p/agent/tasks/T-1/decision", bearer())
+	var dr agentDecisionResponse
+	json.Unmarshal(dec.Body.Bytes(), &dr) //nolint:errcheck
+	if dr.State != "aborted" {
+		t.Fatalf("decision state = %q, want aborted", dr.State)
+	}
+}
+
+func TestAgentResult_BadRequests(t *testing.T) {
+	s, store := agentServer(t)
+	mustCreate(t, store.CreateProject(context.Background(), statestore.Project{ID: "p", Repo: "o/p", BaseBranch: "main", Readiness: "ready"}))
+	seedRunningTask(t, store, "p", "T-1", "T2")
+
+	if rec := doBody(t, s, http.MethodPost, "/projects/p/agent/tasks/T-1/result", bearer(), `{"result":"bogus"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("bogus result status = %d, want 400", rec.Code)
+	}
+	if rec := doBody(t, s, http.MethodPost, "/projects/p/agent/tasks/ghost/result", bearer(), `{"result":"pass","branch":"b"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown task status = %d, want 404", rec.Code)
+	}
+	// pass + held but no branch → 400.
+	if rec := doBody(t, s, http.MethodPost, "/projects/p/agent/tasks/T-1/result", bearer(), `{"result":"pass"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("held without branch status = %d, want 400", rec.Code)
+	}
+}
+
+func TestAgentReport(t *testing.T) {
+	store := statestore.NewMemoryStore()
+	bus := events.NewMemoryBus()
+	s := &apiServer{store: store, bus: bus, token: testToken, clock: fixedClock}
+
+	rec := doBody(t, s, http.MethodPost, "/projects/p/agent/tasks/T-1/report", bearer(),
+		`{"phase":"develop","kind":"progress","payload":{"pct":70}}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("report status = %d, want 202; body=%s", rec.Code, rec.Body.String())
+	}
+	// An invalid phase/kind is a 400, not a silently-dropped event.
+	if bad := doBody(t, s, http.MethodPost, "/projects/p/agent/tasks/T-1/report", bearer(), `{"phase":"bogus","kind":"nope"}`); bad.Code != http.StatusBadRequest {
+		t.Fatalf("invalid event status = %d, want 400", bad.Code)
 	}
 }

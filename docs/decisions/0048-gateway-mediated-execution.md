@@ -40,7 +40,23 @@ Faz O optiway ilk held-run).
   (linux→204, macos→200) / repo-busy-204 / unknown-404 / bad-requests(400/401) / heartbeat(200/404/400) /
   release(owner-drops, non-owner-idempotent-noop). Mevcut gateway testleri DEĞİŞMEDEN geçer (frozen-additive).
 
+## Sonuçlar (Faz G2 — report/result/decision/merged; bu commit)
+- `cmd/conductor-api/agent.go` (additive):
+  - `POST .../agent/tasks/{task}/report` {phase,kind,payload} → `events.Event.Validate` + `bus.Publish` (editör
+    backfill agent işini de görür). Geçersiz phase/kind → 400 (sessizce düşmez).
+  - `POST .../agent/tasks/{task}/result` {result,branch,summary,checks} → KindDecision emit + **never-fake-green:**
+    pass-değil → markBlocked/"blocked" · pass + `policyForProject` HumanRequired → awaiting-approval (branch saklanır,
+    Approved=false) + KindInterventionNeeded → "hold" · pass + auto → "merge" (agent merge eder).
+  - `GET .../agent/tasks/{task}/decision` → AbortRequested→"aborted" · awaiting-approval+Approved→"approved" · "pending".
+  - `POST .../agent/tasks/{task}/merged` {sha} → markDone + Approved temizle + KindMerge.
+  - `policyForProject`: **fail-safe = held-for-review** (boş/unknown GovernancePolicy → `governance.New(nil)` = TÜM
+    tier'lar held; optiway bunu kullanır). "risk-layered" → DefaultPolicy (T1/T2 auto, T3/T4 held). "auto" → hepsi auto.
+- **Doğrulama:** Go gate (golangci 0) + `-race` + GERÇEK-PG. `agent_test.go` G2: **held→/approve→decision-approved→
+  merged→done TAM AKIŞ** (mevcut `/approve` endpoint reuse) + auto-merge + risk-layered(T1 merge/T4 hold) + blocked
+  (status=blocked) + decision-aborted + bad-requests(400/404) + report(202/400 invalid-event). Merge AGENT'ta olur;
+  gateway yalnız state + verdict-event. Mevcut gateway testleri değişmedi (frozen-additive).
+
 ## Kalan
-- **Faz G2:** report/result(held|auto|blocked)/decision/merged + holdout-serve endpoint'leri.
+- **Faz G3 (ops.):** holdout-serve endpoint (gateway HoldoutStore) — ilk optiway run holdout'suz gate ile başlar.
 - **Faz A:** `cmd/conductor-agent` host binary (engine/verify/merger reuse + agent HTTP client; PG'siz).
 - **Faz D/O:** deploy (gateway redeploy + davinci kurulum) + optiway held-for-review ilk gerçek run.

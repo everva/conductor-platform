@@ -115,6 +115,10 @@ func (s *apiServer) routes() http.Handler {
 	mux.Handle("POST /projects/{id}/agent/lease", s.requireAuth(http.HandlerFunc(s.handleAgentLease)))
 	mux.Handle("POST /projects/{id}/agent/lease/release", s.requireAuth(http.HandlerFunc(s.handleAgentReleaseLease)))
 	mux.Handle("POST /agent/heartbeat", s.requireAuth(http.HandlerFunc(s.handleAgentHeartbeat)))
+	mux.Handle("POST /projects/{id}/agent/tasks/{task}/report", s.requireAuth(http.HandlerFunc(s.handleAgentReport)))
+	mux.Handle("POST /projects/{id}/agent/tasks/{task}/result", s.requireAuth(http.HandlerFunc(s.handleAgentResult)))
+	mux.Handle("GET /projects/{id}/agent/tasks/{task}/decision", s.requireAuth(http.HandlerFunc(s.handleAgentDecision)))
+	mux.Handle("POST /projects/{id}/agent/tasks/{task}/merged", s.requireAuth(http.HandlerFunc(s.handleAgentMerged)))
 
 	// Historical event replay: standard bearer auth (header only).
 	mux.Handle("GET /events", s.requireAuth(http.HandlerFunc(s.handleEvents)))
