@@ -102,3 +102,12 @@ fake'ler kırılmaz). **Yeni:** zengin sonuç + yeni distiller metodu + additive
 - Faz-Q TAMAM (Q0–Q4 + Q3a/Q3b, develop `ff9da3f`, 10 commit CI-yeşil). Q3b konuşmalı AMA AskUserQuestion
   YOK (kullanıcı denetledi, haklı). **Q3c = bu plan: AskUserQuestion-tarzı clarifying (backend LLM +
   gateway additive + web CC-UI).** İmplementasyon compact sonrası, Q3c.1→.4 sırasıyla. ADR-0047.
+- **→ Q3c.1/2/3 İŞLEVSEL TAMAM + SEVK (3 commit, hepsi CI 3-job yeşil):** Q3c.1 backend `0dc8ef7` (question.go +
+  ClarifyingDistiller seam + clarifyPrompt + ParseOutcome; `Distill`+422 dokunulmadı; Go gate+race) → Q3c.2
+  gateway `056ff44` (handleDistill additive `questions` omitempty; 422 korundu; DistillOrClarify graceful-degrade;
+  5 yeni test + GERÇEK-PG) → Q3c.3 web `888dc15` (QuestionCard CC-tarzı + IntakeChat soru-turu→cevap→re-distill;
+  web vitest 170 + **Playwright e2e 16/16 KENDİM** + editör gate + **GERÇEK fork electron smoke yeşil**). **#5
+  (CC-gibi intake) KAPANDI.** Token DONMUŞ; web-App+frozen-Distiller+canlı-PG dokunulmadı. develop @ `888dc15`.
+- **KALAN yalnız Q3c.4 (opsiyonel/kullanıcı):** streaming = stretch (ATLA — risk/marjinal değer) · fork signed
+  rebuild (Apple cert = kullanıcı) + GUI görsel-onay (CC-soru-çipleri canlı fork'ta). Gate-seviye runtime kanıtı
+  (electron smoke) ZATEN yeşil; kalan yalnız imzalı-app görsel capstone + kullanıcı onayı.
