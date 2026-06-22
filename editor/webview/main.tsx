@@ -21,6 +21,16 @@
 // the bridge protocol module.
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+// Design foundation (N5 CSS fix): the shared cockpit components style themselves with these
+// design TOKENS (`:root` custom properties) + base styles — the web App imports the same in its
+// entry (web/src/main.tsx). The `@cockpit` barrel pulls in the COMPONENT css but NOT this
+// foundation, so without these imports the fork webview's hundreds of `var(--…)` resolve to
+// nothing → a fully UNSTYLED cockpit. Imported here (the fork entry, mirroring web's) BEFORE
+// `@cockpit` so esbuild bundles the tokens ahead of the component rules. (The Geist webfonts are
+// a follow-up; the tokens' font-family falls back to system-ui until @fontsource is wired into
+// the editor build.)
+import "../../web/src/theme/tokens.css";
+import "../../web/src/index.css";
 import { createBridgeTransports, subscribeToMessages } from "../src/bridge/webviewTransport";
 import { isHostNavigate } from "../src/bridge/protocol";
 import { forkClientFactories } from "./connect";
