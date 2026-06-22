@@ -47,18 +47,35 @@ type distillRunner func(ctx context.Context, conversation string) (stdout []byte
 // ParseVerdict, ADR-0014). It holds no LLM logic itself — the model runs in the
 // subprocess — and never fabricates scenarios.
 type CommandDistiller struct {
+	// run backs the frozen Distill path (distillPrompt → scenarios only).
 	run distillRunner
+	// clarifyRun backs the additive DistillOrClarify path (clarifyPrompt →
+	// scenarios OR clarifying questions). It is a SEPARATE runner because it
+	// prepends a different prompt; the frozen Distill path is unaffected (ADR-0047).
+	clarifyRun distillRunner
 }
 
-// Compile-time assertion that *CommandDistiller satisfies the seam.
-var _ Distiller = (*CommandDistiller)(nil)
+// Compile-time assertions that *CommandDistiller satisfies both seams.
+var (
+	_ Distiller           = (*CommandDistiller)(nil)
+	_ ClarifyingDistiller = (*CommandDistiller)(nil)
+)
 
 // NewCommandDistillerWithRunner returns a CommandDistiller driven by the given
 // runner. It is the test seam: a stub runner returns fixture stdout (valid YAML in
 // prose, malformed, empty) with no real `claude -p` invocation. A nil runner is a
-// programming error and is rejected at call time.
+// programming error and is rejected at call time. It wires only the frozen Distill
+// path; DistillOrClarify on the result errors until a clarify runner is set (use
+// NewClarifyingDistillerWithRunner for that path).
 func NewCommandDistillerWithRunner(run distillRunner) *CommandDistiller {
 	return &CommandDistiller{run: run}
+}
+
+// NewClarifyingDistillerWithRunner returns a CommandDistiller whose DistillOrClarify
+// path is driven by the given runner (ADR-0047 test seam). A stub runner returns
+// fixture stdout (a fenced scenarios OR questions block) with no real `claude -p`.
+func NewClarifyingDistillerWithRunner(clarifyRun distillRunner) *CommandDistiller {
+	return &CommandDistiller{clarifyRun: clarifyRun}
 }
 
 // Distill runs the distillation subprocess over the conversation and parses its
@@ -81,6 +98,27 @@ func (d *CommandDistiller) Distill(ctx context.Context, conversation string) ([]
 		}
 	}
 	return ParseScenarios(stdout)
+}
+
+// DistillOrClarify runs the clarifying-distill subprocess (clarifyPrompt) and parses
+// its stdout into a DistillOutcome — either validated scenarios or validated
+// clarifying questions (ADR-0047). It mirrors Distill's leniency and never-fabricate
+// discipline: a run error with empty output yields ErrNoScenarios; otherwise the
+// output is parsed by ParseOutcome (which keeps the ErrNoScenarios sentinel for the
+// "nothing usable" case so the gateway's 422 mapping is unchanged). It is ADDITIVE:
+// the frozen Distill path above is not touched.
+func (d *CommandDistiller) DistillOrClarify(ctx context.Context, conversation string) (DistillOutcome, error) {
+	if d.clarifyRun == nil {
+		return DistillOutcome{}, errors.New("intake: distiller has no clarify runner configured")
+	}
+	if strings.TrimSpace(conversation) == "" {
+		return DistillOutcome{}, errors.New("intake: distiller: empty conversation")
+	}
+	stdout, runErr := d.clarifyRun(ctx, conversation)
+	if runErr != nil && len(strings.TrimSpace(string(stdout))) == 0 {
+		return DistillOutcome{}, fmt.Errorf("%w: %v", ErrNoScenarios, runErr)
+	}
+	return ParseOutcome(stdout)
 }
 
 // scenarioBlock is the wrapper the distiller is prompted to emit so its scenarios
@@ -134,17 +172,25 @@ func ParseScenarios(stdout []byte) ([]Scenario, error) {
 	return parsed.Scenarios, nil
 }
 
-// extractScenarioBlock returns the text between the LAST start fence and the next
-// end fence after it, so a model that narrates, drafts, then emits its final block
-// last wins (the last-block rule, mirroring engine.lastResultObject). It returns
-// ok=false when no complete fenced block exists.
+// extractScenarioBlock returns the text between the LAST scenarios start fence and
+// the next end fence after it, so a model that narrates, drafts, then emits its
+// final block last wins (the last-block rule, mirroring engine.lastResultObject). It
+// returns ok=false when no complete fenced block exists.
 func extractScenarioBlock(out string) (string, bool) {
-	start := strings.LastIndex(out, scenariosFenceStart)
+	return extractFenced(out, scenariosFenceStart, scenariosFenceEnd)
+}
+
+// extractFenced returns the trimmed text between the LAST startFence and the next
+// endFence after it (the last-block rule). It returns ok=false when no complete,
+// non-empty fenced block exists. It is the shared primitive behind both the
+// scenarios and the questions (ADR-0047) block extraction.
+func extractFenced(out, startFence, endFence string) (string, bool) {
+	start := strings.LastIndex(out, startFence)
 	if start < 0 {
 		return "", false
 	}
-	rest := out[start+len(scenariosFenceStart):]
-	end := strings.Index(rest, scenariosFenceEnd)
+	rest := out[start+len(startFence):]
+	end := strings.Index(rest, endFence)
 	if end < 0 {
 		return "", false
 	}
