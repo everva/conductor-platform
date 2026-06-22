@@ -116,6 +116,17 @@ döndürür (model karar verir; varsayma → sor).
   SSE mock'u; progress+result frame'leri) + editör gate (vitest 251/3 + esbuild bundle streaming client'ı içerir) +
   **GERÇEK fork electron smoke YEŞİL** (New Work açılır, exit 0). Token DONMUŞ; konuşma-içeriği SSE'ye sızmaz (test).
 
+## Sonuçlar (Q3c.4b — fork re-inject + runtime verify; bu commit kapsamı dışı, yerel doğrulama)
+- `everva/conductor-editor` (main `5b67cbc`) fork app'ine TAZE Q3c bundle re-inject edildi
+  (`build/inject-extension.sh` → editör `npm run build` [Q3c QuestionCard + streaming client] → VSIX → built-in
+  `conductor`) → inject ad-hoc imzayı bozar → `codesign --force --deep --sign -` re-sign (verify rc=0) →
+  **`build/verify-runtime.sh` PASS** (fork app boot → exthost `_doActivateExtension everva.conductor-editor`
+  onStartupFinished) + **`build/verify-app.sh` PASS** (Conductor kimliği sağlam: nameShort=Conductor, bundle-id
+  ai.everva.conductor-editor, built-in mevcut, bin/conductor, Conductor.icns) + injected `dist/webview/main.js`
+  içinde `question-card` marker'ı DOĞRULANDI (= taze Q3c bundle canlı). **Q3c GERÇEK fork'ta runtime-aktif.**
+- Streaming editörde non-streaming distill'e graceful-degrade eder (bridge `sendStream` yok); QuestionCard +
+  clarifying intake fork'ta tam çalışır. Fork app değişikliği = build artefaktı (commit yok; fork main dokunulmadı).
+
 ## Kalan (yalnız kullanıcı / opsiyonel)
-- **Q3c.4b** fork re-inject (inject SONRASI `codesign --force --deep --sign -` + `open -n`) + canlı gateway görsel
-  capstone (CC-tarzı soru-çipleri gerçek fork'ta) + kullanıcı görsel onayı. (İmzalı release = Apple cert kullanıcıda.)
+- Kullanıcı GÖRSEL onayı (GUI'de CC-tarzı soru-çiplerini canlı gateway'le tıklayıp ekran-görüntüsü) + imzalı/notarize
+  release (Apple Developer cert kullanıcıda [[conductor-editor-signing]]). İşlevsel + runtime doğrulama TAMAM.
