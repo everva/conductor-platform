@@ -12,6 +12,7 @@ import {
   workspace,
   languages,
   Uri,
+  ViewColumn,
   __reset,
   __makeWebviewView,
   __makeSecretStorage,
@@ -29,6 +30,9 @@ import {
   DIFF_STORE_CAP,
   DIFF_EVICTED_PLACEHOLDER,
   FLEET_VIEW_ID,
+  COMMAND_CENTER_VIEW_TYPE,
+  COMMAND_CENTER_TITLE,
+  OPEN_COMMAND,
   OPEN_CONDUCTOR_ACTION,
   APPROVE_ACTION,
   OPEN_DIFF_ACTION,
@@ -42,6 +46,7 @@ import {
   type InterventionStatusBar,
   DiffStore,
   FleetViewProvider,
+  CommandCenterPanel,
   activate,
   deactivate,
   diffStatusText,
@@ -160,8 +165,8 @@ describe("registerConductor", () => {
     );
 
     // connect + disconnect + pause + resume + abort + approve + diff-provider + show-diff +
-    // fleet view = 9.
-    expect(disposables).toHaveLength(9);
+    // open (N0) + fleet view = 10 (no fleetConfig → no Command Center panel disposable).
+    expect(disposables).toHaveLength(10);
     expect(commands.registerCommand).toHaveBeenCalledWith(CONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(DISCONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(PAUSE_COMMAND, expect.any(Function));
@@ -174,6 +179,8 @@ describe("registerConductor", () => {
       expect.any(Object),
     );
     expect(commands.registerCommand).toHaveBeenCalledWith(SHOW_DIFF_COMMAND, expect.any(Function));
+    // N0: the editor-area Command Center open command.
+    expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_COMMAND, expect.any(Function));
     expect(window.registerWebviewViewProvider).toHaveBeenCalledWith(
       FLEET_VIEW_ID,
       expect.any(FleetViewProvider),
@@ -903,10 +910,15 @@ describe("activate", () => {
       expect.any(Object),
     );
     expect(commands.registerCommand).toHaveBeenCalledWith(SHOW_DIFF_COMMAND, expect.any(Function));
+    // N0: the open command is registered, but the panel does NOT auto-open on activate — the
+    // startup default flip is N1. So no WebviewPanel is created during activation.
+    expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_COMMAND, expect.any(Function));
+    expect(window.createWebviewPanel).not.toHaveBeenCalled();
     // connection bar + intervention bar (4C-3) + diff bar (4C-1b) + notifier-dispose (4C-3) +
     // diff-observer-dispose (4C-1b) + connect + disconnect + pause + resume + abort + approve +
-    // diff-provider (4C-1b) + show-diff (4C-1b) + fleet view = 14.
-    expect(subscriptions).toHaveLength(14);
+    // diff-provider (4C-1b) + show-diff (4C-1b) + open (N0) + fleet view + Command Center
+    // panel (N0) = 16.
+    expect(subscriptions).toHaveLength(16);
   });
 });
 
@@ -989,6 +1001,104 @@ describe("FleetViewProvider", () => {
     expect(disposes[0]).toHaveBeenCalledTimes(1); // predecessor disposed on re-resolve (no leak)
     expect(attaches[1]).toHaveBeenCalledTimes(1); // new bridge attached
     expect(disposes[1]).not.toHaveBeenCalled();
+  });
+});
+
+describe("CommandCenterPanel (N0 — editor-area Command Center)", () => {
+  it("opens an editor-area WebviewPanel that loads the cockpit bundle + attaches a bridge", () => {
+    const attach = vi.fn();
+    const dispose = vi.fn();
+    const bridgeFactory = vi.fn(() => ({ attach, dispose }));
+
+    new CommandCenterPanel(makeFleetConfig({ bridgeFactory })).open();
+
+    // Created in the MAIN editor area (ViewColumn.One): scripts on, asset loading scoped to
+    // dist/webview, retainContextWhenHidden so the live cockpit + WS bridge survive a tab-hide.
+    expect(window.createWebviewPanel).toHaveBeenCalledTimes(1);
+    expect(window.createWebviewPanel).toHaveBeenCalledWith(
+      COMMAND_CENTER_VIEW_TYPE,
+      COMMAND_CENTER_TITLE,
+      ViewColumn.One,
+      expect.objectContaining({
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [expect.objectContaining({ path: "/ext/dist/webview" })],
+      }),
+    );
+
+    // Serves the SAME strict-CSP cockpit HTML as the sidebar (bundle script + CSS under
+    // dist/webview, the #root mount), and the bridge is built over the panel webview + attached.
+    const created = window.createWebviewPanel.mock.results[0]?.value as {
+      webview: { html: string };
+    };
+    expect(created.webview.html).toContain('src="vscode-resource:/ext/dist/webview/main.js"');
+    expect(created.webview.html).toContain('href="vscode-resource:/ext/dist/webview/main.css"');
+    expect(created.webview.html).toContain('<div id="root"></div>');
+    expect(bridgeFactory).toHaveBeenCalledTimes(1);
+    expect(bridgeFactory).toHaveBeenCalledWith(created.webview);
+    expect(attach).toHaveBeenCalledTimes(1);
+  });
+
+  it("is a singleton: a second open reveals the existing panel instead of creating another", () => {
+    const bridgeFactory = vi.fn(() => ({ attach: vi.fn(), dispose: vi.fn() }));
+    const panel = new CommandCenterPanel(makeFleetConfig({ bridgeFactory }));
+
+    panel.open();
+    panel.open();
+
+    expect(window.createWebviewPanel).toHaveBeenCalledTimes(1);
+    const created = window.createWebviewPanel.mock.results[0]?.value as {
+      reveal: ReturnType<typeof vi.fn>;
+    };
+    expect(created.reveal).toHaveBeenCalledTimes(1);
+    expect(created.reveal).toHaveBeenCalledWith(ViewColumn.One);
+  });
+
+  it("tears the bridge down when the panel is closed, and a later open builds a fresh one", () => {
+    const dispose = vi.fn();
+    const bridgeFactory = vi.fn(() => ({ attach: vi.fn(), dispose }));
+    const panel = new CommandCenterPanel(makeFleetConfig({ bridgeFactory }));
+
+    panel.open();
+    const created = window.createWebviewPanel.mock.results[0]?.value as { __fireDispose: () => void };
+    created.__fireDispose(); // user closes the tab
+    expect(dispose).toHaveBeenCalledTimes(1);
+
+    panel.open(); // singleton cleared → a fresh panel is built
+    expect(window.createWebviewPanel).toHaveBeenCalledTimes(2);
+  });
+
+  it("dispose() closes the panel and tears the bridge down", () => {
+    const dispose = vi.fn();
+    const bridgeFactory = vi.fn(() => ({ attach: vi.fn(), dispose }));
+    const panel = new CommandCenterPanel(makeFleetConfig({ bridgeFactory }));
+
+    panel.open();
+    const created = window.createWebviewPanel.mock.results[0]?.value as {
+      dispose: ReturnType<typeof vi.fn>;
+    };
+    panel.dispose();
+    expect(created.dispose).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("is idempotent on dispose when never opened (no panel created)", () => {
+    const bridgeFactory = vi.fn(() => ({ attach: vi.fn(), dispose: vi.fn() }));
+    const panel = new CommandCenterPanel(makeFleetConfig({ bridgeFactory }));
+    expect(() => panel.dispose()).not.toThrow();
+    expect(window.createWebviewPanel).not.toHaveBeenCalled();
+  });
+
+  it("serves token-free HTML: strict CSP with connect-src 'none' (not a new token surface)", () => {
+    const bridgeFactory = vi.fn(() => ({ attach: vi.fn(), dispose: vi.fn() }));
+    new CommandCenterPanel(makeFleetConfig({ bridgeFactory })).open();
+    const created = window.createWebviewPanel.mock.results[0]?.value as {
+      webview: { html: string };
+    };
+    // Same hardened CSP as the sidebar: no webview-originated network → no path for a token to
+    // leave the host. Auth is owned by the host-side bridge.
+    expect(created.webview.html).toContain("connect-src 'none'");
+    expect(created.webview.html).toMatch(/default-src 'none'/);
   });
 });
 

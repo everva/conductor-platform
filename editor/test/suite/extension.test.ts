@@ -11,6 +11,8 @@ import * as vscode from "vscode";
 const EXTENSION_ID = "everva.conductor-editor";
 const CONNECT_COMMAND = "conductor.connect";
 const SHOW_DIFF_COMMAND = "conductor.showDiff";
+const OPEN_COMMAND = "conductor.open";
+const COMMAND_CENTER_TITLE = "Conductor";
 const DIFF_SCHEME = "conductor-diff";
 // The user-facing body the diff content provider serves for a URI not in the bounded
 // store (mirrors DIFF_EVICTED_PLACEHOLDER in src/extension.ts; hardcoded here so the
@@ -32,6 +34,11 @@ export async function smoke(): Promise<void> {
   assert.ok(
     allCommands.includes(SHOW_DIFF_COMMAND),
     `command ${SHOW_DIFF_COMMAND} should be registered`,
+  );
+  // N0: the editor-area Command Center open command must be registered.
+  assert.ok(
+    allCommands.includes(OPEN_COMMAND),
+    `command ${OPEN_COMMAND} should be registered`,
   );
 
   // 4C-1b — NATIVE DIFF RENDER proof in a REAL VS Code host. The activated extension
@@ -59,4 +66,45 @@ export async function smoke(): Promise<void> {
   // surfaces a "no diffs yet" info message and returns; no diff is open to assert, but the
   // command path must execute cleanly against the real vscode API).
   await vscode.commands.executeCommand(SHOW_DIFF_COMMAND);
+
+  // N0 — EDITOR-AREA COMMAND CENTER proof in a REAL VS Code host. Executing `conductor.open`
+  // must create a WebviewPanel in the MAIN editor area (not the activity-bar sidebar). A tab
+  // titled "Conductor" must appear in the tab groups — the live proof that the singleton panel
+  // landed in the editor area (the unit tests can only mock createWebviewPanel). The cockpit
+  // bundle loads with no gateway running; that's fine — auth is host-side, nothing throws.
+  //
+  // We POLL for the tab: workbench tab registration can lag the synchronous createWebviewPanel
+  // call on a loaded test host (this run logged "Extension host did not start in 10 seconds").
+  const collectTabLabels = (): string[] =>
+    vscode.window.tabGroups.all.flatMap((group) => group.tabs.map((tab) => tab.label));
+  const waitFor = async (predicate: () => boolean, timeoutMs: number): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) return true;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    return predicate();
+  };
+
+  await vscode.commands.executeCommand(OPEN_COMMAND);
+  const opened = await waitFor(() => collectTabLabels().includes(COMMAND_CENTER_TITLE), 10000);
+  console.log(`[vscode-smoke] tabs after ${OPEN_COMMAND}: ${JSON.stringify(collectTabLabels())}`);
+  assert.ok(
+    opened,
+    `executing ${OPEN_COMMAND} should open an editor-area "${COMMAND_CENTER_TITLE}" tab; saw ${JSON.stringify(
+      collectTabLabels(),
+    )}`,
+  );
+
+  // Singleton: opening again must REVEAL the one panel, not spawn a duplicate tab.
+  await vscode.commands.executeCommand(OPEN_COMMAND);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const conductorTabs = collectTabLabels().filter((label) => label === COMMAND_CENTER_TITLE);
+  assert.strictEqual(
+    conductorTabs.length,
+    1,
+    `re-running ${OPEN_COMMAND} must reveal the single Command Center tab, not duplicate it; saw ${JSON.stringify(
+      collectTabLabels(),
+    )}`,
+  );
 }

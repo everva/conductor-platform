@@ -52,12 +52,26 @@ export const APPROVE_COMMAND = "conductor.approve";
  * quick-pick when several are pending) in a native read-only diff document. */
 export const SHOW_DIFF_COMMAND = "conductor.showDiff";
 
+/** Command id that opens (or reveals) the editor-area Command Center (N0 — ADR-0036). The
+ * Devin "Command Center = default surface" model: the cockpit lives in the MAIN editor area,
+ * not only the activity-bar sidebar. N0 ships the command + panel; the sidebar Fleet view
+ * stays during the transition, and the startup auto-open is deferred to N1. */
+export const OPEN_COMMAND = "conductor.open";
+
 /** Custom URI scheme for the read-only diff virtual documents (4C-1b). Registered with a
  * TextDocumentContentProvider; the diff body is served from a bounded in-memory store. */
 export const DIFF_SCHEME = "conductor-diff";
 
 /** View id of the placeholder Fleet webview view (contributed in package.json). */
 export const FLEET_VIEW_ID = "conductor.fleet";
+
+/** WebviewPanel viewType of the editor-area Command Center (N0 — ADR-0036). Distinct from
+ * FLEET_VIEW_ID (the activity-bar sidebar view): the two COEXIST during the native-IDE
+ * transition — the panel is the main-area surface, the sidebar stays until N2. */
+export const COMMAND_CENTER_VIEW_TYPE = "conductor.commandCenter";
+
+/** Editor tab title for the Command Center panel (N0). */
+export const COMMAND_CENTER_TITLE = "Conductor";
 
 /** Activity-bar view CONTAINER id (package.json `viewsContainers.activitybar`). The 4C-3
  * notification's "Open Conductor" action reveals it via
@@ -391,6 +405,103 @@ export class FleetViewProvider implements vscode.WebviewViewProvider {
         this.#bridge = undefined;
       }
     });
+  }
+}
+
+/**
+ * The editor-area Command Center (N0 — ADR-0036, implementing ADR-0032's "Command Center =
+ * default surface"). A SINGLETON WebviewPanel in the MAIN editor area (ViewColumn.One) — the
+ * Devin Desktop model where the agent command center is the primary surface, not a narrow
+ * activity-bar sidebar. It reuses the EXACT cockpit wiring of {@link FleetViewProvider}:
+ *   - strict-CSP {@link webviewHtml} nonce-loading the shared cockpit bundle from dist/webview;
+ *   - a HostBridge from the SAME factory ({@link makeBridgeFactory}), so the token stays
+ *     host-side (SecretStorage + the bridge's fetch/WS) and the panel is NOT a new token
+ *     surface — CSP `connect-src 'none'` forbids any webview-originated network, exactly as the
+ *     sidebar does. No token, message, or log ever crosses into the panel.
+ *
+ * Singleton: a second `conductor.open` REVEALS the existing panel rather than spawning a
+ * duplicate. `retainContextWhenHidden` keeps the live cockpit + its WS bridge alive while the
+ * tab is backgrounded — a command center is long-lived, and re-mounting on every tab switch
+ * would drop the event stream. The bridge is torn down (WS handles + listener) when the panel
+ * is closed, and {@link dispose} (called on deactivate) closes the panel + bridge.
+ *
+ * N0 SCOPE: ships the panel + the `conductor.open` command, COEXISTING with the sidebar Fleet
+ * view. It does NOT auto-open on startup (that default flip is N1) nor remove the sidebar (N2).
+ */
+export class CommandCenterPanel implements vscode.Disposable {
+  readonly #config: FleetViewConfig;
+  #panel: vscode.WebviewPanel | undefined;
+  #bridge: { dispose(): void } | undefined;
+
+  constructor(config: FleetViewConfig) {
+    this.#config = config;
+  }
+
+  /**
+   * Opens the Command Center in the editor area, or reveals the existing panel (singleton).
+   * Mirrors FleetViewProvider.resolveWebviewView's bundle + bridge wiring, but targets a
+   * WebviewPanel whose options are set at CREATION (not assigned onto `webview.options`).
+   */
+  open(): void {
+    if (this.#panel !== undefined) {
+      this.#panel.reveal(vscode.ViewColumn.One);
+      return;
+    }
+    const config = this.#config;
+    const distRoot = vscode.Uri.joinPath(config.extensionUri, "dist", "webview");
+    const panel = vscode.window.createWebviewPanel(
+      COMMAND_CENTER_VIEW_TYPE,
+      COMMAND_CENTER_TITLE,
+      vscode.ViewColumn.One,
+      {
+        enableScripts: true,
+        // Scope asset loading to the bundle dir (paired with the strict CSP): the webview can
+        // read ONLY dist/webview, nothing else in the extension.
+        localResourceRoots: [distRoot],
+        // Keep the cockpit + its WS bridge alive while the tab is hidden (long-lived surface).
+        retainContextWhenHidden: true,
+      },
+    );
+    this.#panel = panel;
+
+    const webview = panel.webview;
+    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "main.js")).toString();
+    const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "main.css")).toString();
+    webview.html = webviewHtml({
+      cspSource: webview.cspSource,
+      nonce: makeNonce(),
+      scriptUri,
+      styleUri,
+    });
+
+    const factory =
+      config.bridgeFactory ?? makeBridgeFactory(config.secrets, config.gatewayUrl);
+    const bridge = factory(webview);
+    this.#bridge = bridge;
+    bridge.attach();
+
+    // Closing the tab tears the bridge down (WS handles + listener) and clears the singleton
+    // so a later `conductor.open` builds a fresh panel.
+    panel.onDidDispose(() => {
+      bridge.dispose();
+      if (this.#bridge === bridge) {
+        this.#bridge = undefined;
+      }
+      if (this.#panel === panel) {
+        this.#panel = undefined;
+      }
+    });
+  }
+
+  /** Disposes the panel + its bridge if open (deactivate / test cleanup). Idempotent: closing
+   * the panel fires its onDidDispose, which tears the bridge down; if it never opened, no-op. */
+  dispose(): void {
+    this.#panel?.dispose();
+    // Defensive: if there's no panel but a bridge somehow lingered, drop it.
+    if (this.#panel === undefined) {
+      this.#bridge?.dispose();
+      this.#bridge = undefined;
+    }
   }
 }
 
@@ -982,12 +1093,35 @@ export function registerConductor(
   const showDiff = api.commands.registerCommand(SHOW_DIFF_COMMAND, () => {
     void runShowDiff(api, diffStore);
   });
+  // N0 (ADR-0036): the editor-area Command Center. A singleton WebviewPanel that reuses the
+  // SAME cockpit bundle + bridge as the Fleet view but lives in the MAIN editor area (the
+  // Devin "Command Center = default surface" model) instead of the activity-bar sidebar. Built
+  // only on the production path (a fleetConfig with extensionUri/secrets); `conductor.open`
+  // opens or reveals it. It does NOT auto-open on startup yet (that default flip is N1) and the
+  // sidebar Fleet view stays put during the transition (N2 replaces it with a native tree).
+  const commandCenter = fleetConfig ? new CommandCenterPanel(fleetConfig) : undefined;
+  const open = api.commands.registerCommand(OPEN_COMMAND, () => {
+    commandCenter?.open();
+  });
   // The Fleet view attaches the host↔webview bridge on resolve. When a config is
   // provided (the production path) the provider builds a real HostBridge; tests may omit
   // it (static-HTML provider) or pass one with a fake bridge factory.
   const provider = fleetConfig ? new FleetViewProvider(fleetConfig) : new FleetViewProvider();
   const fleetView = api.window.registerWebviewViewProvider(FLEET_VIEW_ID, provider);
-  return [connect, disconnect, ...controlDisposables, diffProvider, showDiff, fleetView];
+  const disposables: vscode.Disposable[] = [
+    connect,
+    disconnect,
+    ...controlDisposables,
+    diffProvider,
+    showDiff,
+    open,
+    fleetView,
+  ];
+  // Dispose the Command Center panel (+ its bridge) on deactivate when it was built.
+  if (commandCenter) {
+    disposables.push(commandCenter);
+  }
+  return disposables;
 }
 
 /** Maps a control action to its contributed command id (kept in lockstep with the

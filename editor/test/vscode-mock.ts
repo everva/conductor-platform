@@ -57,6 +57,19 @@ export interface WebviewViewProvider {
   resolveWebviewView(webviewView: WebviewView): void;
 }
 
+/** Minimal structural WebviewPanel (the createWebviewPanel return). Like a WebviewView but it
+ * lives in the editor area, can be `reveal`ed to the front, and is `dispose`d explicitly. */
+export interface WebviewPanelLike {
+  readonly webview: Webview;
+  reveal(column?: number): void;
+  onDidDispose(listener: () => void): Disposable;
+  dispose(): void;
+}
+
+/** vscode.ViewColumn stand-in (numeric enum). The Command Center opens in `One` (the main
+ * editor area); only the members the extension references are provided. */
+export const ViewColumn = { Active: -1, Beside: -2, One: 1, Two: 2, Three: 3 } as const;
+
 /** A no-op disposable used as the return value of registration calls. */
 function makeDisposable(): Disposable {
   return { dispose: vi.fn() };
@@ -112,6 +125,14 @@ export const window = {
   registerWebviewViewProvider: vi
     .fn<(viewId: string, provider: WebviewViewProvider) => Disposable>()
     .mockImplementation(makeDisposable),
+  // N0: opens an editor-area WebviewPanel (the Command Center). Records the call so a test can
+  // assert the viewType/title/column/options, and returns a fresh fake panel; the singleton
+  // logic lives in CommandCenterPanel, driven against this.
+  createWebviewPanel: vi
+    .fn<
+      (viewType: string, title: string, showOptions: unknown, options?: unknown) => WebviewPanelLike
+    >()
+    .mockImplementation(() => __makeWebviewPanel()),
   createStatusBarItem: vi
     .fn<(...args: unknown[]) => StatusBarItem>()
     .mockImplementation(makeStatusBarItem),
@@ -256,6 +277,7 @@ export function __reset(): void {
   window.showQuickPick.mockClear();
   window.showWarningMessage.mockClear();
   window.registerWebviewViewProvider.mockClear();
+  window.createWebviewPanel.mockClear();
   window.createStatusBarItem.mockClear();
   window.showTextDocument.mockClear();
   workspace.getConfiguration.mockClear();
@@ -309,4 +331,45 @@ export function __makeWebviewView(cspSource = "vscode-resource:"): WebviewView &
   };
 }
 
-export default { commands, window, workspace, languages, Uri };
+/**
+ * Builds a fresh fake WebviewPanel (createWebviewPanel return) carrying the 4B-2 bridge
+ * surface. `dispose()` and the returned `__fireDispose()` both run the onDidDispose listeners
+ * so a test can drive a panel close; `reveal`/`dispose` are spies. Mirrors __makeWebviewView
+ * but for the editor-area panel.
+ */
+export function __makeWebviewPanel(cspSource = "vscode-resource:"): WebviewPanelLike & {
+  reveal: ReturnType<typeof vi.fn>;
+  dispose: ReturnType<typeof vi.fn>;
+  __fireDispose(): void;
+} {
+  const messageListeners: ((message: unknown) => void)[] = [];
+  const disposeListeners: (() => void)[] = [];
+  const webview: Webview = {
+    options: {},
+    html: "",
+    cspSource,
+    asWebviewUri: vi.fn((uri: UriLike) => makeUri(`${cspSource}${uri.path}`)),
+    postMessage: vi.fn<(message: unknown) => Thenable<boolean>>().mockResolvedValue(true),
+    onDidReceiveMessage: vi.fn((listener: (message: unknown) => void) => {
+      messageListeners.push(listener);
+      return makeDisposable();
+    }),
+  };
+  const fire = (): void => {
+    for (const l of disposeListeners) {
+      l();
+    }
+  };
+  return {
+    webview,
+    reveal: vi.fn(),
+    dispose: vi.fn(fire),
+    onDidDispose: vi.fn((listener: () => void) => {
+      disposeListeners.push(listener);
+      return makeDisposable();
+    }),
+    __fireDispose: fire,
+  };
+}
+
+export default { commands, window, workspace, languages, Uri, ViewColumn };

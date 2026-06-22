@@ -102,11 +102,19 @@ package.json + tsconfig.webview.json `paths`** (V4 lucide gotcha). UYDURMA YOK �
 Devin'e + gerçek runtime'a dayan. Yeni ADR'ler (editör-alanı-panel, native-sessions-tree).
 Canlı optiway/xirigo'ya DOKUNMA. isolation:"worktree" KULLANMA.
 
-## DURUM (2026-06-22) — PLAN HAZIR, N0'dan başlanacak
-- Web design-system (V0–V5c) ✅ CI-yeşil (develop `576061b`) — **görsel katman; native
-  layout içindeki webview yüzeyleri için REUSE edilir, çöp değil.** Ama asıl iş bu plan.
+## DURUM (2026-06-22)
+- Web design-system (V0–V5c) ✅ CI-yeşil — **görsel katman; native layout içindeki webview
+  yüzeyleri için REUSE edilir, çöp değil.** Ama asıl iş bu plan.
 - Editör arch haritalandı (§1) + Devin modeli araştırıldı (§0). Native parçalar mevcut
   (diff/toast/status-bar/bridge); LAYOUT eksik.
-- **SIRADAKİ: N0 spike** — Command Center'ı fork runtime'da editör-alanı singleton panel
-  olarak aç, de-risk + ADR → N1 default-surface → N2 native tree → N3 session-workspace
-  → N4 native-etkileşim → N5 fork-default+capstone. Her faz GERÇEK runtime KENDİM.
+- **N0 ✅ (bu commit) — editör-alanı Command Center paneli (ADR-0036).** `conductor.open`
+  komutu + `CommandCenterPanel` singleton WebviewPanel (`ViewColumn.One`), `FleetViewProvider`'ın
+  cockpit+bridge tellemesini reuse eder (`webviewHtml` + `makeBridgeFactory`; token DONMUŞ, CSP
+  `connect-src 'none'` — panel YENİ token yüzeyi değil); `retainContextWhenHidden`; sidebar ile
+  COEXIST; başlangıç auto-açılış N1'e ertelendi. Editör gate (typecheck×2 + eslint-0 + vitest
+  180/3 + esbuild) yeşil + **GERÇEK runtime electron smoke YEŞİL** (VS Code 1.125.1: `tabs after
+  conductor.open: ["Conductor"]` → panel editör-alanına indi; singleton doğrulandı). `editor/`
+  only — backend/Go DOKUNULMADI (ADR-0021).
+- **SIRADAKİ: N1** — başlangıç default-surface flip (`onStartupFinished` singleton panel; ADR-0032
+  tam uygula) → N2 native sessions TreeView → N3 session-workspace → N4 native-etkileşim → N5
+  fork-default + imzalı rebuild + capstone. Her faz GERÇEK runtime KENDİM.

@@ -43,6 +43,11 @@
     },
     "commands": [
       {
+        "command": "conductor.open",
+        "title": "Conductor: Open Command Center",
+        "category": "Conductor"
+      },
+      {
         "command": "conductor.connect",
         "title": "Conductor: Connect to Gateway",
         "category": "Conductor"
