@@ -816,9 +816,14 @@ export function makeDiffContentProvider(store: DiffStore): DiffContentProvider {
  * does, this is belt-and-braces). Pure of the picking logic so both the status-bar click and
  * the quick-pick reuse it.
  */
-async function openDiff(api: DiffVscodeApi, uri: string): Promise<void> {
+async function openDiff(api: DiffVscodeApi, uri: string, column?: vscode.ViewColumn): Promise<void> {
   const doc = await api.workspace.openTextDocument(api.Uri.parse(uri));
-  await api.window.showTextDocument(doc, { preview: true });
+  // N3b: a `column` (ViewColumn.Beside) targets the split beside the Command Center; without
+  // one the diff opens in the active column (the 4C-1b/4C-3 behavior, unchanged).
+  await api.window.showTextDocument(
+    doc,
+    column === undefined ? { preview: true } : { preview: true, viewColumn: column },
+  );
   await api.languages.setTextDocumentLanguage(doc, "diff");
 }
 
@@ -875,6 +880,29 @@ export async function runShowDiffForTask(
     return;
   }
   await openDiff(api, d.uri);
+}
+
+/**
+ * N3b — opens a task's most-recent native diff BESIDE the Command Center (the column passed,
+ * `ViewColumn.Beside`), forming the session=workspace split: session detail (the cockpit
+ * webview, column One) | native diff (column Two). QUIET: if no diff is retained for the task
+ * (never emitted / evicted) it does NOTHING — unlike the intervention toast's "Open diff", a
+ * deep-link's primary action is navigating the cockpit, so it must not nag with a "no diff"
+ * message on every session click. `preview: true` reuses the one diff tab across clicks.
+ * Token-free (the store is).
+ */
+export async function openTaskDiffBeside(
+  api: DiffVscodeApi,
+  store: DiffStore,
+  project: string,
+  task: string,
+  column: vscode.ViewColumn,
+): Promise<void> {
+  const d = store.latestForTask(project, task);
+  if (d === undefined) {
+    return;
+  }
+  await openDiff(api, d.uri, column);
 }
 
 /**
@@ -1172,7 +1200,11 @@ export function registerConductor(
   const openSession = api.commands.registerCommand(OPEN_SESSION_COMMAND, (...args: unknown[]) => {
     const [project, task] = args;
     if (typeof project === "string" && typeof task === "string") {
+      // N3a: navigate the Command Center's cockpit to the session (the editor area, column One).
       commandCenter?.navigateToSession(project, task);
+      // N3b: open that task's native diff BESIDE it (column Two) — the session=workspace split.
+      // Quiet when no diff is retained yet (a deep-link shouldn't nag); reuses the preview tab.
+      void openTaskDiffBeside(api, diffStore, project, task, vscode.ViewColumn.Beside);
     }
   });
   // The Fleet view attaches the host↔webview bridge on resolve. When a config is

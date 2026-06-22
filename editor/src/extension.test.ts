@@ -65,6 +65,7 @@ import {
   runDisconnect,
   runShowDiff,
   runShowDiffForTask,
+  openTaskDiffBeside,
   statusBarText,
   webviewHtml,
 } from "./extension";
@@ -831,6 +832,25 @@ describe("runShowDiffForTask (4C-3 take over)", () => {
 
     expect(window.showInformationMessage).toHaveBeenCalledWith("No diff yet for alpha/t-1.");
     expect(workspace.openTextDocument).not.toHaveBeenCalled();
+  });
+});
+
+describe("openTaskDiffBeside (N3b session=workspace split)", () => {
+  it("opens the task's latest diff BESIDE the command center (ViewColumn.Beside)", async () => {
+    const store = new DiffStore();
+    store.add(makeTaskDiff({ project: "alpha", task: "t-1" }));
+    await openTaskDiffBeside(diffApi, store, "alpha", "t-1", ViewColumn.Beside);
+    expect(window.showTextDocument).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ preview: true, viewColumn: ViewColumn.Beside }),
+    );
+  });
+
+  it("is a quiet no-op when no diff is retained for the task (no open, no message)", async () => {
+    const store = new DiffStore();
+    await openTaskDiffBeside(diffApi, store, "alpha", "absent", ViewColumn.Beside);
+    expect(window.showTextDocument).not.toHaveBeenCalled();
+    expect(window.showInformationMessage).not.toHaveBeenCalled();
   });
 });
 

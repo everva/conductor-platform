@@ -129,14 +129,18 @@ Canlı optiway/xirigo'ya DOKUNMA. isolation:"worktree" KULLANMA.
   kullanıcı-onayı sonrası follow-up). Editör gate (vitest 196/3) + **GERÇEK runtime electron smoke YEŞİL**
   (view contributed + createTreeView attach + refresh komutu register/execute throw-suz; N0/N1 hâlâ yeşil).
   `editor/` only.
-- **N3a ✅ (bu commit) — birleşik deep-link (ADR-0038).** Tree task-click → Command Center webview'i o
+- **N3a ✅ (`1630243`) — birleşik deep-link (ADR-0038).** Tree task-click → Command Center webview'i o
   session'ın `SessionView`'ine yönlendirir. Host→webview AYRI kontrol kanalı (`navigate-session` + `webview-ready`
   handshake; bridge id-tabanlı router'ı dokunulmaz; token YOK). `FleetDashboard.navigateTo` prop'u + useRef-effect
   (board drill-in'in `selectedTask` seam'i reuse). `conductor.openSession` komutu (args). Fork `makeScenarioClient`
   eklendi (deep-link'li SessionView spec'i bridge'den). Editör gate (vitest 201/3) + web gate (vitest 87 + **e2e
   14/14**; `cockpit.test.tsx` nav testi deep-link→SessionView kanıtlar) + electron smoke YEŞİL. GÖRSEL uçtan-uca
   (gerçek gateway verisiyle) = N5/kullanıcı-host (smoke'ta veri yok).
-- **SIRADAKİ: N3b** — session detail YANINDA **native diff (4C-1) split** editör grubunda: `openSession` o task'ın
-  diff'ini `ViewColumn.Beside`'da açar (resizable; native editör = diff workspace). → N4 native-etkileşim
-  (keybinding + ok-tuşu time-travel) → N5 fork layout-default + imzalı rebuild + capstone (KULLANICI ONAYI). Her
-  faz GERÇEK runtime KENDİM.
+- **N3b ✅ (bu commit) — native diff split (session = workspace TAMAM, ADR-0038).** `openSession` artık
+  `navigateToSession` (CC, column One) + `openTaskDiffBeside` (o task'ın 4C-1 diff'ini `ViewColumn.Beside`'da =
+  column Two) çağırır → session detail | native diff split (resizable native editör grupları). QUIET: diff yoksa
+  no-op (deep-link nag etmez); `preview:true` tek diff sekmesini reuse eder. Editör gate (vitest 203/3) + electron
+  smoke YEŞİL. `editor/` only. **→ N3 (session=workspace) TAMAM.**
+- **SIRADAKİ: N4** — native etkileşim: Conductor komutlarına keybinding (palette-native), session'da **ok-tuşu
+  (←→) timeline-stepping** (web replay'i native'e bağla), 3 status-bar entegre. → N5 fork layout-default + imzalı
+  rebuild + capstone (KULLANICI ONAYI). Her faz GERÇEK runtime KENDİM.
