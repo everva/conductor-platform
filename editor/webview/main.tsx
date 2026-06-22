@@ -41,7 +41,7 @@ import "./theme-vscode.css";
 import { createBridgeTransports, subscribeToMessages } from "../src/bridge/webviewTransport";
 import { isSelect } from "../src/bridge/protocol";
 import { forkClientFactories } from "./connect";
-import { FleetDashboard, ApiClient } from "@cockpit";
+import { FleetDashboard, IntakeChat, ApiClient, type Project } from "@cockpit";
 
 // The VS Code webview api (declared in types.d.ts). The only channel to the host.
 const vscodeApi = acquireVsCodeApi();
@@ -100,9 +100,49 @@ function ForkApp(): React.JSX.Element {
   );
 }
 
+/**
+ * The fork Intake app (Faz-Q / Q3): the standalone "New Work" surface mounted when the host opens
+ * the Intake window (data-surface="intake"). It fetches the project list over the bridge (token-free
+ * — the host owns auth) to seed the project picker, then renders the shared IntakeChat with the
+ * bridge-backed intake client (distill/intake over postMessage). A failed read leaves the empty-
+ * projects guidance (never throws). This is a REST-only surface (no live WS) so it carries no
+ * connection indicator — no second live stream, by design (Q0.4 single-connection discipline).
+ */
+function IntakeApp(): React.JSX.Element {
+  const [projects, setProjects] = useState<Project[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void makeClient()
+      .listProjects()
+      .then(
+        (ps: Project[]) => {
+          if (!cancelled) setProjects(ps);
+        },
+        () => {
+          /* host owns auth; a failed read just leaves the "no projects" guidance. */
+        },
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <IntakeChat
+      projects={projects}
+      client={makeIntakeClient()}
+      onUnauthorized={() => {
+        console.warn("conductor webview: gateway returned 401 (host owns auth)");
+      }}
+    />
+  );
+}
+
 const root = document.getElementById("root");
 if (root === null) {
   throw new Error("conductor webview: #root element is missing");
 }
 
-createRoot(root).render(<ForkApp />);
+// Surface selection (Q3): the host sets data-surface="intake" on #root for the New Work window;
+// everything else is the default Command Center cockpit. One bundle, two mount modes.
+createRoot(root).render(root.dataset.surface === "intake" ? <IntakeApp /> : <ForkApp />);

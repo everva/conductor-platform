@@ -13,8 +13,10 @@ const CONNECT_COMMAND = "conductor.connect";
 const SHOW_DIFF_COMMAND = "conductor.showDiff";
 const OPEN_COMMAND = "conductor.open";
 const OPEN_SESSION_COMMAND = "conductor.openSession";
+const NEW_WORK_COMMAND = "conductor.newWork";
 const REFRESH_SESSIONS_COMMAND = "conductor.refreshSessions";
 const COMMAND_CENTER_TITLE = "Conductor";
+const INTAKE_TITLE = "New Work";
 const DIFF_SCHEME = "conductor-diff";
 // The user-facing body the diff content provider serves for a URI not in the bounded
 // store (mirrors DIFF_EVICTED_PLACEHOLDER in src/extension.ts; hardcoded here so the
@@ -151,4 +153,17 @@ export async function smoke(): Promise<void> {
   // project → the cockpit scopes its board to it. Real host: the command + project-only `select`
   // post path must not throw (no gateway → no data, but the wiring is exercised end to end).
   await vscode.commands.executeCommand(OPEN_COMMAND, "smoke-project");
+
+  // Q3a: `conductor.newWork` opens the Intake "New Work" window in its OWN editor tab (the cockpit
+  // bundle mounts the intake surface via data-surface). No gateway → the project list is empty, but
+  // the panel + tab must appear (this also proves the new command + panel wiring don't throw).
+  await vscode.commands.executeCommand(NEW_WORK_COMMAND);
+  const intakeOpened = await waitFor(() => collectTabLabels().includes(INTAKE_TITLE), 10000);
+  console.log(`[vscode-smoke] tabs after ${NEW_WORK_COMMAND}: ${JSON.stringify(collectTabLabels())}`);
+  assert.ok(
+    intakeOpened,
+    `executing ${NEW_WORK_COMMAND} should open the "${INTAKE_TITLE}" tab; saw ${JSON.stringify(
+      collectTabLabels(),
+    )}`,
+  );
 }

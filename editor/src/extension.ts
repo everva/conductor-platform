@@ -79,6 +79,15 @@ export const OPEN_SESSION_COMMAND = "conductor.openSession";
  * most-recent native diff (or a clear info message if none). */
 export const OPEN_TASK_DIFF_COMMAND = "conductor.openTaskDiff";
 
+/** Command id that opens the Intake "New Work" window (Faz-Q / Q3a) — Intake as its OWN
+ * editor-area surface instead of a buried cockpit tab (the user's "intake ayrı bir window"). */
+export const NEW_WORK_COMMAND = "conductor.newWork";
+
+/** WebviewPanel viewType + tab title of the editor-area Intake window (Q3a). A singleton panel
+ * (its own tab) that mounts the standalone IntakeChat surface (data-surface="intake"). */
+export const INTAKE_VIEW_TYPE = "conductor.intake";
+export const INTAKE_TITLE = "New Work";
+
 /** when-clause context key (P3): true while the gateway connection is live. Set via the
  * built-in `setContext` on every connection-state change; the sessions-tree context menus +
  * the control keybindings gate on it (`when: conductor.connected`) so they don't offer
@@ -249,6 +258,10 @@ export interface WebviewHtmlOptions {
   readonly nonce: string;
   readonly scriptUri: string;
   readonly styleUri: string;
+  /** Q3: the cockpit surface to mount. Omitted/"" → the full Command Center cockpit (default);
+   * "intake" → the standalone Intake surface (its own "New Work" window). Host-controlled literal
+   * (never user input); the fork entry reads it off `#root`'s data-surface. */
+  readonly surface?: string;
 }
 
 /**
@@ -263,7 +276,10 @@ export interface WebviewHtmlOptions {
  * mode (token="", injected transports) — see webview/main.tsx.
  */
 export function webviewHtml(opts: WebviewHtmlOptions): string {
-  const { cspSource, nonce, scriptUri, styleUri } = opts;
+  const { cspSource, nonce, scriptUri, styleUri, surface } = opts;
+  // Surface attribute: only the known "intake" literal is emitted (host-controlled); anything
+  // else is treated as the default cockpit (no attribute). Keeps the markup injection-free.
+  const surfaceAttr = surface === "intake" ? ` data-surface="intake"` : "";
   return `<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -277,7 +293,7 @@ export function webviewHtml(opts: WebviewHtmlOptions): string {
     <title>Conductor</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"${surfaceAttr}></div>
     <script nonce="${nonce}" src="${scriptUri}"></script>
   </body>
 </html>`;
@@ -587,6 +603,77 @@ export async function handleIntervention(
     await actions.approve(project, task);
   } else if (choice === OPEN_DIFF_ACTION) {
     await actions.openDiff(project, task);
+  }
+}
+
+/**
+ * The editor-area Intake "New Work" window (Faz-Q / Q3a, ADR-0046): a SINGLETON WebviewPanel that
+ * hosts the standalone IntakeChat surface (data-surface="intake") in its OWN editor tab — the
+ * user's "intake ayrı bir window". REST-only (distill/intake/listProjects over the bridge): the
+ * webview opens NO event stream, so there is no live WS + no connection indicator → the Q0.4
+ * single-connection discipline holds. Reuses the SAME cockpit bundle + bridge factory as the
+ * Command Center; the token stays host-side (SecretStorage + the bridge's fetch), CSP
+ * `connect-src 'none'`. Singleton: a second open reveals the existing tab.
+ */
+export class IntakePanel implements vscode.Disposable {
+  readonly #config: FleetViewConfig;
+  #panel: vscode.WebviewPanel | undefined;
+  #bridge: { dispose(): void } | undefined;
+
+  constructor(config: FleetViewConfig) {
+    this.#config = config;
+  }
+
+  /** Opens the Intake window in the editor area, or reveals the existing panel (singleton). */
+  open(): void {
+    if (this.#panel !== undefined) {
+      this.#panel.reveal(vscode.ViewColumn.One);
+      return;
+    }
+    const config = this.#config;
+    const distRoot = vscode.Uri.joinPath(config.extensionUri, "dist", "webview");
+    const panel = vscode.window.createWebviewPanel(INTAKE_VIEW_TYPE, INTAKE_TITLE, vscode.ViewColumn.One, {
+      enableScripts: true,
+      localResourceRoots: [distRoot],
+      retainContextWhenHidden: true,
+    });
+    this.#panel = panel;
+
+    const webview = panel.webview;
+    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "main.js")).toString();
+    const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "main.css")).toString();
+    // surface:"intake" → the SAME bundle mounts IntakeChat instead of the cockpit (webview/main.tsx).
+    webview.html = webviewHtml({
+      cspSource: webview.cspSource,
+      nonce: makeNonce(),
+      scriptUri,
+      styleUri,
+      surface: "intake",
+    });
+
+    const factory = config.bridgeFactory ?? makeBridgeFactory(config.secrets, config.gatewayUrl);
+    const bridge = factory(webview);
+    this.#bridge = bridge;
+    bridge.attach();
+
+    panel.onDidDispose(() => {
+      bridge.dispose();
+      if (this.#bridge === bridge) {
+        this.#bridge = undefined;
+      }
+      if (this.#panel === panel) {
+        this.#panel = undefined;
+      }
+    });
+  }
+
+  /** Disposes the panel + its bridge if open (deactivate / test cleanup). Idempotent. */
+  dispose(): void {
+    this.#panel?.dispose();
+    if (this.#panel === undefined) {
+      this.#bridge?.dispose();
+      this.#bridge = undefined;
+    }
   }
 }
 
@@ -1404,6 +1491,13 @@ export function registerConductor(
       void runShowDiffForTask(api, diffStore, ref.project, ref.task, fetchFullDiff);
     }
   });
+  // Q3a (ADR-0046): the editor-area Intake "New Work" window — Intake as its OWN tab (the user's
+  // "intake ayrı bir window"), not a buried cockpit tab. Built only on the production path (a
+  // fleetConfig); `conductor.newWork` opens or reveals it. REST-only (no live WS).
+  const intakePanel = fleetConfig ? new IntakePanel(fleetConfig) : undefined;
+  const newWork = api.commands.registerCommand(NEW_WORK_COMMAND, () => {
+    intakePanel?.open();
+  });
   // Faz-Q / Q0.4 (ADR-0044): the sidebar webview Fleet view is gone — the cockpit mounts ONLY in
   // the editor-area Command Center, so a single HostBridge owns the one live event stream. The
   // sidebar keeps only the native "Conductors" tree (registered in `activate`, the selection driver).
@@ -1416,10 +1510,14 @@ export function registerConductor(
     open,
     openSession,
     openTaskDiff,
+    newWork,
   ];
-  // Dispose the Command Center panel (+ its bridge) on deactivate when it was built.
+  // Dispose the editor-area panels (+ their bridges) on deactivate when they were built.
   if (commandCenter) {
     disposables.push(commandCenter);
+  }
+  if (intakePanel) {
+    disposables.push(intakePanel);
   }
   return disposables;
 }

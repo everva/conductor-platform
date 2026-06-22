@@ -75,6 +75,11 @@
         "category": "Conductor"
       },
       {
+        "command": "conductor.newWork",
+        "title": "Conductor: New Work (Intake)",
+        "category": "Conductor"
+      },
+      {
         "command": "conductor.refreshSessions",
         "title": "Conductor: Refresh Conductors",
         "category": "Conductor",

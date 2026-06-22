@@ -25,6 +25,12 @@
 export { FleetDashboard } from "./fleet/FleetDashboard.tsx";
 export type { FleetDashboardProps } from "./fleet/FleetDashboard.tsx";
 
+// --- Intake surface (Faz-Q / Q3): mountable STANDALONE so a host can give Intake its own
+// window (the fork's editor-area "New Work" panel) instead of burying it in a cockpit tab. It
+// consumes only the narrow IntakeClient (distill/intake) — the host injects a bridge-backed one. ---
+export { IntakeChat } from "./intake/IntakeChat.tsx";
+export type { IntakeChatProps, IntakeClient } from "./intake/IntakeChat.tsx";
+
 // --- REST seam (auth-agnostic HTTP transport + typed client) ---
 export {
   ApiClient,

@@ -31,6 +31,10 @@ import {
   DIFF_EVICTED_PLACEHOLDER,
   COMMAND_CENTER_VIEW_TYPE,
   COMMAND_CENTER_TITLE,
+  IntakePanel,
+  INTAKE_VIEW_TYPE,
+  INTAKE_TITLE,
+  NEW_WORK_COMMAND,
   OPEN_COMMAND,
   OPEN_SESSION_COMMAND,
   OPEN_TASK_DIFF_COMMAND,
@@ -173,10 +177,10 @@ describe("registerConductor", () => {
     );
 
     // connect + disconnect + pause + resume + abort + approve + diff-provider + show-diff +
-    // open (N0) + openSession (N3) + openTaskDiff (P3) = 11. (Q0.4: the sidebar webview Fleet view
-    // is gone → no registerWebviewViewProvider; the cockpit mounts only in the Command Center panel,
-    // built only when a fleetConfig is supplied — registerConductor here gets none.)
-    expect(disposables).toHaveLength(11);
+    // open (N0) + openSession (N3) + openTaskDiff (P3) + newWork (Q3a) = 12. (Q0.4: no sidebar
+    // webview view; the CC + Intake panels are built only when a fleetConfig is supplied —
+    // registerConductor here gets none, so no panel is pushed.)
+    expect(disposables).toHaveLength(12);
     expect(commands.registerCommand).toHaveBeenCalledWith(CONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(DISCONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(PAUSE_COMMAND, expect.any(Function));
@@ -194,6 +198,8 @@ describe("registerConductor", () => {
     expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_SESSION_COMMAND, expect.any(Function));
     // P3: the task context-menu "Open Diff" command.
     expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_TASK_DIFF_COMMAND, expect.any(Function));
+    // Q3a: the Intake "New Work" window command.
+    expect(commands.registerCommand).toHaveBeenCalledWith(NEW_WORK_COMMAND, expect.any(Function));
     // Q0.4: NO sidebar webview view is registered any more (the cockpit lives only in the panel).
     expect(window.registerWebviewViewProvider).not.toHaveBeenCalled();
   });
@@ -1178,9 +1184,11 @@ describe("activate", () => {
     expect(window.createTreeView).toHaveBeenCalledWith(EVENTS_VIEW_ID, {
       treeDataProvider: expect.anything(),
     });
-    // 21 (post-Q4.2) + Q2's three: the events WS-stop wrapper + the events tree view + its
-    // provider = 24.
-    expect(subscriptions).toHaveLength(24);
+    // Q3a (ADR-0046): the Intake "New Work" window command is registered.
+    expect(commands.registerCommand).toHaveBeenCalledWith(NEW_WORK_COMMAND, expect.any(Function));
+    // 24 (post-Q2) + Q3a's two: the newWork command + the Intake panel (built with a fleetConfig)
+    // = 26.
+    expect(subscriptions).toHaveLength(26);
   });
 
   it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {
@@ -1375,6 +1383,37 @@ describe("CommandCenterPanel (N0 — editor-area Command Center)", () => {
   });
 });
 
+describe("IntakePanel (Q3a — editor-area New Work window)", () => {
+  it("opens an editor-area WebviewPanel mounting the INTAKE surface + attaches a bridge", () => {
+    const attach = vi.fn();
+    const bridgeFactory = vi.fn(() => ({ attach, dispose: vi.fn() }));
+
+    new IntakePanel(makeFleetConfig({ bridgeFactory })).open();
+
+    expect(window.createWebviewPanel).toHaveBeenCalledTimes(1);
+    expect(window.createWebviewPanel).toHaveBeenCalledWith(
+      INTAKE_VIEW_TYPE,
+      INTAKE_TITLE,
+      ViewColumn.One,
+      expect.objectContaining({ enableScripts: true, retainContextWhenHidden: true }),
+    );
+    const created = window.createWebviewPanel.mock.results[0]?.value as { webview: { html: string } };
+    // The SAME bundle, but the #root carries data-surface="intake" → main.tsx mounts IntakeChat.
+    expect(created.webview.html).toContain('<div id="root" data-surface="intake"></div>');
+    expect(created.webview.html).toContain('src="vscode-resource:/ext/dist/webview/main.js"');
+    expect(bridgeFactory).toHaveBeenCalledTimes(1);
+    expect(attach).toHaveBeenCalledTimes(1);
+  });
+
+  it("is a singleton: a second open reveals the existing panel instead of creating another", () => {
+    const bridgeFactory = vi.fn(() => ({ attach: vi.fn(), dispose: vi.fn() }));
+    const panel = new IntakePanel(makeFleetConfig({ bridgeFactory }));
+    panel.open();
+    panel.open();
+    expect(window.createWebviewPanel).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("webviewHtml", () => {
   // A representative opts bundle (the runtime values resolveWebviewView passes).
   const opts = {
@@ -1406,6 +1445,15 @@ describe("webviewHtml", () => {
     // The ONLY <script> is the nonce'd external bundle — no inline JS between script tags.
     expect(html).toMatch(new RegExp(`<script nonce="${opts.nonce}" src="[^"]+"></script>`));
     expect(html).not.toMatch(/<script(?![^>]*\bsrc=)/i);
+  });
+
+  it("Q3a: surface:'intake' tags #root with data-surface; default emits no attribute", () => {
+    expect(webviewHtml({ ...opts, surface: "intake" })).toContain(
+      '<div id="root" data-surface="intake"></div>',
+    );
+    // Default (no surface) → the plain cockpit mount; an unknown surface is treated as default.
+    expect(webviewHtml(opts)).toContain('<div id="root"></div>');
+    expect(webviewHtml({ ...opts, surface: "bogus" })).toContain('<div id="root"></div>');
   });
 
   it("nonce-gates the stylesheet and threads cspSource into style/img/font directives", () => {
