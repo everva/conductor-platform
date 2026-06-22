@@ -25,6 +25,37 @@ export async function smoke(): Promise<void> {
   await ext.activate();
   assert.ok(ext.isActive, "extension should be active after activate()");
 
+  // Tab helpers (used by the N1 startup-open + N0 explicit-open proofs). We POLL because
+  // workbench tab registration can lag the fire-and-forget panel open on a loaded test host
+  // (a run logged "Extension host did not start in 10 seconds").
+  const collectTabLabels = (): string[] =>
+    vscode.window.tabGroups.all.flatMap((group) => group.tabs.map((tab) => tab.label));
+  const waitFor = async (predicate: () => boolean, timeoutMs: number): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) return true;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    return predicate();
+  };
+
+  // N1 (ADR-0032 — Command Center = default surface): activation auto-opens the Command Center in
+  // the editor area. Prove it in a REAL host — a "Conductor" tab must appear after activate()
+  // WITHOUT running any command (the startup `void executeCommand(conductor.open)` in activate()).
+  const autoOpened = await waitFor(
+    () => collectTabLabels().includes(COMMAND_CENTER_TITLE),
+    10000,
+  );
+  console.log(
+    `[vscode-smoke] tabs after activate (N1 startup): ${JSON.stringify(collectTabLabels())}`,
+  );
+  assert.ok(
+    autoOpened,
+    `activation should auto-open the editor-area "${COMMAND_CENTER_TITLE}" tab (N1 default surface); saw ${JSON.stringify(
+      collectTabLabels(),
+    )}`,
+  );
+
   const allCommands = await vscode.commands.getCommands(true);
   assert.ok(
     allCommands.includes(CONNECT_COMMAND),
@@ -67,31 +98,16 @@ export async function smoke(): Promise<void> {
   // command path must execute cleanly against the real vscode API).
   await vscode.commands.executeCommand(SHOW_DIFF_COMMAND);
 
-  // N0 — EDITOR-AREA COMMAND CENTER proof in a REAL VS Code host. Executing `conductor.open`
-  // must create a WebviewPanel in the MAIN editor area (not the activity-bar sidebar). A tab
-  // titled "Conductor" must appear in the tab groups — the live proof that the singleton panel
-  // landed in the editor area (the unit tests can only mock createWebviewPanel). The cockpit
-  // bundle loads with no gateway running; that's fine — auth is host-side, nothing throws.
-  //
-  // We POLL for the tab: workbench tab registration can lag the synchronous createWebviewPanel
-  // call on a loaded test host (this run logged "Extension host did not start in 10 seconds").
-  const collectTabLabels = (): string[] =>
-    vscode.window.tabGroups.all.flatMap((group) => group.tabs.map((tab) => tab.label));
-  const waitFor = async (predicate: () => boolean, timeoutMs: number): Promise<boolean> => {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (predicate()) return true;
-      await new Promise((resolve) => setTimeout(resolve, 150));
-    }
-    return predicate();
-  };
-
+  // N0 — EXPLICIT-OPEN + SINGLETON proof in a REAL VS Code host. The Command Center is already
+  // open (N1 startup auto-open above); running `conductor.open` again must REVEAL the same panel,
+  // not spawn a second one. (The cockpit bundle loads with no gateway running; that's fine — auth
+  // is host-side, nothing throws.)
   await vscode.commands.executeCommand(OPEN_COMMAND);
   const opened = await waitFor(() => collectTabLabels().includes(COMMAND_CENTER_TITLE), 10000);
   console.log(`[vscode-smoke] tabs after ${OPEN_COMMAND}: ${JSON.stringify(collectTabLabels())}`);
   assert.ok(
     opened,
-    `executing ${OPEN_COMMAND} should open an editor-area "${COMMAND_CENTER_TITLE}" tab; saw ${JSON.stringify(
+    `executing ${OPEN_COMMAND} should keep the editor-area "${COMMAND_CENTER_TITLE}" tab; saw ${JSON.stringify(
       collectTabLabels(),
     )}`,
   );

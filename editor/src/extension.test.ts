@@ -910,10 +910,13 @@ describe("activate", () => {
       expect.any(Object),
     );
     expect(commands.registerCommand).toHaveBeenCalledWith(SHOW_DIFF_COMMAND, expect.any(Function));
-    // N0: the open command is registered, but the panel does NOT auto-open on activate — the
-    // startup default flip is N1. So no WebviewPanel is created during activation.
+    // N0: the open command is registered. N1 (ADR-0032 — default surface): activate flips the
+    // Command Center to the default surface by REQUESTING it on startup — it executes
+    // `conductor.open`, opening the singleton panel in the editor area. The mock records the
+    // executeCommand; the real-host startup open is proven by the electron smoke (a "Conductor"
+    // tab appears after activate()).
     expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_COMMAND, expect.any(Function));
-    expect(window.createWebviewPanel).not.toHaveBeenCalled();
+    expect(commands.executeCommand).toHaveBeenCalledWith(OPEN_COMMAND);
     // connection bar + intervention bar (4C-3) + diff bar (4C-1b) + notifier-dispose (4C-3) +
     // diff-observer-dispose (4C-1b) + connect + disconnect + pause + resume + abort + approve +
     // diff-provider (4C-1b) + show-diff (4C-1b) + open (N0) + fleet view + Command Center

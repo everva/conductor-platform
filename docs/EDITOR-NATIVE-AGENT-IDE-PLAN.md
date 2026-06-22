@@ -107,7 +107,7 @@ Canlı optiway/xirigo'ya DOKUNMA. isolation:"worktree" KULLANMA.
   yüzeyleri için REUSE edilir, çöp değil.** Ama asıl iş bu plan.
 - Editör arch haritalandı (§1) + Devin modeli araştırıldı (§0). Native parçalar mevcut
   (diff/toast/status-bar/bridge); LAYOUT eksik.
-- **N0 ✅ (bu commit) — editör-alanı Command Center paneli (ADR-0036).** `conductor.open`
+- **N0 ✅ (`08c790e`) — editör-alanı Command Center paneli (ADR-0036).** `conductor.open`
   komutu + `CommandCenterPanel` singleton WebviewPanel (`ViewColumn.One`), `FleetViewProvider`'ın
   cockpit+bridge tellemesini reuse eder (`webviewHtml` + `makeBridgeFactory`; token DONMUŞ, CSP
   `connect-src 'none'` — panel YENİ token yüzeyi değil); `retainContextWhenHidden`; sidebar ile
@@ -115,6 +115,13 @@ Canlı optiway/xirigo'ya DOKUNMA. isolation:"worktree" KULLANMA.
   180/3 + esbuild) yeşil + **GERÇEK runtime electron smoke YEŞİL** (VS Code 1.125.1: `tabs after
   conductor.open: ["Conductor"]` → panel editör-alanına indi; singleton doğrulandı). `editor/`
   only — backend/Go DOKUNULMADI (ADR-0021).
-- **SIRADAKİ: N1** — başlangıç default-surface flip (`onStartupFinished` singleton panel; ADR-0032
-  tam uygula) → N2 native sessions TreeView → N3 session-workspace → N4 native-etkileşim → N5
-  fork-default + imzalı rebuild + capstone. Her faz GERÇEK runtime KENDİM.
+- **N1 ✅ (bu commit) — default-surface flip (ADR-0032 UYGULANDI).** `activate` (`onStartupFinished`)
+  startup'ta `conductor.open`'ı çalıştırır → Command Center editör-alanında OTOMATİK açılır (Devin
+  "ilk gördüğün yüzey" modeli; singleton; sidebar coexist). Editör gate yeşil + **GERÇEK runtime
+  electron smoke YEŞİL** (`tabs after activate (N1 startup): ["Conductor"]` — komut çalıştırmadan,
+  startup'ta açıldı). `editor/` only (backend dokunulmadı). (Not: koşulsuz auto-open; "kullanıcı
+  kapatınca hatırla" / setting ileride opsiyonel cila.)
+- **SIRADAKİ: N2** — native sessions sidebar TreeView ("Conductors": projeler→tasks, status-codicon,
+  "Your Devins" analog; click → Command Center'ı o session'a odakla/aç) → N3 session-workspace
+  (detail webview + native diff split) → N4 native-etkileşim (keybinding + ok-tuşu time-travel) →
+  N5 fork layout-default + imzalı rebuild + capstone (KULLANICI ONAYI). Her faz GERÇEK runtime KENDİM.

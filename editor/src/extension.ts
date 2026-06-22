@@ -1263,6 +1263,13 @@ export function activate(context: vscode.ExtensionContext): void {
     ...disposables,
   );
 
+  // N1 (ADR-0032 — Command Center = default surface): on startup, open the Command Center in the
+  // MAIN editor area so the agent command center is the first surface the director sees (the Devin
+  // Desktop model), not a collapsed sidebar. The `onStartupFinished` activation event + this
+  // singleton open ARE the default-surface flip. Fire-and-forget — `conductor.open` is registered
+  // above (in registerConductor); the panel is a singleton, so a later open just reveals it.
+  void vscode.commands.executeCommand(OPEN_COMMAND);
+
   // Silent restore: re-validate a stored token (if any) and mirror the result onto the
   // status bar via onStateChange. Fire-and-forget; never throws, never logs the token.
   void manager.restore();
