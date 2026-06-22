@@ -30,6 +30,13 @@
           "title": "Conductor",
           "icon": "media/conductor.svg"
         }
+      ],
+      "panel": [
+        {
+          "id": "conductorEvents",
+          "title": "Conductor Events",
+          "icon": "media/conductor.svg"
+        }
       ]
     },
     "views": {
@@ -38,12 +45,22 @@
           "id": "conductor.sessions",
           "name": "Conductors"
         }
+      ],
+      "conductorEvents": [
+        {
+          "id": "conductor.events",
+          "name": "Events"
+        }
       ]
     },
     "viewsWelcome": [
       {
         "view": "conductor.sessions",
         "contents": "No Conductors to show.\n[Connect to a gateway](command:conductor.connect)\nto see your projects and sessions."
+      },
+      {
+        "view": "conductor.events",
+        "contents": "No events yet.\n[Connect to a gateway](command:conductor.connect)\nto watch the live event stream."
       }
     ],
     "commands": [

@@ -75,6 +75,7 @@ import {
 import type { Intervention } from "./notifier";
 import type { TaskDiff } from "./diffObserver";
 import { SESSIONS_VIEW_ID } from "./sessionsTree";
+import { EVENTS_VIEW_ID } from "./eventsTree";
 
 // The slice of the vscode API the diff flows use, assembled from the mock. Cast at the
 // seam because the headless mock is structurally (not nominally) the real `vscode` types.
@@ -1173,10 +1174,13 @@ describe("activate", () => {
       REFRESH_SESSIONS_COMMAND,
       expect.any(Function),
     );
-    // registerConductor's 11 (Q0.4: no sidebar webview view) + the Command Center panel +
-    // N2 sessions tree view + refresh command + tree provider + the connection/intervention/diff
-    // status bars + Q4.2 native fleet bar + the WS-stop wrappers = 21. (Q4.2 added the fleet bar.)
-    expect(subscriptions).toHaveLength(21);
+    // Q2 (ADR-0045): the native "Conductor Events" panel tree view is registered too.
+    expect(window.createTreeView).toHaveBeenCalledWith(EVENTS_VIEW_ID, {
+      treeDataProvider: expect.anything(),
+    });
+    // 21 (post-Q4.2) + Q2's three: the events WS-stop wrapper + the events tree view + its
+    // provider = 24.
+    expect(subscriptions).toHaveLength(24);
   });
 
   it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {

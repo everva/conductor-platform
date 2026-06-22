@@ -34,6 +34,8 @@ import { reconstructDiffFiles } from "./diffReconstruct";
 import { DiffContentClient, type FullTaskDiff } from "./diffContentClient";
 import { FleetReadClient } from "./fleetReadClient";
 import { SessionsTreeProvider, SESSIONS_VIEW_ID, nodeProjectId, nodeTaskRef } from "./sessionsTree";
+import { EventsWatcher } from "./eventsWatcher";
+import { EventsTreeProvider, EVENTS_VIEW_ID } from "./eventsTree";
 
 /** Command id for the gateway-connect action. */
 export const CONNECT_COMMAND = "conductor.connect";
@@ -1542,6 +1544,22 @@ export function activate(context: vscode.ExtensionContext): void {
     });
   };
 
+  // Q2 (ADR-0045): the native "Conductor Events" panel. A host-side watcher (REST backfill + live
+  // WS, mirroring the notifier seams; token only in the Authorization header / `?token=` query)
+  // feeds a flat TreeView in the panel area. Its onChange (ring change) refreshes the tree;
+  // start()/stop() are tied to the link state below. eventsTree is assigned right after the
+  // watcher, so the onChange closure reads it by reference (the watcher only fires after start()).
+  const eventsWatcher = new EventsWatcher({
+    restBaseUrl: normalizeBaseUrl(gatewayUrl),
+    wsBaseUrl: deriveWsUrl(normalizeBaseUrl(gatewayUrl)),
+    tokenProvider: { getToken: () => Promise.resolve(context.secrets.get(GATEWAY_TOKEN_KEY)) },
+    wsConnector,
+    // The closure reads eventsTree only when a ring change fires (after start()), by which point
+    // the const below is initialized — so the forward reference is safe (not used before init).
+    onChange: () => eventsTree.refresh(),
+  });
+  const eventsTree = new EventsTreeProvider(eventsWatcher);
+
   const manager = new ConnectionManager({
     secrets: context.secrets,
     gateway: makeGatewayProbe(gatewayUrl),
@@ -1557,9 +1575,11 @@ export function activate(context: vscode.ExtensionContext): void {
       if (state === "connected") {
         void notifier.start();
         void diffObserver.start();
+        void eventsWatcher.start(); // Q2: backfill + live-WS the native events panel.
       } else {
         notifier.stop();
         diffObserver.stop();
+        eventsWatcher.stop();
       }
       // N2: refetch the sessions tree on any link change (connected → projects/tasks appear;
       // otherwise it empties to the welcome view). The read client no-ops without a token.
@@ -1614,6 +1634,12 @@ export function activate(context: vscode.ExtensionContext): void {
     updateFleetBar(); // Q4.2: keep the native fleet glance in step with a manual tree refresh.
   });
 
+  // Q2 (ADR-0045): the native "Conductor Events" panel tree. createTreeView attaches to the
+  // package.json-contributed panel view; the watcher (started on connect) drives its content.
+  const eventsView = vscode.window.createTreeView(EVENTS_VIEW_ID, {
+    treeDataProvider: eventsTree,
+  });
+
   // Push the intervention + diff status-bar items + dispose-wrappers that stop the host WS
   // subscriptions on deactivate (so the host sockets are torn down with the extension), plus the
   // N2 sessions tree (view + refresh command + the provider's change emitter).
@@ -1624,9 +1650,12 @@ export function activate(context: vscode.ExtensionContext): void {
     fleetBar,
     { dispose: () => notifier.stop() },
     { dispose: () => diffObserver.stop() },
+    { dispose: () => eventsWatcher.stop() },
     sessionsView,
     refreshSessions,
     sessionsProvider,
+    eventsView,
+    eventsTree,
     ...disposables,
   );
 
