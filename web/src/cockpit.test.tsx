@@ -241,7 +241,7 @@ describe("cockpit barrel: FleetDashboard token-free over injected transports", (
     expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
   });
 
-  it("navigateTo (fork deep-link) opens the requested session's SessionView (N3)", async () => {
+  it("selection with a task (host select) opens the requested session's SessionView (Q0)", async () => {
     const fakeTransport = new FakeEventTransport();
     render(
       <FleetDashboard
@@ -253,18 +253,18 @@ describe("cockpit barrel: FleetDashboard token-free over injected transports", (
         makeScenarioClient={() => ({ listScenarios: async () => [] })}
         makeHistory={() => ({ listEvents: async () => [] })}
         eventTransport={fakeTransport}
-        navigateTo={{ project: PROJECT.id, task: TASK.id }}
+        selection={{ project: PROJECT.id, task: TASK.id }}
       />,
     );
 
-    // The host deep-link resolves against the live fleet and opens the task's SessionView —
+    // A task selection resolves against the live fleet and opens the task's SessionView —
     // the SAME surface a board drill-in shows (the tabbed board is replaced). findByRole
     // rides the async fleet load + SessionView mount.
     expect(await screen.findByRole("region", { name: "Session" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Board" })).not.toBeInTheDocument();
   });
 
-  it("navigateTo to an unknown task is a no-op (stays on the board, N3)", async () => {
+  it("selection to an unknown task is a no-op (stays on the board, Q0)", async () => {
     const fakeTransport = new FakeEventTransport();
     render(
       <FleetDashboard
@@ -274,7 +274,7 @@ describe("cockpit barrel: FleetDashboard token-free over injected transports", (
         makeControlClient={makeControlClient}
         makeIntakeClient={makeIntakeClient}
         eventTransport={fakeTransport}
-        navigateTo={{ project: PROJECT.id, task: "no-such-task" }}
+        selection={{ project: PROJECT.id, task: "no-such-task" }}
       />,
     );
     await flush();
@@ -282,6 +282,43 @@ describe("cockpit barrel: FleetDashboard token-free over injected transports", (
     // No matching task → no SessionView; the board (default surface) is still shown.
     expect(screen.queryByRole("region", { name: "Session" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Board" })).toBeInTheDocument();
+  });
+
+  it("a project-only selection returns from an open session to the board (Q0)", async () => {
+    const fakeTransport = new FakeEventTransport();
+    const { rerender } = render(
+      <FleetDashboard
+        token=""
+        onUnauthorized={() => {}}
+        makeClient={makeReadClient}
+        makeControlClient={makeControlClient}
+        makeIntakeClient={makeIntakeClient}
+        makeScenarioClient={() => ({ listScenarios: async () => [] })}
+        makeHistory={() => ({ listEvents: async () => [] })}
+        eventTransport={fakeTransport}
+        selection={{ project: PROJECT.id, task: TASK.id }}
+      />,
+    );
+    // First a task selection opens the session.
+    expect(await screen.findByRole("region", { name: "Session" })).toBeInTheDocument();
+
+    // A NEW project-only selection (no task) clears the session and shows the board overview —
+    // proving the host-owned selection drives the surface (not just the deep-link).
+    rerender(
+      <FleetDashboard
+        token=""
+        onUnauthorized={() => {}}
+        makeClient={makeReadClient}
+        makeControlClient={makeControlClient}
+        makeIntakeClient={makeIntakeClient}
+        makeScenarioClient={() => ({ listScenarios: async () => [] })}
+        makeHistory={() => ({ listEvents: async () => [] })}
+        eventTransport={fakeTransport}
+        selection={{ project: PROJECT.id }}
+      />,
+    );
+    expect(await screen.findByRole("tab", { name: "Board" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Session" })).not.toBeInTheDocument();
   });
 
   it("exposes the transport seams the fork wires (ApiClient over an injected HttpTransport)", async () => {

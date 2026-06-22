@@ -142,8 +142,8 @@ export async function smoke(): Promise<void> {
   // attached to it during activation (which already succeeded, above).
   await vscode.commands.executeCommand(REFRESH_SESSIONS_COMMAND);
 
-  // N3: the deep-link command runs cleanly in a real host. It reveals the Command Center and
-  // posts a navigate-session message to its webview (no gateway → the cockpit has no data, so
-  // no SessionView appears, but the command + host→webview post path must not throw).
+  // Q0: the deep-link command runs cleanly in a real host. It reveals the Command Center and
+  // posts a `select` (project+task) message to its webview (no gateway → the cockpit has no data,
+  // so no SessionView appears, but the command + host→webview post path must not throw).
   await vscode.commands.executeCommand(OPEN_SESSION_COMMAND, "smoke-project", "smoke-task");
 }

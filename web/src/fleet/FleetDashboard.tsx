@@ -72,13 +72,12 @@ export interface FleetDashboardProps {
   // with transport-backed make*Client factories (e.g. () => new ApiClient({ transport }),
   // token ignored) so REST flows over the same bridge. See ADR-0027/0028.
   eventTransport?: EventTransport;
-  // navigateTo, when set (FORK MODE / N3 deep-link), drives an external jump to a specific
-  // session: the host (a sessions-tree click) posts it over the bridge and the fork webview
-  // passes it here. An effect resolves it against the live fleet (tasksByProject) and opens
-  // that task's SessionView — the SAME selectedTask seam a board drill-in uses. The fork
-  // passes a NEW object per host request (even for the same ids) so a repeat deep-link
-  // re-fires. Web mode omits it.
-  navigateTo?: { project: string; task: string } | null;
+  // selection, when set (FORK MODE / Faz-Q), is the host-owned selection pushed onto the cockpit
+  // (the native sessions tree OWNS it; this view is a projection). `task` omitted → select the
+  // project (scope + show the board); `task` present → ALSO open that task's SessionView — the SAME
+  // selectedTask seam a board drill-in uses (the former N3 deep-link). The fork passes a NEW object
+  // per host request (even for the same ids) so a repeat selection re-fires. Web mode omits it.
+  selection?: { project: string; task?: string } | null;
 }
 
 // DashboardTab selects the cockpit surface. "board" is the agent-native Command
@@ -103,7 +102,7 @@ export function FleetDashboard({
   makeHistory,
   makeScenarioClient,
   eventTransport,
-  navigateTo,
+  selection,
 }: FleetDashboardProps) {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   // selectedTask drives the session detail view (redesign E2): set by a board card
@@ -152,26 +151,36 @@ export function FleetDashboard({
     setTab("fleet");
   };
 
-  // N3 deep-link: when the host requests a session (a sessions-tree click), resolve it against
-  // the live fleet and open that task's SessionView — the SAME seam a board drill-in uses.
-  // Consumed once per distinct request object (a useRef guard), so it fires once and does NOT
-  // re-open after the user backs out; if the task isn't loaded yet it waits for the next fleet
-  // update (the effect also depends on tasksByProject) and resolves then.
-  const consumedNav = useRef<{ project: string; task: string } | null>(null);
+  // Selection (Faz-Q / Q0): the host (native sessions tree) OWNS the selection and pushes it here.
+  // `selection.task` present → open that task's SessionView, resolved against the live fleet (the
+  // SAME seam a board drill-in uses, the former N3 deep-link); `selection.task` absent → select the
+  // PROJECT: scope to it + show the board, leaving any open session. Consumed once per distinct
+  // request object (a useRef guard), so it fires once and does NOT re-fire after the user backs out;
+  // a task not yet loaded waits for the next fleet update (the effect also depends on tasksByProject)
+  // and resolves then. Web mode omits the prop.
+  const consumedSel = useRef<{ project: string; task?: string } | null>(null);
   useEffect(() => {
-    if (!navigateTo || navigateTo === consumedNav.current) {
+    if (!selection || selection === consumedSel.current) {
       return;
     }
-    const task = (fleet.tasksByProject[navigateTo.project] ?? []).find(
-      (t) => t.id === navigateTo.task,
+    if (selection.task === undefined) {
+      // Project-only select: scope to the project + show the board (the overview surface).
+      consumedSel.current = selection;
+      setSelectedProjectId(selection.project);
+      setSelectedTask(null);
+      setTab("board");
+      return;
+    }
+    const task = (fleet.tasksByProject[selection.project] ?? []).find(
+      (t) => t.id === selection.task,
     );
     if (!task) {
       return; // wait for fleet data; the effect re-runs when tasksByProject changes
     }
-    consumedNav.current = navigateTo;
-    setSelectedProjectId(navigateTo.project);
+    consumedSel.current = selection;
+    setSelectedProjectId(selection.project);
     setSelectedTask(task);
-  }, [navigateTo, fleet.tasksByProject]);
+  }, [selection, fleet.tasksByProject]);
 
   // ⌘K / Ctrl+K toggles the command palette from anywhere in the cockpit (board,
   // a tab, or a session). A window-level listener keeps the shortcut working

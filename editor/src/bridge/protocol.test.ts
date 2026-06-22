@@ -3,7 +3,7 @@
 // acting. These lock that valid messages pass and junk (null, wrong kind, missing/
 // wrong-typed fields, bad filter values) is rejected.
 import { describe, expect, it } from "vitest";
-import { isHostMessage, isWebviewRequest, isHostNavigate, isWebviewReady } from "./protocol";
+import { isHostMessage, isWebviewRequest, isSelect, isWebviewReady } from "./protocol";
 
 describe("isWebviewRequest", () => {
   it("accepts every valid WebviewRequest kind (including optional fields)", () => {
@@ -84,14 +84,16 @@ describe("isHostMessage", () => {
   });
 });
 
-describe("N3 control channel guards", () => {
-  it("isHostNavigate accepts a well-formed navigate-session and rejects junk", () => {
-    expect(isHostNavigate({ kind: "navigate-session", project: "p", task: "t" })).toBe(true);
-    expect(isHostNavigate(null)).toBe(false);
-    expect(isHostNavigate({ kind: "navigate-session", project: "p" })).toBe(false); // no task
-    expect(isHostNavigate({ kind: "navigate-session", task: "t" })).toBe(false); // no project
-    expect(isHostNavigate({ kind: "navigate-session", project: 1, task: "t" })).toBe(false);
-    expect(isHostNavigate({ kind: "other", project: "p", task: "t" })).toBe(false);
+describe("selection control channel guards (Faz-Q / Q0)", () => {
+  it("isSelect accepts project-only and project+task selects, and rejects junk", () => {
+    expect(isSelect({ kind: "select", project: "p" })).toBe(true); // project-only
+    expect(isSelect({ kind: "select", project: "p", task: "t" })).toBe(true); // project+task
+    expect(isSelect(null)).toBe(false);
+    expect(isSelect({ kind: "select" })).toBe(false); // no project
+    expect(isSelect({ kind: "select", task: "t" })).toBe(false); // no project
+    expect(isSelect({ kind: "select", project: 1 })).toBe(false); // project wrong type
+    expect(isSelect({ kind: "select", project: "p", task: 2 })).toBe(false); // task wrong type
+    expect(isSelect({ kind: "other", project: "p", task: "t" })).toBe(false); // wrong kind
   });
 
   it("isWebviewReady accepts the ready ping and rejects junk", () => {
@@ -101,12 +103,12 @@ describe("N3 control channel guards", () => {
   });
 
   it("the control channel does NOT cross-contaminate the bridge routers (no `id` → rejected)", () => {
-    // The navigate/ready messages carry no correlation id, so the REST/event guards reject
+    // The select/ready messages carry no correlation id, so the REST/event guards reject
     // them — they can never be mistaken for a rest-response/event frame or a rest-request.
-    expect(isHostMessage({ kind: "navigate-session", project: "p", task: "t" })).toBe(false);
+    expect(isHostMessage({ kind: "select", project: "p", task: "t" })).toBe(false);
     expect(isWebviewRequest({ kind: "webview-ready" })).toBe(false);
     // …and the REST/event messages are not mistaken for control messages either.
-    expect(isHostNavigate({ kind: "rest-response", id: "b1", status: 200, ok: true, body: "{}" })).toBe(
+    expect(isSelect({ kind: "rest-response", id: "b1", status: 200, ok: true, body: "{}" })).toBe(
       false,
     );
     expect(isWebviewReady({ kind: "rest-request", id: "b1", method: "GET", path: "/x" })).toBe(false);

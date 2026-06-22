@@ -468,10 +468,10 @@ export class CommandCenterPanel implements vscode.Disposable {
   readonly #config: FleetViewConfig;
   #panel: vscode.WebviewPanel | undefined;
   #bridge: { dispose(): void } | undefined;
-  // N3 deep-link buffering: `#ready` flips true when the webview posts `webview-ready`; a
-  // navigate requested before then (cold-start window) is held in `#pendingNav` + flushed on ready.
+  // Selection buffering (Faz-Q / Q0): `#ready` flips true when the webview posts `webview-ready`;
+  // a select requested before then (cold-start window) is held in `#pendingSelect` + flushed on ready.
   #ready = false;
-  #pendingNav: { project: string; task: string } | undefined;
+  #pendingSelect: { project: string; task?: string } | undefined;
 
   constructor(config: FleetViewConfig) {
     this.#config = config;
@@ -527,7 +527,7 @@ export class CommandCenterPanel implements vscode.Disposable {
     webview.onDidReceiveMessage((msg) => {
       if (isWebviewReady(msg)) {
         this.#ready = true;
-        this.#flushPendingNav();
+        this.#flushPendingSelect();
       }
     });
 
@@ -542,42 +542,48 @@ export class CommandCenterPanel implements vscode.Disposable {
         this.#panel = undefined;
       }
       this.#ready = false;
-      this.#pendingNav = undefined;
+      this.#pendingSelect = undefined;
     });
   }
 
   /**
-   * Deep-links the cockpit to a session (N3): ensures the Command Center is open in the editor
-   * area, then posts a `navigate-session` control message to its webview so the cockpit opens
-   * that task's SessionView. If the webview hasn't signalled `webview-ready` yet (cold start),
-   * the request is BUFFERED and flushed on ready — so the first click right after a cold open
-   * isn't lost. Token-free (only project/task ids cross); re-navigating posts a fresh message.
+   * Pushes a selection onto the cockpit (Faz-Q / Q0): ensures the Command Center is open in the
+   * editor area, then posts a `select` control message to its webview. `task` omitted → select the
+   * project (the cockpit scopes its board to it); `task` present → ALSO open that task's SessionView
+   * (the sessions-tree deep-link, formerly `navigate-session`). If the webview hasn't signalled
+   * `webview-ready` yet (cold start), the selection is BUFFERED and flushed on ready — so the first
+   * click right after a cold open isn't lost. Token-free (only project/task ids cross); re-selecting
+   * posts a fresh message.
    */
-  navigateToSession(project: string, task: string): void {
+  select(project: string, task?: string): void {
     this.open();
     const panel = this.#panel;
     if (panel === undefined) {
       return;
     }
     if (this.#ready) {
-      void panel.webview.postMessage({ kind: "navigate-session", project, task });
+      void panel.webview.postMessage({
+        kind: "select",
+        project,
+        ...(task !== undefined ? { task } : {}),
+      });
     } else {
-      this.#pendingNav = { project, task };
+      this.#pendingSelect = { project, ...(task !== undefined ? { task } : {}) };
     }
   }
 
-  /** Posts a navigate buffered during cold start, once the webview signals ready (N3). */
-  #flushPendingNav(): void {
+  /** Posts a selection buffered during cold start, once the webview signals ready (Faz-Q / Q0). */
+  #flushPendingSelect(): void {
     const panel = this.#panel;
-    const nav = this.#pendingNav;
-    if (panel === undefined || nav === undefined) {
+    const sel = this.#pendingSelect;
+    if (panel === undefined || sel === undefined) {
       return;
     }
-    this.#pendingNav = undefined;
+    this.#pendingSelect = undefined;
     void panel.webview.postMessage({
-      kind: "navigate-session",
-      project: nav.project,
-      task: nav.task,
+      kind: "select",
+      project: sel.project,
+      ...(sel.task !== undefined ? { task: sel.task } : {}),
     });
   }
 
@@ -1477,8 +1483,9 @@ export function registerConductor(
         ? { project: args[0], task: args[1] }
         : nodeTaskRef(args[0]);
     if (ref !== undefined) {
-      // N3a: navigate the Command Center's cockpit to the session (the editor area, column One).
-      commandCenter?.navigateToSession(ref.project, ref.task);
+      // Q0: select the task → the Command Center's cockpit opens its SessionView (editor area,
+      // column One). `select` with a task IS the former N3 `navigate-session` deep-link.
+      commandCenter?.select(ref.project, ref.task);
       // N3b: open that task's native diff BESIDE it (column Two) — the session=workspace split.
       // Quiet when no diff is retained yet (a deep-link shouldn't nag); reuses the preview tab.
       void openTaskDiffBeside(api, diffStore, ref.project, ref.task, vscode.ViewColumn.Beside, fetchFullDiff);

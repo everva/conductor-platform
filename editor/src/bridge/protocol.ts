@@ -49,32 +49,40 @@ export type HostMessage =
   | { kind: "event-message"; id: string; data: string }
   | { kind: "event-close"; id: string };
 
-// ── N3 control channel (host↔webview), SEPARATE from the REST/event bridge ──────────────
-// These carry NO correlation `id`, so the bridge routers (isHostMessage / isWebviewRequest,
-// both of which require a string `id`) reject them and the REST/event maps are untouched.
-// The fork webview's app + the CommandCenterPanel listen for them directly. TOKEN-FREE
-// (only project/task ids / a readiness ping) — like every other message here, by design.
+// ── Selection control channel (host↔webview), SEPARATE from the REST/event bridge ────────
+// The native sessions tree (host) OWNS the current selection; the cockpit webview is a
+// PROJECTION of it. The host posts `select` to push the selected project (and optionally a
+// task) onto the cockpit. These carry NO correlation `id`, so the bridge routers (isHostMessage
+// / isWebviewRequest, both of which require a string `id`) reject them and the REST/event maps
+// are untouched. The fork webview's app + the CommandCenterPanel listen for them directly.
+// TOKEN-FREE (only project/task ids / a readiness ping) — like every other message here, by
+// design. (Faz-Q / Q0: GENERALIZES the N3 `navigate-session` — which was task-only — into the
+// single selection channel the tree drives; `select` WITH a `task` IS the old deep-link-to-session.)
 
-/** Host→Webview control: navigate the cockpit to a specific session (deep-link, N3). */
-export type HostControlMessage = { kind: "navigate-session"; project: string; task: string };
+/**
+ * Host→Webview control: SELECT a project, or a specific task within it. `task` omitted → select
+ * the project (the cockpit scopes its board / surfaces to it); `task` present → ALSO open that
+ * task's SessionView (the deep-link a sessions-tree task click drives, formerly `navigate-session`).
+ * Carries no token — only the project / task ids.
+ */
+export type HostSelectMessage = { kind: "select"; project: string; task?: string };
 
 /** Webview→Host control: the fork app has mounted + is listening, so the host can flush a
- * navigate buffered during the cold-start window (avoids a lost first deep-link). */
+ * selection buffered during the cold-start window (avoids a lost first selection). */
 export type WebviewControlMessage = { kind: "webview-ready" };
 
 /**
- * Defensive guard: is `x` a host→webview navigate control message (N3)? The fork app calls
- * this on every inbound window message and acts only on a well-formed one (a foreign frame
- * can't spoof a navigation). Requires both ids as strings; carries no token.
+ * Defensive guard: is `x` a host→webview `select` control message? The fork app calls this on
+ * every inbound window message and acts only on a well-formed one (a foreign frame can't spoof
+ * a selection). Requires a string `project`; `task` is optional but, if present, must be a
+ * string. Carries no token.
  */
-export function isHostNavigate(x: unknown): x is HostControlMessage {
-  return (
-    isObject(x) && x.kind === "navigate-session" && hasString(x, "project") && hasString(x, "task")
-  );
+export function isSelect(x: unknown): x is HostSelectMessage {
+  return isObject(x) && x.kind === "select" && hasString(x, "project") && optString(x, "task");
 }
 
-/** Defensive guard: is `x` the webview-ready control ping (N3)? The CommandCenterPanel calls
- * this on inbound webview messages to flush a buffered navigate. */
+/** Defensive guard: is `x` the webview-ready control ping? The CommandCenterPanel calls this on
+ * inbound webview messages to flush a buffered selection. */
 export function isWebviewReady(x: unknown): x is WebviewControlMessage {
   return isObject(x) && x.kind === "webview-ready";
 }

@@ -1342,11 +1342,11 @@ describe("CommandCenterPanel (N0 — editor-area Command Center)", () => {
     expect(created.webview.html).toMatch(/default-src 'none'/);
   });
 
-  it("navigateToSession buffers the navigate until the webview is ready, then flushes it (N3)", () => {
+  it("select buffers the selection until the webview is ready, then flushes it (Q0)", () => {
     const bridgeFactory = vi.fn(() => ({ attach: vi.fn(), dispose: vi.fn() }));
     const panel = new CommandCenterPanel(makeFleetConfig({ bridgeFactory }));
 
-    panel.navigateToSession("web-shop", "W-1");
+    panel.select("web-shop", "W-1");
     // Cold start: the fresh webview hasn't signalled ready → nothing is posted yet.
     const created = window.createWebviewPanel.mock.results[0]?.value as {
       webview: { postMessage: ReturnType<typeof vi.fn> };
@@ -1354,16 +1354,16 @@ describe("CommandCenterPanel (N0 — editor-area Command Center)", () => {
     };
     expect(created.webview.postMessage).not.toHaveBeenCalled();
 
-    // The webview announces ready → the buffered navigate is flushed (token-free).
+    // The webview announces ready → the buffered selection is flushed (token-free).
     created.__fireMessage({ kind: "webview-ready" });
     expect(created.webview.postMessage).toHaveBeenCalledWith({
-      kind: "navigate-session",
+      kind: "select",
       project: "web-shop",
       task: "W-1",
     });
   });
 
-  it("navigateToSession posts immediately once the webview is ready, without a second panel (N3)", () => {
+  it("select posts immediately once the webview is ready, without a second panel (Q0)", () => {
     const bridgeFactory = vi.fn(() => ({ attach: vi.fn(), dispose: vi.fn() }));
     const panel = new CommandCenterPanel(makeFleetConfig({ bridgeFactory }));
 
@@ -1374,14 +1374,30 @@ describe("CommandCenterPanel (N0 — editor-area Command Center)", () => {
     };
     created.__fireMessage({ kind: "webview-ready" });
 
-    panel.navigateToSession("api", "T-2");
+    panel.select("api", "T-2");
     expect(created.webview.postMessage).toHaveBeenCalledWith({
-      kind: "navigate-session",
+      kind: "select",
       project: "api",
       task: "T-2",
     });
-    // Singleton: navigateToSession revealed the existing panel, it did not spawn a second one.
+    // Singleton: select revealed the existing panel, it did not spawn a second one.
     expect(window.createWebviewPanel).toHaveBeenCalledTimes(1);
+  });
+
+  it("select with no task posts a project-only selection (no `task` field) (Q0)", () => {
+    const bridgeFactory = vi.fn(() => ({ attach: vi.fn(), dispose: vi.fn() }));
+    const panel = new CommandCenterPanel(makeFleetConfig({ bridgeFactory }));
+
+    panel.open();
+    const created = window.createWebviewPanel.mock.results[0]?.value as {
+      webview: { postMessage: ReturnType<typeof vi.fn> };
+      __fireMessage: (m: unknown) => void;
+    };
+    created.__fireMessage({ kind: "webview-ready" });
+
+    panel.select("web-shop");
+    // Project-only: the message carries exactly { kind, project } — no `task` on the wire.
+    expect(created.webview.postMessage).toHaveBeenCalledWith({ kind: "select", project: "web-shop" });
   });
 });
 
