@@ -12,6 +12,7 @@ import { IconButton } from "./IconButton.tsx";
 import { Panel } from "./Panel.tsx";
 import { Skeleton } from "./Skeleton.tsx";
 import { StatusDot } from "./StatusDot.tsx";
+import { Tooltip } from "./Tooltip.tsx";
 
 describe("Button", () => {
   it("defaults to a type=button secondary/md and renders children", () => {
@@ -184,5 +185,29 @@ describe("StatusDot", () => {
   it("exposes a label to assistive tech as an img role", () => {
     render(<StatusDot tone="info" label="live" />);
     expect(screen.getByRole("img", { name: "live" })).toBeTruthy();
+  });
+});
+
+describe("Tooltip", () => {
+  it("reveals a role=tooltip on hover/focus and hides on leave/blur", () => {
+    const { container } = render(
+      <Tooltip label="linux · web">
+        <button type="button">host</button>
+      </Tooltip>,
+    );
+    const wrap = container.firstChild as HTMLElement;
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    fireEvent.mouseEnter(wrap);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("linux · web");
+
+    fireEvent.mouseLeave(wrap);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    // Keyboard focus (bubbling from the button) reveals it too.
+    fireEvent.focus(wrap);
+    expect(screen.getByRole("tooltip")).toBeTruthy();
+    fireEvent.blur(wrap);
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 });

@@ -16,8 +16,8 @@ import { buildBoard, BOARD_COLUMNS } from "./board.ts";
 import type { BoardCard } from "./board.ts";
 import { isAwaitingApproval } from "./controls.ts";
 import type { FleetControls } from "./useFleetControls.ts";
-import { Plus, ChevronRight } from "lucide-react";
-import { Badge, Button, Card, Chip, Skeleton, StatusDot } from "../ui/index.ts";
+import { Plus, ChevronRight, CircleDashed } from "lucide-react";
+import { Badge, Button, Card, Chip, Skeleton, StatusDot, Tooltip } from "../ui/index.ts";
 import type { CardAccent } from "../ui/index.ts";
 import "./board.css";
 
@@ -139,9 +139,14 @@ export function CommandCenter({
         </span>
         <span className="cc-strip-right">
           {hosts.map((h) => (
-            <Chip key={h.id} className="cc-host-pill" title={h.capabilities.join(", ")}>
-              <StatusDot tone="success" /> {h.id}
-            </Chip>
+            <Tooltip
+              key={h.id}
+              label={h.capabilities.length > 0 ? h.capabilities.join(" · ") : "no capabilities"}
+            >
+              <Chip className="cc-host-pill">
+                <StatusDot tone="success" /> {h.id}
+              </Chip>
+            </Tooltip>
           ))}
           {onNewWork && (
             <Button
@@ -197,7 +202,10 @@ export function CommandCenter({
                     <SkeletonCard />
                   </>
                 ) : cards.length === 0 ? (
-                  <p className="cc-col-empty">—</p>
+                  <div className="cc-col-empty">
+                    <CircleDashed size={18} strokeWidth={1.5} aria-hidden="true" />
+                    <span>No tasks</span>
+                  </div>
                 ) : (
                   cards.map((card) => (
                     <BoardCardView

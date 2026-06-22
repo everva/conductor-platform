@@ -114,11 +114,15 @@
   padding: var(--space-2);
 }
 .cc-col-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
   color: var(--text-faint);
-  text-align: center;
-  padding: var(--space-4) 0;
+  padding: var(--space-6) 0;
   margin: 0;
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
+  opacity: 0.75;
 }
 
 /* --- bulk action bar (E4): appears when held cards are multi-selected --- */
@@ -153,6 +157,20 @@
   flex-direction: column;
   gap: var(--space-2);
   animation: ui-card-in var(--dur-base) var(--ease-out) both;
+}
+/* Subtle stagger so a column's cards cascade in (capped so long columns don't
+   drag). Stable React keys → this plays once on mount, not on every refresh. */
+.cc-col-body > .cc-card:nth-child(2) {
+  animation-delay: 35ms;
+}
+.cc-col-body > .cc-card:nth-child(3) {
+  animation-delay: 70ms;
+}
+.cc-col-body > .cc-card:nth-child(4) {
+  animation-delay: 105ms;
+}
+.cc-col-body > .cc-card:nth-child(n + 5) {
+  animation-delay: 140ms;
 }
 .cc-card-check {
   display: inline-flex;

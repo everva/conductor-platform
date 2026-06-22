@@ -16,3 +16,4 @@ export { Card, type CardProps, type CardAccent } from "./Card.tsx";
 export { Panel, type PanelProps } from "./Panel.tsx";
 export { Skeleton, type SkeletonProps } from "./Skeleton.tsx";
 export { StatusDot, type StatusDotProps, type DotTone } from "./StatusDot.tsx";
+export { Tooltip, type TooltipProps } from "./Tooltip.tsx";

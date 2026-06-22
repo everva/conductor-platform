@@ -18,6 +18,7 @@ import {
   Panel,
   Skeleton,
   StatusDot,
+  Tooltip,
 } from "../ui/index.ts";
 
 // Sized lucide aliases so the showcase mirrors the real surfaces (V4: lucide
@@ -104,6 +105,17 @@ function Gallery() {
         <Chip>backend</Chip>
         <Chip mono>host-linux</Chip>
         <Chip mono>W-run</Chip>
+      </Section>
+
+      <Section title="Tooltip — hover / keyboard focus">
+        <Tooltip label="linux · web · backend">
+          <Chip mono>host-linux</Chip>
+        </Tooltip>
+        <Tooltip label="Approve & merge" side="bottom">
+          <IconButton label="Approve">
+            <Check />
+          </IconButton>
+        </Tooltip>
       </Section>
 
       <Section title="StatusDot">
