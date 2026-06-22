@@ -11,7 +11,7 @@
 // + live WS, transport-agnostic) drives verdict/diff/timeline; the scenario is
 // fetched once via listScenarios. Both injection seams (web token / fork transport)
 // mirror FleetDashboard so this mounts in either host.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ApiClient } from "../api/client.ts";
 import type { Event, Scenario, Task } from "../api/types.ts";
 import type { EventTransport } from "../api/useEventStream.ts";
@@ -19,11 +19,33 @@ import { useEventFeed } from "../events/useEventFeed.ts";
 import type { HistoryLoader } from "../events/useEventFeed.ts";
 import { isAwaitingApproval } from "../fleet/controls.ts";
 import type { FleetControls } from "../fleet/useFleetControls.ts";
-import { Check, ChevronLeft, X } from "lucide-react";
+import {
+  Activity,
+  Check,
+  ChevronLeft,
+  Clock,
+  FileText,
+  GitCompare,
+  ShieldAlert,
+  ShieldCheck,
+  X,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { Badge, Button, Chip, StatusDot } from "../ui/index.ts";
 import type { BadgeTone } from "../ui/index.ts";
 import { buildTimeline, parseDiff, parseVerdict } from "./session.ts";
 import "./session.css";
+
+// SvEmpty — a designed empty/placeholder state for a session panel (a faint icon
+// + a line), replacing bare muted text so the sparse-data view still reads crafted.
+function SvEmpty({ icon: Icon, children }: { icon: LucideIcon; children: ReactNode }) {
+  return (
+    <div className="sv-empty">
+      <Icon size={20} strokeWidth={1.5} aria-hidden="true" />
+      <span>{children}</span>
+    </div>
+  );
+}
 
 // Map a task's lifecycle status to a Badge tone for the header chip.
 function statusTone(status: string, held: boolean): BadgeTone {
@@ -169,7 +191,9 @@ export function SessionView({
                 ))}
               </ul>
             ) : (
-              <p className="sv-muted">{scenario ? "No acceptance criteria recorded." : "Loading spec…"}</p>
+              <SvEmpty icon={FileText}>
+                {scenario ? "No acceptance criteria recorded." : "Loading spec…"}
+              </SvEmpty>
             )}
             {scenario?.hidden_holdout_ref && (
               <p className="sv-holdout">
@@ -187,6 +211,31 @@ export function SessionView({
             </h3>
             {verdict ? (
               <>
+                <div
+                  className={
+                    verdict.result === "pass"
+                      ? "sv-verdict-hero sv-verdict-hero-pass"
+                      : "sv-verdict-hero sv-verdict-hero-fail"
+                  }
+                >
+                  <span className="sv-verdict-hero-icon" aria-hidden="true">
+                    {verdict.result === "pass" ? (
+                      <ShieldCheck size={26} strokeWidth={2} />
+                    ) : (
+                      <ShieldAlert size={26} strokeWidth={2} />
+                    )}
+                  </span>
+                  <div>
+                    <div className="sv-verdict-hero-status">
+                      {verdict.result === "pass" ? "MERGE-READY" : "CHANGES REQUESTED"}
+                    </div>
+                    <div className="sv-verdict-hero-sub">
+                      {verdict.result === "pass"
+                        ? "machine-proven · every gate passed"
+                        : "the deterministic gate is not satisfied"}
+                    </div>
+                  </div>
+                </div>
                 <ul className="sv-checks">
                   {verdict.checks.map((c, i) => (
                     <li key={i} className={c.result === "pass" ? "sv-check-pass" : "sv-check-fail"}>
@@ -202,14 +251,9 @@ export function SessionView({
                     </li>
                   ))}
                 </ul>
-                <p className={verdict.result === "pass" ? "sv-verdict-line sv-pass" : "sv-verdict-line sv-fail"}>
-                  {verdict.result === "pass"
-                    ? "→ MERGE-READY · machine-proven"
-                    : "→ CHANGES REQUESTED · gate not satisfied"}
-                </p>
               </>
             ) : (
-              <p className="sv-muted">Awaiting the gate…</p>
+              <SvEmpty icon={Clock}>Awaiting the gate…</SvEmpty>
             )}
           </section>
         </div>
@@ -237,7 +281,7 @@ export function SessionView({
               </p>
             )}
             {timeline.length === 0 ? (
-              <p className="sv-muted">No activity yet.</p>
+              <SvEmpty icon={Activity}>No activity yet.</SvEmpty>
             ) : (
               <ol className="sv-timeline">
                 {timeline
@@ -305,7 +349,7 @@ export function SessionView({
                 )}
               </>
             ) : (
-              <p className="sv-muted">No diff yet (emitted once the gate passes).</p>
+              <SvEmpty icon={GitCompare}>No diff yet — emitted once the gate passes.</SvEmpty>
             )}
           </section>
         </div>

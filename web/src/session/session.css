@@ -155,16 +155,52 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.sv-verdict-line {
-  margin: var(--space-3) 0 0;
-  font-weight: var(--weight-bold);
-  font-size: var(--text-md);
+/* Verdict hero — the pass/fail banner; the trust differentiator, made prominent. */
+.sv-verdict-hero {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
 }
-.sv-verdict-line.sv-pass {
+.sv-verdict-hero-pass {
+  background: var(--success-soft);
+  border-color: var(--success-border);
   color: var(--success-text);
 }
-.sv-verdict-line.sv-fail {
+.sv-verdict-hero-fail {
+  background: var(--warn-soft);
+  border-color: var(--warn-border);
   color: var(--warn-text);
+}
+.sv-verdict-hero-icon {
+  display: inline-flex;
+  flex: none;
+}
+.sv-verdict-hero-status {
+  font-size: var(--text-md);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-wide);
+}
+.sv-verdict-hero-sub {
+  font-size: var(--text-xs);
+  color: var(--text-3);
+  margin-top: 1px;
+}
+
+/* Designed empty/placeholder state for the sparse-data session panels. */
+.sv-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-6) 0;
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  text-align: center;
+  opacity: 0.85;
 }
 
 /* --- activity timeline --- */
