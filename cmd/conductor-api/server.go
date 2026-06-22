@@ -109,6 +109,13 @@ func (s *apiServer) routes() http.Handler {
 	mux.Handle("POST /projects/{id}/abort", s.requireAuth(http.HandlerFunc(s.handleAbort)))
 	mux.Handle("POST /projects/{id}/approve", s.requireAuth(http.HandlerFunc(s.handleApprove)))
 
+	// Gateway-mediated host-agent API (ADR-0048, Faz G): a performer host leases work
+	// and (Faz G2) reports results over HTTP, NEVER touching Postgres — the gateway
+	// owns the store. Reuses the same registry/statestore seams as the in-process daemon.
+	mux.Handle("POST /projects/{id}/agent/lease", s.requireAuth(http.HandlerFunc(s.handleAgentLease)))
+	mux.Handle("POST /projects/{id}/agent/lease/release", s.requireAuth(http.HandlerFunc(s.handleAgentReleaseLease)))
+	mux.Handle("POST /agent/heartbeat", s.requireAuth(http.HandlerFunc(s.handleAgentHeartbeat)))
+
 	// Historical event replay: standard bearer auth (header only).
 	mux.Handle("GET /events", s.requireAuth(http.HandlerFunc(s.handleEvents)))
 
@@ -250,20 +257,7 @@ func (s *apiServer) handleProjectTasks(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]taskDTO, 0, len(tasks))
 	for _, t := range tasks {
-		out = append(out, taskDTO{
-			ID:             t.ID,
-			ProjectID:      t.ProjectID,
-			Lane:           t.Lane,
-			Tier:           t.Tier,
-			Status:         t.Status,
-			Requires:       nonNil(t.Requires),
-			Deps:           nonNil(t.Deps),
-			Branch:         t.Branch,
-			ScenarioID:     t.ScenarioID,
-			RetryCount:     t.RetryCount,
-			AbortRequested: t.AbortRequested,
-			Approved:       t.Approved,
-		})
+		out = append(out, toTaskDTO(t))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
