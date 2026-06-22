@@ -67,7 +67,29 @@ döndürür (model karar verir; varsayma → sor).
   (frozen-additive byte-kanıtı) + no-scenarios-422 + malformed-questions-422 + clarify-via-runner-stub
   (GERÇEK CommandDistiller + ParseOutcome). Mevcut 11 distill testi DEĞİŞMEDEN geçer (legacy fallback kanıtı).
 
-## Kalan (sonraki commitler)
-- **Q3c.3** web: `types.questions?` + `QuestionCard.tsx` (CC-tarzı chip + option + "Other" + multiSelect) +
-  `IntakeChat` soru-turu → cevap → re-distill; web gate + Playwright e2e (KENDİM) + editör gate + electron smoke.
-- **Q3c.4** (ops.) streaming + fork re-inject (re-sign + `open -n`) + görsel capstone + kullanıcı onayı.
+## Sonuçlar (Q3c.3 — web AskUserQuestion UI; bu commit)
+- `web/src/api/types.ts`: additive `Question`/`QuestionOption` + `DistillResult.questions?` (eski alanlar
+  korunur; `request<DistillResult>` JSON cast → questions otomatik akar, client.ts mantığı DEĞİŞMEDİ, 422
+  yolu korunur). `web/src/intake/QuestionCard.tsx`: CC-tarzı — header chip + her soru fieldset/legend +
+  option'lar (label kalın + description) + radio (single) / checkbox (multiSelect) + **auto "Other"** (ayrı
+  label + özgür-metin, geçerli-HTML tek-kontrol) + "Submit answers" (tüm sorular yanıtlanana dek disabled);
+  yapılı `{question,answer}[]` emit eder (label'lar virgülle, Other→metin). `IntakeChat`: distill yanıtında
+  `questions` → thread'e asistan turu + QuestionCard render; cevap → konuşmaya **"Q: … → A: …"** director-turu
+  eklenir → re-distill (Q3b client-side accumulation reuse); scenarios → plan-preview (korundu); 422 →
+  never-fabricate guidance (fallback korundu). `intake.css` soru/option/Other stilleri (design-token).
+- web App + Go DOKUNULMADI dışında: bu EDITÖR+WEB paylaşımlı cockpit'i etkiler (ADR-0029 reuse) → web App
+  intake'i de CC-soru-turlarını alır. **Token DONMUŞ** (saf UI; gateway verisi). cockpit barrel değişmedi
+  (QuestionCard IntakeChat-içi; editör bundle transitif alır).
+- **Doğrulama:** web gate (typecheck + eslint-0 + **vitest 170/170**: QuestionCard 5 [render/single/Other/
+  multi/all-answered] + IntakeChat clarifying-turn [sorular render → cevap → "Q:→A:" folded re-distill → proposal])
+  + **Playwright e2e 16/16 KENDİM** (`:5173`; yeni `intake.spec` stateful `/distill` mock: 1.çağrı questions →
+  card → Postgres seç → Submit → 2.çağrı scenarios → YAML editör; card kaybolur) + **editör gate** (tsc×2 +
+  eslint-0 + vitest + esbuild; webview bundle QuestionCard'ı içerir, main.css +1.2kb) + **GERÇEK fork electron
+  smoke YEŞİL** (VS Code 1.125.1: `tabs after conductor.newWork: ["Conductor","New Work"]`, exit 0 — New Work
+  intake yüzeyi QuestionCard'lı bundle ile gerçek runtime'da açılır).
+- **#5 (CC-gibi intake) KAPANDI:** Q3b konuşmalı + Q3c gerçek AskUserQuestion (LLM-üretimli spesifik yapılı
+  clarifying sorular) → kullanıcı denetiminin "eksik" bulduğu imza mekanizması artık var.
+
+## Kalan (yalnız kullanıcı / opsiyonel)
+- **Q3c.4** (ops.) streaming + fork re-inject (inject SONRASI `codesign --force --deep --sign -` + `open -n`) +
+  canlı gateway görsel capstone (CC-tarzı soru-çipleri gerçek fork'ta) + kullanıcı görsel onayı.

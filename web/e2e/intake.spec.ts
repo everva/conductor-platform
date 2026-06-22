@@ -45,3 +45,78 @@ test("'+ New work' → Write spec directly opens the authoritative YAML editor (
   await expect(page.getByLabel("Intake YAML")).toHaveValue(/id: NEW-1/);
   await expect(page.getByRole("button", { name: "Approve & add to ledger" })).toBeVisible();
 });
+
+test("'+ New work' → distill asks a clarifying question; answering re-distills to a proposal (Q3c)", async ({ page }) => {
+  await mockWebSocket(page);
+  await page.route("**/status", (r) => r.fulfill(json(STATUS)));
+  await page.route("**/hosts", (r) => r.fulfill(json([])));
+  await page.route("**/projects/*/scenarios", (r) => r.fulfill(json([])));
+  await page.route("**/events*", (r) => r.fulfill(json([])));
+  await page.route("**/projects/*/tasks", (r) => r.fulfill(json([])));
+  await page.route("**/projects", (r) => r.fulfill(json(PROJECTS)));
+
+  // Stateful distill mock (ADR-0047): the 1st call asks a clarifying question
+  // (AskUserQuestion), the 2nd — once the director has answered — returns scenarios.
+  let distillCalls = 0;
+  await page.route("**/projects/*/distill", (r) => {
+    distillCalls += 1;
+    if (distillCalls === 1) {
+      void r.fulfill(
+        json({
+          scenarios: [],
+          yaml: "",
+          questions: [
+            {
+              question: "Which datastore should it use?",
+              header: "Datastore",
+              multi_select: false,
+              options: [
+                { label: "Postgres", description: "Relational, the platform default." },
+                { label: "Redis", description: "In-memory key-value cache." },
+              ],
+            },
+          ],
+        }),
+      );
+      return;
+    }
+    void r.fulfill(
+      json({
+        scenarios: [
+          {
+            id: "A-1",
+            title: "Data service",
+            lane: "backend",
+            tier: "T2",
+            deps: [],
+            acceptance: ["stores records"],
+            hidden_holdout_ref: "store://holdouts/A-1/holdout_test.go",
+          },
+        ],
+        yaml: "id: A-1\ntitle: Data service\n",
+      }),
+    );
+  });
+
+  await page.goto("/");
+  await page.getByLabel(/api token/i).fill("test-token");
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page.getByRole("region", { name: /command center/i })).toBeVisible();
+
+  await page.getByRole("button", { name: /new work/i }).click();
+  await expect(page.getByRole("tab", { name: /intake/i })).toHaveAttribute("aria-selected", "true");
+
+  // Describe the work → the distiller asks a clarifying question instead of guessing.
+  await page.getByLabel("Message").fill("build a data service");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  await expect(page.getByTestId("question-card")).toBeVisible();
+  await expect(page.getByText("Which datastore should it use?")).toBeVisible();
+
+  // Answer it → the answer folds into the conversation and re-distills → proposal.
+  await page.getByRole("radio", { name: /Postgres/ }).click();
+  await page.getByRole("button", { name: "Submit answers" }).click();
+
+  await expect(page.getByLabel("Intake YAML")).toHaveValue(/id: A-1/);
+  await expect(page.getByTestId("question-card")).toHaveCount(0);
+});

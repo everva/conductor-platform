@@ -16,17 +16,20 @@
 // The "Write spec directly" path (claude-free authoring straight into the YAML) is preserved.
 // A 401 anywhere bubbles to onUnauthorized. The conversation/token are never logged.
 //
-// NOTE (honest scope): the assistant's clarifying reply is the distiller's never-fabricate GUIDANCE
-// (the gateway returns scenarios-or-422); LLM-generated SPECIFIC clarifying questions + streaming
-// are a backend follow-up (Q3b-full/Q3c, ADR-0046). The conversation is accumulated CLIENT-side and
-// the existing single-string /distill is reused — no gateway change here.
+// CLARIFYING QUESTIONS (Q3c, ADR-0047): when the distiller is too unsure to draft scenarios it may
+// return SPECIFIC multiple-choice questions (Claude Code's AskUserQuestion — "ask, don't assume")
+// instead of guessing. Those render as a QuestionCard in the thread; the director's answers fold back
+// into the conversation as a turn ("Q: … → A: …") and re-distill. A 422 (the model produced NOTHING,
+// not even questions) still surfaces as the never-fabricate guidance. Conversation accumulates
+// CLIENT-side over the single-string /distill, which now also carries the optional `questions`.
 import { useRef, useState } from "react";
 import { ArrowRight } from "lucide-react";
 import { ApiError, DistillNoScenariosError } from "../api/client.ts";
-import type { DistillResult, IntakeResult, Project } from "../api/types.ts";
+import type { DistillResult, IntakeResult, Project, Question } from "../api/types.ts";
 import { ConfirmDialog } from "../fleet/ConfirmDialog.tsx";
 import type { PendingConfirm } from "../fleet/useFleetControls.ts";
 import { ScenarioCard } from "./ScenarioCard.tsx";
+import { QuestionCard, type QuestionAnswer } from "./QuestionCard.tsx";
 import "./intake.css";
 
 // IntakeClient is the NARROW surface IntakeChat consumes — the two endpoints of the
@@ -85,6 +88,9 @@ export function IntakeChat({
   // The multi-turn conversation thread (Q3b). Your turns accumulate; the assistant replies inline.
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState<string>("");
+  // pendingQuestions holds the distiller's clarifying questions (Q3c) until answered;
+  // null means there are none to answer right now.
+  const [pendingQuestions, setPendingQuestions] = useState<Question[] | null>(null);
   const [proposal, setProposal] = useState<DistillResult | null>(null);
   // editedYaml is the AUTHORITATIVE input to /intake — initialised from the
   // distilled yaml, then freely edited by the human. We POST it verbatim.
@@ -131,8 +137,22 @@ export function IntakeChat({
     setDistilling(true);
     setResult(null);
     setYamlError(null);
+    // Each distill starts clean: drop any stale clarifying questions from a prior turn.
+    setPendingQuestions(null);
     try {
       const res = await client.distill(projectId, conversation);
+      // Clarifying turn (Q3c): the distiller asked for more detail instead of drafting.
+      if (res.questions !== undefined && res.questions.length > 0) {
+        setPendingQuestions(res.questions);
+        setProposal(null);
+        setEditedYaml("");
+        setDirectMode(false);
+        addMsg(
+          "assistant",
+          "A few quick questions to get this right — answer below, or add detail in the message box.",
+        );
+        return;
+      }
       setProposal(res);
       setEditedYaml(res.yaml);
       setDirectMode(false);
@@ -168,17 +188,31 @@ export function IntakeChat({
     }
   }
 
-  // send appends the draft as your turn and re-distills with the WHOLE conversation (all your
-  // turns), so detail accumulates across the thread. The existing single-string /distill is reused.
+  // sendYouTurn appends text as a director turn and re-distills with the WHOLE conversation
+  // (all your turns), so detail accumulates across the thread. The existing single-string
+  // /distill is reused. youTurns is computed BEFORE addMsg (setState is async).
+  function sendYouTurn(text: string) {
+    const youTurns = [...messages.filter((m) => m.role === "you").map((m) => m.text), text];
+    addMsg("you", text);
+    void runDistill(youTurns.join("\n\n"));
+  }
+
+  // send dispatches the composer draft as a director turn.
   function send() {
     if (!canSend) {
       return;
     }
     const text = draft.trim();
-    const youTurns = [...messages.filter((m) => m.role === "you").map((m) => m.text), text];
-    addMsg("you", text);
     setDraft("");
-    void runDistill(youTurns.join("\n\n"));
+    sendYouTurn(text);
+  }
+
+  // submitAnswers folds the clarifying answers into the conversation as a director turn
+  // ("Q: … → A: …") so the distiller has the clarifications on the next pass, then re-distills.
+  function submitAnswers(answers: QuestionAnswer[]) {
+    const answerText = answers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join("\n\n");
+    setPendingQuestions(null);
+    sendYouTurn(answerText);
   }
 
   // requestApprove opens the confirm gate; the actual POST happens on confirm. This
@@ -283,6 +317,14 @@ export function IntakeChat({
                     </div>
                   ))}
                 </div>
+              )}
+
+              {pendingQuestions !== null && (
+                <QuestionCard
+                  questions={pendingQuestions}
+                  onSubmit={submitAnswers}
+                  disabled={distilling}
+                />
               )}
 
               <label className="intake-field">

@@ -123,6 +123,57 @@ describe("IntakeChat", () => {
     );
   });
 
+  it("clarifying questions: distill asks, answering re-distills with the Q&A folded in (Q3c)", async () => {
+    const user = userEvent.setup({ delay: null });
+    // Turn 1 → the distiller asks a clarifying question (AskUserQuestion, ADR-0047); the
+    // director answers via the card; turn 2 → a proposal. Proves the question turn renders
+    // and the answer folds into the conversation as a "Q: … → A: …" turn before re-distill.
+    const questions: DistillResult = {
+      scenarios: [],
+      yaml: "",
+      questions: [
+        {
+          question: "Which datastore should it use?",
+          header: "Datastore",
+          multi_select: false,
+          options: [
+            { label: "Postgres", description: "Relational, the platform default." },
+            { label: "Redis", description: "In-memory key-value cache." },
+          ],
+        },
+      ],
+    };
+    const distill = vi
+      .fn<IntakeClient["distill"]>()
+      .mockResolvedValueOnce(questions)
+      .mockResolvedValueOnce(PROPOSAL);
+    const client = fakeClient({ distill });
+    render(<IntakeChat projects={[project()]} client={client} onUnauthorized={vi.fn()} />);
+
+    await user.type(screen.getByLabelText("Message"), "build a data service");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    // The clarifying card appears (not a scenario proposal).
+    expect(await screen.findByTestId("question-card")).toBeInTheDocument();
+    expect(screen.getByText("Datastore")).toBeInTheDocument();
+    expect(screen.queryByTestId("scenario-card")).not.toBeInTheDocument();
+
+    // Answer it and submit.
+    await user.click(screen.getByRole("radio", { name: /Postgres/ }));
+    await user.click(screen.getByRole("button", { name: "Submit answers" }));
+
+    // Re-distilled with the original message AND the Q&A folded in.
+    expect(distill).toHaveBeenCalledTimes(2);
+    const secondConversation = distill.mock.calls[1]?.[1] ?? "";
+    expect(secondConversation).toContain("build a data service");
+    expect(secondConversation).toContain("Q: Which datastore should it use?");
+    expect(secondConversation).toContain("A: Postgres");
+
+    // The proposal lands and the question card is gone.
+    expect(await screen.findByTestId("scenario-card")).toBeInTheDocument();
+    expect(screen.queryByTestId("question-card")).not.toBeInTheDocument();
+  });
+
   it("editing the YAML then Approve posts the EDITED yaml and shows created ids", async () => {
     const user = userEvent.setup({ delay: null });
     const client = fakeClient();

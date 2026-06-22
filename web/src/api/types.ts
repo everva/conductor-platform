@@ -78,6 +78,24 @@ export interface Scenario {
   hidden_holdout_ref: string;
 }
 
+// QuestionOption is one offered choice of a clarifying Question (label + a
+// description of what choosing it means), mirroring questionOptionDTO (ADR-0047).
+export interface QuestionOption {
+  label: string;
+  description: string;
+}
+
+// Question is a clarifying question the distiller asks when the conversation is too
+// ambiguous to distill into scenarios — the mirror of Claude Code's AskUserQuestion
+// (ADR-0047). The UI renders `header` as a short chip and ADDS an "Other" free-text
+// choice automatically; `multi_select` allows more than one option to be picked.
+export interface Question {
+  question: string;
+  header: string;
+  options: QuestionOption[];
+  multi_select: boolean;
+}
+
 // DistillResult mirrors distillResultDTO (POST /projects/{id}/distill): the
 // structured PROPOSED scenarios for the UI to render, and the intake-ready `yaml`
 // string that POST /projects/{id}/intake accepts VERBATIM. Nothing is persisted by
@@ -85,6 +103,10 @@ export interface Scenario {
 export interface DistillResult {
   scenarios: Scenario[];
   yaml: string;
+  // questions is the ADDITIVE clarifying turn (ADR-0047): when present, the distiller
+  // asked for more detail instead of proposing scenarios (scenarios is then empty and
+  // yaml is ""). Absent on a scenarios result, so legacy consumers are unaffected.
+  questions?: Question[];
 }
 
 // Query params accepted by GET /events (and /ws), mirroring parseEventFilter in

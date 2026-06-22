@@ -300,3 +300,99 @@
   color: var(--danger-text);
   font-size: var(--text-sm);
 }
+
+/* --- clarifying questions (Q3c, AskUserQuestion) --- */
+.intake-questions-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.intake-question {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.intake-question-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  margin-bottom: var(--space-1);
+}
+.intake-question-chip {
+  flex: none;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  border: 1px solid var(--border-soft);
+  color: var(--text-2);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+}
+.intake-question-text {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-1);
+}
+.intake-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  cursor: pointer;
+}
+.intake-option:hover {
+  border-color: var(--border-strong);
+}
+.intake-option input[type="radio"],
+.intake-option input[type="checkbox"] {
+  margin-top: 2px;
+  flex: none;
+}
+.intake-option-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.intake-option-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-1);
+}
+.intake-option-desc {
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+.intake-option-other {
+  flex-direction: column;
+  align-items: stretch;
+  cursor: default;
+}
+.intake-option-pick {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+.intake-other-input {
+  margin-top: var(--space-1);
+  background: var(--bg);
+  color: var(--text-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-sm);
+  font-family: inherit;
+}
+.intake-other-input:disabled {
+  opacity: 0.5;
+}
