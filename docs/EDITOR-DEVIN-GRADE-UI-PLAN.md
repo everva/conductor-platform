@@ -161,6 +161,15 @@ kanıtlandı) ama UI işi claude-free.
   card-enter** (sütun kartları cascade; capped delay; stable-key→mount'ta bir kez).
   CircleDashed lucide-paths kapsamında→editör etkilenmez. Canlı KENDİM (tooltip hover
   doğrulandı, 0 err); gate tsc+eslint+vitest **152/152**+e2e 14/14. **Cockpit ~9.5/10.**
-- **BİTİŞ GATE'İ: KULLANICI SON ONAYI bekliyor (tekrar sunuldu).** Onaylanırsa BİTTİ;
+- **V5c ✅ (develop `1dd385d`, CI yeşil) — kullanıcı "Session iter et" dedi:**
+  **verdict-hero** (deterministik gate sonucu artık çarpıcı pass/fail banner — yeşil
+  `ShieldCheck` "MERGE-READY · machine-proven · every gate passed" / amber `ShieldAlert`
+  "CHANGES REQUESTED", check listesinin ÜSTÜNDE; trust-differentiator öne çıktı;
+  "MERGE-READY" test-hook korundu) + **designed empty-states** (`SvEmpty`: spec/verdict/
+  activity/diff çıplak muted-text → ortalı faint-icon FileText/Clock/Activity/GitCompare;
+  "Awaiting the gate" hook korundu). Yeni lucide ikonlar V4 paths-mapping kapsamında
+  (editör etkilenmez). Canlı KENDİM (hem mock'lu data-rich hero HEM empty-states; 0 err);
+  gate tsc+eslint+vitest 152/152+e2e 14/14. **Session ~9.5/10.**
+- **BİTİŞ GATE'İ: KULLANICI SON ONAYI bekliyor (3. kez sunuluyor).** Onaylanırsa BİTTİ;
   aksi halde hedefli iterate. Kalan opsiyonel: fork-runtime webview görsel doğrulama
   (kullanıcı host'unda, take-over).
