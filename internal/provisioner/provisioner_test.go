@@ -84,6 +84,27 @@ func TestProvisioner_Workspace_BranchesFromBase(t *testing.T) {
 	}
 }
 
+// TestProvisioner_Workspace_SlashedBaseBranch is the regression for the real-world git D/F ref
+// conflict: when the base branch is itself `conductor/<projectID>`, the per-task branch must NOT
+// be `conductor/<projectID>/<taskID>` — git stores refs as files, so the base ref FILE blocks
+// creating a ref DIR of the same name. branchName joins with a dash, so this provisions cleanly.
+// (Hit live with optiway's `conductor/optiway` base branch: "cannot lock ref ... exists".)
+func TestProvisioner_Workspace_SlashedBaseBranch(t *testing.T) {
+	ctx := context.Background()
+	remote := seedRemote(t, "conductor/proj1")
+	p := newProvisioner(t)
+	proj := statestore.Project{ID: "proj1", Repo: remote, BaseBranch: "conductor/proj1"}
+	task := statestore.Task{ID: "VARDIYE-1", ProjectID: "proj1"}
+
+	ws, err := p.Workspace(ctx, proj, task)
+	if err != nil {
+		t.Fatalf("Workspace with base 'conductor/proj1' must succeed (no D/F ref conflict): %v", err)
+	}
+	if ws.Branch != "conductor/proj1-VARDIYE-1" {
+		t.Fatalf("Branch = %q, want conductor/proj1-VARDIYE-1", ws.Branch)
+	}
+}
+
 func TestProvisioner_Workspace_ReturnsWorkspaceStruct(t *testing.T) {
 	ctx := context.Background()
 	remote := seedRemote(t, "develop")
@@ -101,7 +122,7 @@ func TestProvisioner_Workspace_ReturnsWorkspaceStruct(t *testing.T) {
 	if fi, err := os.Stat(ws.Path); err != nil || !fi.IsDir() {
 		t.Fatalf("worktree path does not exist as dir: %q err=%v", ws.Path, err)
 	}
-	want := "conductor/proj1/T-1"
+	want := "conductor/proj1-T-1"
 	if ws.Branch != want {
 		t.Fatalf("Branch = %q, want %q", ws.Branch, want)
 	}

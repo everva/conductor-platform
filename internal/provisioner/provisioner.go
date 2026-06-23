@@ -71,9 +71,14 @@ func (p *Provisioner) worktreePath(projectID, taskID string) string {
 	return filepath.Join(p.cfg.RootDir, "worktrees", projectID, taskID)
 }
 
-// branchName is the short-lived per-task branch (ADR-0004/0017).
+// branchName is the short-lived per-task branch (ADR-0004/0017). The project + task are
+// joined with a DASH (not a slash) so the branch never D/F-conflicts with a base branch that
+// is itself `conductor/<projectID>`: git stores refs as files, so a `conductor/optiway` base
+// (a file at refs/heads/conductor/optiway) would block creating `conductor/optiway/<task>` (a
+// dir). `conductor/optiway-<task>` is a sibling file → no conflict. (Real-world bug: optiway's
+// base branch is `conductor/optiway`.)
 func branchName(projectID, taskID string) string {
-	return fmt.Sprintf("conductor/%s/%s", projectID, taskID)
+	return fmt.Sprintf("conductor/%s-%s", projectID, taskID)
 }
 
 // EnsureClone makes sure a single isolated clone of the project exists under
