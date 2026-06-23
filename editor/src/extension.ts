@@ -43,6 +43,22 @@ export const CONNECT_COMMAND = "conductor.connect";
 /** Command id for the gateway-disconnect action. */
 export const DISCONNECT_COMMAND = "conductor.disconnect";
 
+/** Command id for the editor-mediated claude login (Faz L1 — ADR-0049). Mints + stores the
+ * portable claude OAuth token so the user no longer SSHes into the performer host to run an
+ * interactive `claude` login (the xirigo model). */
+export const LOGIN_COMMAND = "conductor.login";
+
+/** Command id that forgets the stored claude OAuth token (Faz L1). */
+export const LOGOUT_COMMAND = "conductor.logout";
+
+/** The Claude Code CLI subcommand that mints a portable, long-lived OAuth token: it prints the
+ * token to the terminal and SAVES NOTHING (the xirigo model). We run it in an integrated
+ * terminal so the user completes the browser OAuth and copies the printed token; we NEVER
+ * capture its stdout (that would put the account-level token in a buffer/log) — the user pastes
+ * it into a masked input. The official env var the headless performer reads is
+ * CLAUDE_CODE_OAUTH_TOKEN (consumed in Faz L2). */
+export const CLAUDE_SETUP_TOKEN_CMD = "claude setup-token";
+
 /** Command id for the pause-project control action (4C-2). */
 export const PAUSE_COMMAND = "conductor.pause";
 
@@ -1268,6 +1284,78 @@ export async function runDisconnect(api: VscodeApi, manager: ConnectionManager):
   await api.window.showInformationMessage("Disconnected.");
 }
 
+/**
+ * Minimal structural terminal the L1 login flow drives: open it (`show`) + type the mint
+ * command (`sendText`). The real `vscode.Terminal` satisfies it; the headless mock supplies a
+ * spy pair. NO token flows through here — only the (non-secret) `claude setup-token` command
+ * string is sent; the printed token stays in the terminal for the user to copy.
+ */
+export interface LoginTerminal {
+  sendText(text: string): void;
+  show(): void;
+}
+
+/**
+ * The narrow vscode surface the Faz L1 login flow uses, kept SEPARATE from {@link VscodeApi}
+ * (like {@link DiffVscodeApi}) so the connect/control flows' mocks don't have to grow a
+ * `createTerminal`. `registerConductor`/`activate` pass the real `vscode`, which satisfies it.
+ *
+ * TOKEN DISCIPLINE: no method here is ever HANDED the token. It enters only via the RETURN
+ * value of `showInputBox` (a `password:true` field) and flows straight into
+ * `manager.storeClaudeToken` (SecretStorage). `createTerminal`/`sendText` carry only the
+ * non-secret mint command.
+ */
+export interface LoginVscodeApi {
+  readonly window: {
+    showInformationMessage(message: string): Thenable<string | undefined>;
+    showErrorMessage(message: string): Thenable<string | undefined>;
+    showInputBox(options?: vscode.InputBoxOptions): Thenable<string | undefined>;
+    createTerminal(options: vscode.TerminalOptions): LoginTerminal;
+  };
+}
+
+/**
+ * The L1 login flow (`conductor.login`, ADR-0049): mint + store the portable claude OAuth token
+ * the xirigo way, so the director never SSHes into the performer host for an interactive
+ * `claude` login. Opens an integrated terminal running `claude setup-token` (browser OAuth → the
+ * CLI prints a long-lived `sk-ant-oat…` token), then prompts for that token via a PASSWORD input
+ * and stores it in SecretStorage (CLAUDE_OAUTH_TOKEN_KEY) through the manager.
+ *
+ * TOKEN DISCIPLINE (HARD — account-level secret): we DO NOT capture the terminal's stdout — the
+ * user copies the printed token and pastes it into the masked input, so the token never lands in
+ * a buffer/log/process-table on our side. It flows ONLY into `manager.storeClaudeToken`
+ * (SecretStorage); the success message names no token. A cancelled/empty paste is a quiet no-op.
+ */
+export async function runLogin(api: LoginVscodeApi, manager: ConnectionManager): Promise<void> {
+  const terminal = api.window.createTerminal({ name: "Conductor Login" });
+  terminal.show();
+  // Type (not capture) the mint command: the user completes the browser OAuth and copies the
+  // token the CLI prints. The command string is non-secret; the token is never read by us.
+  terminal.sendText(CLAUDE_SETUP_TOKEN_CMD);
+
+  const token = await api.window.showInputBox({
+    password: true,
+    ignoreFocusOut: true,
+    prompt: "Paste the token printed by `claude setup-token`",
+    placeHolder: "sk-ant-oat… (stored securely; your conductors will use it)",
+  });
+  if (token === undefined || token.trim() === "") {
+    return; // cancelled / empty — quiet no-op.
+  }
+
+  await manager.storeClaudeToken(token.trim());
+  await api.window.showInformationMessage(
+    "Conductor login saved. The claude credential is stored securely and will be used by your conductors.",
+  );
+}
+
+/** The L1 logout flow (`conductor.logout`): forget the stored claude OAuth token + report.
+ * Carries no token. */
+export async function runLogout(api: LoginVscodeApi, manager: ConnectionManager): Promise<void> {
+  await manager.clearClaudeToken();
+  await api.window.showInformationMessage("Conductor login cleared.");
+}
+
 /** The narrow control surface `runControl` drives — the slice of ControlClient it uses.
  * Declared as an interface so the unit tests pass a fake (no real fetch/token) while the
  * production path injects a real ControlClient. None of these carry the token out. */
@@ -1415,7 +1503,7 @@ function conflictMessage(action: ControlAction): string {
  * running host. `gatewayUrl` is captured for the connect flow's URL.
  */
 export function registerConductor(
-  api: VscodeApi & DiffVscodeApi,
+  api: VscodeApi & DiffVscodeApi & LoginVscodeApi,
   manager: ConnectionManager,
   gatewayUrl: string,
   control: Control,
@@ -1428,6 +1516,15 @@ export function registerConductor(
   });
   const disconnect = api.commands.registerCommand(DISCONNECT_COMMAND, () => {
     void runDisconnect(api, manager);
+  });
+  // Faz L1 (ADR-0049): editor-mediated claude login. `conductor.login` mints + stores the
+  // portable claude OAuth token (the agent consumes it in Faz L2); `conductor.logout` forgets
+  // it. Editor-only, token-disciplined (see runLogin) — no Go, no gateway involvement.
+  const login = api.commands.registerCommand(LOGIN_COMMAND, () => {
+    void runLogin(api, manager);
+  });
+  const logout = api.commands.registerCommand(LOGOUT_COMMAND, () => {
+    void runLogout(api, manager);
   });
   // 4C-2 inline control commands: each prompts for a project + (for abort/approve)
   // confirms, then fires the authed control POST host-side. The token stays in the
@@ -1504,6 +1601,8 @@ export function registerConductor(
   const disposables: vscode.Disposable[] = [
     connect,
     disconnect,
+    login,
+    logout,
     ...controlDisposables,
     diffProvider,
     showDiff,

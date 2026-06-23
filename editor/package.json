@@ -96,6 +96,16 @@
         "category": "Conductor"
       },
       {
+        "command": "conductor.login",
+        "title": "Conductor: Log In (Claude)",
+        "category": "Conductor"
+      },
+      {
+        "command": "conductor.logout",
+        "title": "Conductor: Log Out (Claude)",
+        "category": "Conductor"
+      },
+      {
         "command": "conductor.pause",
         "title": "Conductor: Pause Project",
         "category": "Conductor"

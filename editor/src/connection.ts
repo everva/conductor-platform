@@ -28,6 +28,20 @@ import type { GatewayProbe } from "./gateway";
 import { GATEWAY_TOKEN_KEY } from "./gateway";
 
 /**
+ * SecretStorage key for the portable claude OAuth token minted by `claude setup-token`
+ * (Faz L1 — ADR-0049, the xirigo model). Kept DISTINCT from {@link GATEWAY_TOKEN_KEY}: these
+ * are two INDEPENDENT secrets with independent lifecycles — the gateway BEARER (authes the
+ * gateway HTTP/WS) versus the account-level CLAUDE credential the performer (`claude -p`)
+ * consumes (Faz L2). It lives here, not in gateway.ts, because the ConnectionManager owns its
+ * at-rest read/write; gateway.ts is only URLs/probes.
+ *
+ * TOKEN DISCIPLINE (HARD, account-level): leaking this token is account compromise. It lives
+ * ONLY in SecretStorage; there is NO getter on the manager (the few host-side consumers read
+ * it from SecretStorage directly when wiring the agent, never via a cached field).
+ */
+export const CLAUDE_OAUTH_TOKEN_KEY = "conductor.claudeOAuthToken";
+
+/**
  * Minimal at-rest secret store. VS Code's `SecretStorage` satisfies this structurally
  * (its get/store/delete signatures match), so the host passes `context.secrets`
  * directly while tests pass an in-memory fake. Intentionally narrow: no `onDidChange`,
@@ -156,6 +170,32 @@ export class ConnectionManager {
     }
     // "unreachable": transient outage. Keep the token; just report not-connected.
     this.#setState("disconnected");
+  }
+
+  // ── Claude OAuth token slot (Faz L1 — ADR-0049) ──────────────────────────────────────
+  // ADDITIVE to the gateway connection above and INDEPENDENT of it: the gateway-token flow
+  // (connect/disconnect/restore + `#state`) is untouched (frozen-additive, ADR-0021). These
+  // three methods own the at-rest home of the portable claude OAuth token (CLAUDE_OAUTH_TOKEN_KEY).
+  // There is deliberately NO getter — token discipline: the token may leave SecretStorage only
+  // into the agent-provisioning path (Faz L2), read from SecretStorage directly, never cached
+  // here. The claude token is NOT gateway-validated (it is opaque to us — only Anthropic can
+  // validate it) and does NOT affect the gateway connection `#state`.
+
+  /** Stores the portable claude OAuth token (minted by `claude setup-token`) at rest in
+   * SecretStorage. The ONLY write path for it. Overwrites any prior value (re-login). */
+  async storeClaudeToken(token: string): Promise<void> {
+    await this.#secrets.store(CLAUDE_OAUTH_TOKEN_KEY, token);
+  }
+
+  /** Reports whether a claude OAuth token is stored (drives the login-status UI). Returns a
+   * BOOLEAN — never the token itself (token discipline: no getter). */
+  async hasClaudeToken(): Promise<boolean> {
+    return (await this.#secrets.get(CLAUDE_OAUTH_TOKEN_KEY)) !== undefined;
+  }
+
+  /** Forgets the stored claude OAuth token (logout): deletes the SecretStorage entry. */
+  async clearClaudeToken(): Promise<void> {
+    await this.#secrets.delete(CLAUDE_OAUTH_TOKEN_KEY);
   }
 
   /** Sets state and fires the change callback (if any). Single mutation point so the

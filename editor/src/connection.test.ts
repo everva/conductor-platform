@@ -5,6 +5,7 @@
 // live ONLY in SecretStorage and the probe's Authorization header).
 import { describe, expect, it } from "vitest";
 import {
+  CLAUDE_OAUTH_TOKEN_KEY,
   ConnectionManager,
   type ConnectionState,
   type ConnectResult,
@@ -154,6 +155,59 @@ describe("ConnectionManager.restore", () => {
     await m.restore();
     expect(m.state).toBe("disconnected");
     expect(secrets.map.get(GATEWAY_TOKEN_KEY)).toBe("tok");
+  });
+});
+
+describe("ConnectionManager claude token (L1)", () => {
+  it("stores the claude OAuth token under its OWN key, independent of the gateway connection", async () => {
+    const secrets = makeSecretStore();
+    const states: ConnectionState[] = [];
+    const m = new ConnectionManager({
+      secrets: secrets.store,
+      gateway: makeProbe({}),
+      onStateChange: (s) => states.push(s),
+    });
+
+    await m.storeClaudeToken("sk-ant-oat-fake");
+
+    expect(secrets.map.get(CLAUDE_OAUTH_TOKEN_KEY)).toBe("sk-ant-oat-fake");
+    expect(await m.hasClaudeToken()).toBe(true);
+    // It does NOT touch the gateway token key, the connection state, or fire a state change.
+    expect(secrets.map.has(GATEWAY_TOKEN_KEY)).toBe(false);
+    expect(m.state).toBe("disconnected");
+    expect(states).toHaveLength(0);
+  });
+
+  it("hasClaudeToken reflects presence (false → true) without exposing the token", async () => {
+    const secrets = makeSecretStore();
+    const m = new ConnectionManager({ secrets: secrets.store, gateway: makeProbe({}) });
+    expect(await m.hasClaudeToken()).toBe(false);
+    await m.storeClaudeToken("sk-ant-oat-fake");
+    expect(await m.hasClaudeToken()).toBe(true);
+  });
+
+  it("clearClaudeToken forgets it (logout) and leaves the gateway token alone", async () => {
+    const secrets = makeSecretStore({
+      [CLAUDE_OAUTH_TOKEN_KEY]: "sk-ant-oat-fake",
+      [GATEWAY_TOKEN_KEY]: "gw-tok",
+    });
+    const m = new ConnectionManager({ secrets: secrets.store, gateway: makeProbe({}) });
+    await m.clearClaudeToken();
+    expect(secrets.map.has(CLAUDE_OAUTH_TOKEN_KEY)).toBe(false);
+    expect(await m.hasClaudeToken()).toBe(false);
+    // The gateway token (a separate secret) is untouched.
+    expect(secrets.map.get(GATEWAY_TOKEN_KEY)).toBe("gw-tok");
+  });
+
+  it("exposes NO getter — no method returns the token (token discipline)", async () => {
+    const SECRET = "sk-ant-oat-MUST-NOT-LEAK";
+    const secrets = makeSecretStore();
+    const m = new ConnectionManager({ secrets: secrets.store, gateway: makeProbe({}) });
+    const stored = await m.storeClaudeToken(SECRET); // resolves void
+    const present = await m.hasClaudeToken(); // a boolean, never the token
+    expect(stored).toBeUndefined();
+    expect(present).toBe(true);
+    expect(JSON.stringify(present)).not.toContain(SECRET);
   });
 });
 

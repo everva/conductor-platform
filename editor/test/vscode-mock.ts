@@ -209,6 +209,15 @@ export const window = {
   createStatusBarItem: vi
     .fn<(...args: unknown[]) => StatusBarItem>()
     .mockImplementation(makeStatusBarItem),
+  // L1: opens an integrated terminal (the login flow runs `claude setup-token` in it). Returns
+  // a fresh fake terminal recording sendText/show; a test reads it via
+  // createTerminal.mock.results[i].value. The command string is non-secret — the printed token
+  // is copied by the user and never captured here.
+  createTerminal: vi
+    .fn<
+      (options?: unknown) => { sendText: ReturnType<typeof vi.fn>; show: ReturnType<typeof vi.fn> }
+    >()
+    .mockImplementation(() => ({ sendText: vi.fn(), show: vi.fn() })),
   // 4C-1b: opening a rendered diff document. Resolves a fake TextEditor by default; tests
   // assert it was called with the opened document + preview options. No token flows here.
   showTextDocument: vi
@@ -363,6 +372,7 @@ export function __reset(): void {
   window.showInformationMessage.mockClear();
   window.showErrorMessage.mockClear();
   window.showInputBox.mockClear();
+  window.createTerminal.mockClear();
   window.showQuickPick.mockClear();
   window.showWarningMessage.mockClear();
   window.registerWebviewViewProvider.mockClear();

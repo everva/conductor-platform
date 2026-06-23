@@ -26,6 +26,11 @@ import {
   APPROVE_COMMAND,
   CONNECT_COMMAND,
   DISCONNECT_COMMAND,
+  LOGIN_COMMAND,
+  LOGOUT_COMMAND,
+  CLAUDE_SETUP_TOKEN_CMD,
+  runLogin,
+  runLogout,
   DIFF_SCHEME,
   DIFF_STORE_CAP,
   DIFF_EVICTED_PLACEHOLDER,
@@ -105,7 +110,7 @@ function makeTaskDiff(over: Partial<TaskDiff> = {}): TaskDiff {
     ...over,
   };
 }
-import { ConnectionManager, type SecretStore } from "./connection";
+import { CLAUDE_OAUTH_TOKEN_KEY, ConnectionManager, type SecretStore } from "./connection";
 import { ControlListError } from "./controlClient";
 import { GATEWAY_TOKEN_KEY, type GatewayProbe, type TokenCheck } from "./gateway";
 
@@ -166,7 +171,7 @@ function makeControl(opts: {
 }
 
 describe("registerConductor", () => {
-  it("registers connect + disconnect + the 4 control commands + the diff scheme/command + the editor-area commands", () => {
+  it("registers connect + disconnect + login + logout + the 4 control commands + the diff scheme/command + the editor-area commands", () => {
     const { manager } = makeManager({});
     const disposables = registerConductor(
       diffApi,
@@ -176,13 +181,16 @@ describe("registerConductor", () => {
       new DiffStore(),
     );
 
-    // connect + disconnect + pause + resume + abort + approve + diff-provider + show-diff +
-    // open (N0) + openSession (N3) + openTaskDiff (P3) + newWork (Q3a) = 12. (Q0.4: no sidebar
-    // webview view; the CC + Intake panels are built only when a fleetConfig is supplied —
+    // connect + disconnect + login + logout + pause + resume + abort + approve + diff-provider +
+    // show-diff + open (N0) + openSession (N3) + openTaskDiff (P3) + newWork (Q3a) = 14. (Q0.4: no
+    // sidebar webview view; the CC + Intake panels are built only when a fleetConfig is supplied —
     // registerConductor here gets none, so no panel is pushed.)
-    expect(disposables).toHaveLength(12);
+    expect(disposables).toHaveLength(14);
     expect(commands.registerCommand).toHaveBeenCalledWith(CONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(DISCONNECT_COMMAND, expect.any(Function));
+    // L1: the editor-mediated claude login/logout commands.
+    expect(commands.registerCommand).toHaveBeenCalledWith(LOGIN_COMMAND, expect.any(Function));
+    expect(commands.registerCommand).toHaveBeenCalledWith(LOGOUT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(PAUSE_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(RESUME_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(ABORT_COMMAND, expect.any(Function));
@@ -304,6 +312,78 @@ describe("runDisconnect", () => {
 
     expect(map.has(GATEWAY_TOKEN_KEY)).toBe(false);
     expect(window.showInformationMessage).toHaveBeenCalledWith("Disconnected.");
+  });
+});
+
+describe("runLogin (L1)", () => {
+  it("opens a terminal running `claude setup-token`, prompts (password) + stores the token", async () => {
+    window.showInputBox.mockResolvedValueOnce("sk-ant-oat-secret");
+    const { manager, map } = makeManager({});
+
+    await runLogin({ window }, manager);
+
+    // The integrated terminal ran the (non-secret) mint command and was shown.
+    const term = window.createTerminal.mock.results[0]?.value as {
+      sendText: ReturnType<typeof vi.fn>;
+      show: ReturnType<typeof vi.fn>;
+    };
+    expect(term.show).toHaveBeenCalled();
+    expect(term.sendText).toHaveBeenCalledWith(CLAUDE_SETUP_TOKEN_CMD);
+    // The token was prompted MASKED and stored under the claude key (NOT the gateway key).
+    expect(window.showInputBox).toHaveBeenCalledWith(expect.objectContaining({ password: true }));
+    expect(map.get(CLAUDE_OAUTH_TOKEN_KEY)).toBe("sk-ant-oat-secret");
+    expect(map.has(GATEWAY_TOKEN_KEY)).toBe(false);
+  });
+
+  it("never echoes the token in any user-facing message (leak guard)", async () => {
+    const SECRET = "sk-ant-oat-MUST-NOT-LEAK";
+    window.showInputBox.mockResolvedValueOnce(SECRET);
+    const { manager } = makeManager({});
+
+    await runLogin({ window }, manager);
+
+    // No info/error message — nor the terminal's sendText — carries the token. The only place
+    // it reaches is SecretStorage (asserted above).
+    const allMessages = [
+      ...window.showInformationMessage.mock.calls.map((c) => c[0]),
+      ...window.showErrorMessage.mock.calls.map((c) => c[0]),
+    ];
+    expect(allMessages.length).toBeGreaterThan(0);
+    for (const m of allMessages) {
+      expect(m).not.toContain(SECRET);
+    }
+    const term = window.createTerminal.mock.results[0]?.value as { sendText: ReturnType<typeof vi.fn> };
+    expect(JSON.stringify(term.sendText.mock.calls)).not.toContain(SECRET);
+  });
+
+  it("trims the pasted token before storing", async () => {
+    window.showInputBox.mockResolvedValueOnce("  sk-ant-oat-padded  ");
+    const { manager, map } = makeManager({});
+
+    await runLogin({ window }, manager);
+
+    expect(map.get(CLAUDE_OAUTH_TOKEN_KEY)).toBe("sk-ant-oat-padded");
+  });
+
+  it("is a quiet no-op when the paste is cancelled / empty", async () => {
+    window.showInputBox.mockResolvedValueOnce(undefined);
+    const { manager, map } = makeManager({});
+
+    await runLogin({ window }, manager);
+
+    expect(map.has(CLAUDE_OAUTH_TOKEN_KEY)).toBe(false);
+    expect(window.showInformationMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("runLogout (L1)", () => {
+  it("forgets the stored claude token and reports", async () => {
+    const { manager, map } = makeManager({ initial: { [CLAUDE_OAUTH_TOKEN_KEY]: "sk-ant-oat-x" } });
+
+    await runLogout({ window }, manager);
+
+    expect(map.has(CLAUDE_OAUTH_TOKEN_KEY)).toBe(false);
+    expect(window.showInformationMessage).toHaveBeenCalledWith("Conductor login cleared.");
   });
 });
 
@@ -1186,9 +1266,11 @@ describe("activate", () => {
     });
     // Q3a (ADR-0046): the Intake "New Work" window command is registered.
     expect(commands.registerCommand).toHaveBeenCalledWith(NEW_WORK_COMMAND, expect.any(Function));
-    // 24 (post-Q2) + Q3a's two: the newWork command + the Intake panel (built with a fleetConfig)
-    // = 26.
-    expect(subscriptions).toHaveLength(26);
+    // L1: the editor-mediated claude login/logout commands are registered too.
+    expect(commands.registerCommand).toHaveBeenCalledWith(LOGIN_COMMAND, expect.any(Function));
+    expect(commands.registerCommand).toHaveBeenCalledWith(LOGOUT_COMMAND, expect.any(Function));
+    // 26 (post-Q3a) + L1's two new commands (login + logout) = 28.
+    expect(subscriptions).toHaveLength(28);
   });
 
   it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {
