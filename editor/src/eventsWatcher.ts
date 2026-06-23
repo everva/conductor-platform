@@ -47,6 +47,9 @@ export interface FeedEvent {
   // The granular progress step (provisioning|developing|verifying) — the event's coarse Phase is
   // a valid events.Phase (plan/develop/verify), so the precise step rides in the payload.
   readonly step?: string;
+  // The ORIGINAL parsed event object (token-FREE: gateway events never carry a token), retained so
+  // the live Stream can drill down to the full detailed JSON on demand. Not rendered by default.
+  readonly raw?: unknown;
 }
 
 /**
@@ -243,5 +246,7 @@ export function toFeedEvent(x: unknown): FeedEvent | undefined {
     ...(typeof p.result === "string" && p.result !== "" ? { result: p.result } : {}),
     ...(typeof p.summary === "string" && p.summary !== "" ? { summary: p.summary } : {}),
     ...(typeof p.step === "string" && p.step !== "" ? { step: p.step } : {}),
+    // Retain the original object for the Stream's JSON drill-down (token-free gateway event).
+    raw: x,
   };
 }

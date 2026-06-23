@@ -3,7 +3,7 @@
 // network. Token-free by construction (the provider only ever sees FeedEvents).
 import { describe, expect, it } from "vitest";
 import { __reset } from "../test/vscode-mock";
-import { EventsTreeProvider, eventKindPresentation, eventShortTime } from "./eventsTree";
+import { EventsTreeProvider, eventKindPresentation, eventShortTime, eventContextValue, SHOW_EVENT_JSON_COMMAND } from "./eventsTree";
 import type { EventsWatcher, FeedEvent } from "./eventsWatcher";
 
 __reset();
@@ -47,21 +47,36 @@ describe("EventsTreeProvider", () => {
     expect(provider.getChildren(ev({ id: "a", kind: "diff" }))).toEqual([]);
   });
 
-  it("getTreeItem renders 'phase / kind', a 'project·task · time' detail, an icon, and contextValue", () => {
+  it("renders a readable STREAM line (time + plain text), task in the detail, icon, click→JSON", () => {
     const provider = new EventsTreeProvider(stubWatcher([]));
     const item = provider.getTreeItem(
-      ev({ id: "e3", kind: "decision", phase: "review", project: "web-shop", task: "T-2", ts: "2026-06-22T10:05:09Z" }),
+      ev({ id: "e3", kind: "intervention-needed", phase: "review", project: "web-shop", task: "T-2", ts: "2026-06-22T10:05:09Z" }),
     );
-    expect(item.label).toBe("review / decision");
-    expect(item.description).toBe("web-shop·T-2 · 10:05:09");
-    expect((item.iconPath as { id: string }).id).toBe("shield");
-    expect(item.contextValue).toBe("conductorEvent");
+    // Human line prefixed with the time — not "phase / kind" jargon.
+    expect(item.label).toBe("10:05:09  Onay bekliyor");
+    expect(item.description).toBe("web-shop·T-2"); // locator (time moved into the label)
+    expect((item.iconPath as { id: string }).id).toBe("bell");
+    // Click opens the full detailed JSON (drill-down).
+    expect((item.command as { command: string }).command).toBe(SHOW_EVENT_JSON_COMMAND);
+    // intervention-needed → the review action class.
+    expect(item.contextValue).toBe("conductorEvent.review");
   });
 
-  it("falls back to just the kind when there is no phase, and drops the task when absent", () => {
+  it("humanizes other kinds and drops the task from the detail when absent", () => {
     const provider = new EventsTreeProvider(stubWatcher([]));
-    const item = provider.getTreeItem(ev({ id: "e4", kind: "health", phase: "", task: "" }));
-    expect(item.label).toBe("health");
-    expect(item.description).toBe("web-shop · 10:05:00");
+    const item = provider.getTreeItem(ev({ id: "e4", kind: "merge", phase: "merge", task: "" }));
+    expect(item.label).toBe("10:05:00  Birleştirildi ✓");
+    expect(item.description).toBe("web-shop"); // no task
+  });
+});
+
+describe("eventContextValue", () => {
+  it("classifies actionable rows for the inline menus", () => {
+    expect(eventContextValue(ev({ id: "1", kind: "intervention-needed" }))).toBe("conductorEvent.review");
+    expect(eventContextValue(ev({ id: "2", kind: "decision", result: "blocked" }))).toBe("conductorEvent.blocked");
+    expect(eventContextValue(ev({ id: "3", kind: "decision", result: "changes-requested" }))).toBe("conductorEvent.blocked");
+    expect(eventContextValue(ev({ id: "4", kind: "diff" }))).toBe("conductorEvent.diff");
+    expect(eventContextValue(ev({ id: "5", kind: "decision", result: "pass" }))).toBe("conductorEvent"); // passing decision: not actionable here
+    expect(eventContextValue(ev({ id: "6", kind: "progress" }))).toBe("conductorEvent");
   });
 });

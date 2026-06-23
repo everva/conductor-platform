@@ -83,9 +83,10 @@ const evt = (over: Partial<FeedEvent> & { kind: string }): Record<string, unknow
 
 describe("toFeedEvent", () => {
   it("distills a full gateway event and tolerates extras", () => {
-    expect(toFeedEvent({ id: "e1", ts: "t", project: "p", task: "T", phase: "review", kind: "diff", payload: {} })).toEqual(
-      { id: "e1", ts: "t", project: "p", task: "T", phase: "review", kind: "diff" },
-    );
+    const input = { id: "e1", ts: "t", project: "p", task: "T", phase: "review", kind: "diff", payload: {} };
+    // The distilled FeedEvent carries the locating/classifying fields PLUS the original object as
+    // `raw` (token-free; for the Stream's JSON drill-down).
+    expect(toFeedEvent(input)).toEqual({ id: "e1", ts: "t", project: "p", task: "T", phase: "review", kind: "diff", raw: input });
   });
   it("rejects non-objects and a missing/empty kind", () => {
     expect(toFeedEvent(null)).toBeUndefined();
@@ -97,13 +98,15 @@ describe("toFeedEvent", () => {
     const e = toFeedEvent({ kind: "log", ts: "2026", project: "p", task: "T", phase: "develop" });
     expect(e?.id).toBe("2026:p:T:develop:log");
     // A bare event (only kind): id is synthesized from the (empty) parts; fields default to "".
-    expect(toFeedEvent({ kind: "log" })).toEqual({
+    const bare = { kind: "log" };
+    expect(toFeedEvent(bare)).toEqual({
       id: "::::log",
       ts: "",
       project: "",
       task: "",
       phase: "",
       kind: "log",
+      raw: bare,
     });
   });
 });

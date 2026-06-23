@@ -9,9 +9,43 @@
 // kind); this module never sees the token and renders only those fields.
 import * as vscode from "vscode";
 import type { EventsWatcher, FeedEvent } from "./eventsWatcher";
+import { describeEvent, type ActivityLevel } from "./activity";
 
 /** View id of the native events tree (contributed in package.json, panel container). */
 export const EVENTS_VIEW_ID = "conductor.events";
+
+/** Command (registered in extension.ts) that opens an event's full detailed JSON in a read-only
+ * virtual document — the "istersem detaylı json lara bakarım" drill-down. */
+export const SHOW_EVENT_JSON_COMMAND = "conductor.showEventJson";
+
+/** Severity → ThemeColor id for the stream row (drives the at-a-glance color of each line). */
+function levelColor(level: ActivityLevel): string | undefined {
+  switch (level) {
+    case "attention":
+      return "charts.yellow";
+    case "done":
+      return "charts.green";
+    case "active":
+      return "charts.blue";
+    default:
+      return undefined; // idle → default foreground (log/health noise)
+  }
+}
+
+/** The actionable class of an event → its contextValue, so package.json `view/item/context` shows
+ * the right inline actions (approve/retry/abort/open-diff). Pure; exported for tests. */
+export function eventContextValue(ev: FeedEvent): string {
+  if (ev.kind === "intervention-needed") {
+    return "conductorEvent.review"; // approve / abort / open-diff
+  }
+  if (ev.kind === "decision" && (ev.result === "blocked" || ev.result === "changes-requested")) {
+    return "conductorEvent.blocked"; // retry / open-diff
+  }
+  if (ev.kind === "diff") {
+    return "conductorEvent.diff"; // open-diff
+  }
+  return "conductorEvent";
+}
 
 /**
  * Pure event-kind → presentation map (codicon id + optional ThemeColor id). GROUNDED in the
@@ -75,19 +109,24 @@ export class EventsTreeProvider implements vscode.TreeDataProvider<FeedEvent> {
   }
 
   getTreeItem(ev: FeedEvent): vscode.TreeItem {
+    // The STREAM line: a plain-language description (not "phase / kind" jargon) prefixed with the
+    // time, so the panel reads like a readable activity log. The full JSON is one click away.
+    const { text, level } = describeEvent(ev);
+    const time = eventShortTime(ev.ts);
     const item = new vscode.TreeItem(
-      ev.phase ? `${ev.phase} / ${ev.kind}` : ev.kind,
+      time ? `${time}  ${text}` : text,
       vscode.TreeItemCollapsibleState.None,
     );
-    const pres = eventKindPresentation(ev.kind);
-    item.iconPath = pres.color
-      ? new vscode.ThemeIcon(pres.icon, new vscode.ThemeColor(pres.color))
-      : new vscode.ThemeIcon(pres.icon);
-    const loc = ev.task ? `${ev.project}·${ev.task}` : ev.project;
-    const time = eventShortTime(ev.ts);
-    item.description = time ? `${loc} · ${time}` : loc;
-    item.tooltip = `${ev.phase ? `${ev.phase} / ` : ""}${ev.kind} — ${loc}${time ? ` @ ${time}` : ""}`;
-    item.contextValue = "conductorEvent";
+    // Recognizable kind icon, colored by severity (yellow=needs-you, green=done, blue=active).
+    const icon = eventKindPresentation(ev.kind).icon;
+    const color = levelColor(level);
+    item.iconPath = color ? new vscode.ThemeIcon(icon, new vscode.ThemeColor(color)) : new vscode.ThemeIcon(icon);
+    // The locator (which task) rides in the dimmed description.
+    item.description = ev.task ? `${ev.project}·${ev.task}` : ev.project;
+    item.tooltip = `${text}\n${ev.phase ? `${ev.phase} / ` : ""}${ev.kind} — ${item.description}${time ? ` @ ${time}` : ""}\n(click for full JSON)`;
+    item.contextValue = eventContextValue(ev);
+    // Click → open the full detailed JSON (drill-down). The command reads the retained raw event.
+    item.command = { command: SHOW_EVENT_JSON_COMMAND, title: "Show event JSON", arguments: [ev] };
     return item;
   }
 

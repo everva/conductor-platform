@@ -123,7 +123,24 @@ export class ControlClient {
   }
 
   /**
-   * Performs an authed control POST and maps the outcome onto a ControlResult:
+   * `POST {base}/projects/{id}/tasks/{task}/retry` (authed) — reset a BLOCKED task to ready so the
+   * agent re-runs it. 409 → "conflict" (the task is not blocked). Task-scoped path, so it uses the
+   * shared poster directly rather than the `/{action}` shape.
+   */
+  retry(projectId: string, taskId: string): Promise<ControlResult> {
+    return this.#postTo(`/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/retry`);
+  }
+
+  /** Project-scoped control POST → `/projects/{id}/{action}` (pause/resume/abort/approve). */
+  #post(projectId: string, action: ControlAction, body?: unknown): Promise<ControlResult> {
+    // Project ids come from the gateway's own listProjects, but encode anyway so the path
+    // is well-formed regardless of the id's characters.
+    return this.#postTo(`/projects/${encodeURIComponent(projectId)}/${action}`, body);
+  }
+
+  /**
+   * Performs an authed control POST to an arbitrary gateway path and maps the outcome onto a
+   * ControlResult:
    *   no token        → not-connected (status 0; no request sent)
    *   2xx             → ok (with best-effort parsed body)
    *   401             → unauthorized
@@ -132,14 +149,12 @@ export class ControlClient {
    * `body` is sent as JSON only when provided (so optional-body endpoints get no body).
    * The token is placed ONLY in the Authorization header; it never leaves this method.
    */
-  async #post(projectId: string, action: ControlAction, body?: unknown): Promise<ControlResult> {
+  async #postTo(path: string, body?: unknown): Promise<ControlResult> {
     const token = await this.#tokens.getToken();
     if (token === undefined || token === "") {
       return { ok: false, reason: "not-connected", status: 0 };
     }
-    // Project ids come from the gateway's own listProjects, but encode anyway so the path
-    // is well-formed regardless of the id's characters.
-    const url = `${this.#baseUrl}/projects/${encodeURIComponent(projectId)}/${action}`;
+    const url = `${this.#baseUrl}${path}`;
     const init: RequestInit =
       body === undefined
         ? { method: "POST", headers: authHeader(token) }

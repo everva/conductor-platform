@@ -80,6 +80,7 @@ import {
   runApproveTask,
   runConnect,
   runControl,
+  runRetry,
   runDisconnect,
   runShowDiff,
   runShowDiffForTask,
@@ -165,6 +166,7 @@ function makeControl(opts: {
   resume: ReturnType<typeof vi.fn>;
   abort: ReturnType<typeof vi.fn>;
   approve: ReturnType<typeof vi.fn>;
+  retry: ReturnType<typeof vi.fn>;
 } {
   const result: ControlResult = opts.result ?? { ok: true, body: {} };
   const listProjects = vi.fn(() =>
@@ -176,6 +178,7 @@ function makeControl(opts: {
     resume: vi.fn(() => Promise.resolve(result)),
     abort: vi.fn(() => Promise.resolve(result)),
     approve: vi.fn(() => Promise.resolve(result)),
+    retry: vi.fn(() => Promise.resolve(result)),
   };
 }
 
@@ -191,10 +194,10 @@ describe("registerConductor", () => {
     );
 
     // connect + disconnect + login + logout + pause + resume + abort + approve + diff-provider +
-    // show-diff + open (N0) + openSession (N3) + openTaskDiff (P3) + newWork (Q3a) = 14. (Q0.4: no
-    // sidebar webview view; the CC + Intake panels are built only when a fleetConfig is supplied —
-    // registerConductor here gets none, so no panel is pushed.)
-    expect(disposables).toHaveLength(14);
+    // show-diff + open (N0) + openSession (N3) + openTaskDiff (P3) + showEventJson + retryTask (A/B) +
+    // newWork (Q3a) = 16. (Q0.4: no sidebar webview view; the CC + Intake panels are built only when a
+    // fleetConfig is supplied — registerConductor here gets none, so no panel is pushed.)
+    expect(disposables).toHaveLength(16);
     expect(commands.registerCommand).toHaveBeenCalledWith(CONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(DISCONNECT_COMMAND, expect.any(Function));
     // L1: the editor-mediated claude login/logout commands.
@@ -663,6 +666,41 @@ describe("runControl", () => {
       "pause",
     );
     expectNoMessageContains(TOKEN);
+  });
+});
+
+describe("runRetry", () => {
+  it("confirms, retries the blocked task, then refreshes the sessions tree", async () => {
+    window.showWarningMessage.mockResolvedValueOnce("Yes");
+    const control = makeControl();
+
+    await runRetry({ commands, window }, control, "optiway", "VARDIYE-3");
+
+    expect(window.showWarningMessage).toHaveBeenCalledWith("Retry VARDIYE-3?", { modal: true }, "Yes");
+    expect(control.retry).toHaveBeenCalledWith("optiway", "VARDIYE-3");
+    expect(window.showInformationMessage).toHaveBeenCalledWith("Retry requested for VARDIYE-3 (re-queued).");
+    expect(commands.executeCommand).toHaveBeenCalledWith(REFRESH_SESSIONS_COMMAND);
+  });
+
+  it("declining the confirm is a quiet no-op (no retry, no refresh)", async () => {
+    window.showWarningMessage.mockResolvedValueOnce(undefined);
+    const control = makeControl();
+
+    await runRetry({ commands, window }, control, "optiway", "VARDIYE-3");
+
+    expect(control.retry).not.toHaveBeenCalled();
+    expect(commands.executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("a 409 conflict reports 'only a blocked task can be retried' and does NOT refresh", async () => {
+    window.showWarningMessage.mockResolvedValueOnce("Yes");
+    const control = makeControl({ result: { ok: false, reason: "conflict", status: 409 } });
+
+    await runRetry({ commands, window }, control, "optiway", "T-running");
+
+    expect(control.retry).toHaveBeenCalledWith("optiway", "T-running");
+    expect(window.showWarningMessage).toHaveBeenCalledWith("Only a blocked task can be retried.", {}, "OK");
+    expect(commands.executeCommand).not.toHaveBeenCalled();
   });
 });
 
@@ -1360,8 +1398,9 @@ describe("activate", () => {
       treeDataProvider: expect.anything(),
     });
     // 33 (post-diagnostics) + Activity's three (view + provider + nowBar status item) = 36,
-    // + the M2 auto-reconnect controller's dispose = 37.
-    expect(subscriptions).toHaveLength(37);
+    // + the M2 auto-reconnect controller's dispose = 37, + the A/B Stream commands
+    // (showEventJson + retryTask) = 39.
+    expect(subscriptions).toHaveLength(39);
   });
 
   it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {

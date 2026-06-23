@@ -37,7 +37,8 @@ import { FleetReadClient } from "./fleetReadClient";
 import { SessionsTreeProvider, SESSIONS_VIEW_ID, nodeProjectId, nodeTaskRef } from "./sessionsTree";
 import { EventsWatcher } from "./eventsWatcher";
 import { ReconnectController } from "./reconnect";
-import { EventsTreeProvider, EVENTS_VIEW_ID } from "./eventsTree";
+import { EventsTreeProvider, EVENTS_VIEW_ID, SHOW_EVENT_JSON_COMMAND } from "./eventsTree";
+import type { FeedEvent } from "./eventsWatcher";
 import { DiagnosticsTreeProvider, DIAGNOSTICS_VIEW_ID } from "./diagnosticsTree";
 import { buildDiagnosticRows, type DiagSnapshot } from "./diagnostics";
 import { ActivityTreeProvider, ACTIVITY_VIEW_ID } from "./activityTree";
@@ -119,6 +120,10 @@ export const OPEN_TASK_DIFF_COMMAND = "conductor.openTaskDiff";
 /** Command id that opens the Intake "New Work" window (Faz-Q / Q3a) — Intake as its OWN
  * editor-area surface instead of a buried cockpit tab (the user's "intake ayrı bir window"). */
 export const NEW_WORK_COMMAND = "conductor.newWork";
+
+/** Command id that resets a BLOCKED task to ready (re-run) — gateway POST .../retry. Invoked from
+ * a blocked sessions-tree task node or a blocked decision row in the live Stream. */
+export const RETRY_TASK_COMMAND = "conductor.retryTask";
 
 /** WebviewPanel viewType + tab title of the editor-area Intake window (Q3a). A singleton panel
  * (its own tab) that mounts the standalone IntakeChat surface (data-surface="intake"). */
@@ -1441,6 +1446,7 @@ export interface Control {
   resume(projectId: string): Promise<ControlResult>;
   abort(projectId: string): Promise<ControlResult>;
   approve(projectId: string, taskId?: string): Promise<ControlResult>;
+  retry(projectId: string, taskId: string): Promise<ControlResult>;
 }
 
 /** Re-exported from controlClient so callers/tests reference one shape. */
@@ -1573,6 +1579,44 @@ function conflictMessage(action: ControlAction): string {
 }
 
 /**
+ * Retries a BLOCKED task: confirm → authed POST .../retry → refresh the sessions tree so the
+ * status flips visibly (blocked→ready). Token-free messaging (the ControlResult carries only a
+ * closed reason). A 409 means the task is not blocked (already running/done/awaiting). Exported
+ * for tests; the token stays in the ControlClient's Authorization header.
+ */
+export async function runRetry(
+  api: VscodeApi,
+  control: Control,
+  project: string,
+  task: string,
+): Promise<void> {
+  const choice = await api.window.showWarningMessage(`Retry ${task}?`, { modal: true }, "Yes");
+  if (choice !== "Yes") {
+    return; // declined — quiet no-op.
+  }
+  const result = await control.retry(project, task);
+  if (result.ok) {
+    await api.window.showInformationMessage(`Retry requested for ${task} (re-queued).`);
+    void api.commands.executeCommand(REFRESH_SESSIONS_COMMAND);
+    return;
+  }
+  switch (result.reason) {
+    case "conflict":
+      await api.window.showWarningMessage("Only a blocked task can be retried.", {}, "OK");
+      return;
+    case "unauthorized":
+      await api.window.showErrorMessage("The gateway rejected the stored token. Reconnect.");
+      return;
+    case "not-connected":
+      await api.window.showErrorMessage("Connect to the gateway first.");
+      return;
+    case "unreachable":
+      await api.window.showErrorMessage("Could not reach the gateway.");
+      return;
+  }
+}
+
+/**
  * Wires the extension's contributions onto the given (real or mocked) vscode API and
  * returns the created disposables. Kept separate from `activate` so unit tests can call
  * it with a mock + a manager and assert the registration + command behavior without a
@@ -1609,7 +1653,8 @@ export function registerConductor(
     api.commands.registerCommand(controlCommandId(action), (arg?: unknown) => {
       // P3: from the sessions-tree project context menu VS Code passes the clicked node →
       // act on THAT project (no quick-pick). From the palette `arg` is undefined → list+pick.
-      void runControl(api, control, action, nodeProjectId(arg));
+      // A live-Stream review row passes a FeedEvent → projectIdFromArg resolves its project.
+      void runControl(api, control, action, projectIdFromArg(arg));
     }),
   );
   // 4C-1b: the read-only diff scheme + the show-diff command. The content provider serves the
@@ -1659,9 +1704,29 @@ export function registerConductor(
   // diff (a clear info message if none retained). Distinct from openSession (which also navigates
   // the cockpit + splits): this is the focused "just show me the change" action.
   const openTaskDiff = api.commands.registerCommand(OPEN_TASK_DIFF_COMMAND, (arg?: unknown) => {
-    const ref = nodeTaskRef(arg);
+    const ref = taskRefFromArg(arg); // tree task node OR a live-Stream diff/review row
     if (ref !== undefined) {
       void runShowDiffForTask(api, diffStore, ref.project, ref.task, fetchFullDiff);
+    }
+  });
+  // A1/A3: drill a Stream row down to its FULL detailed JSON in a read-only doc — the user's
+  // "istersem detaylı json lara bakarım". The row carries the original token-free event (`raw`).
+  const showEventJson = api.commands.registerCommand(SHOW_EVENT_JSON_COMMAND, (arg?: unknown) => {
+    const ev = arg as FeedEvent | undefined;
+    const payload = ev?.raw ?? ev ?? {};
+    // Open the full event as a read-only JSON doc. Uses the global vscode API directly (the injected
+    // `api.workspace.openTextDocument` is narrowed to diff: URIs); this is a runtime drill-down
+    // feature covered by the electron smoke, not the mocked unit path.
+    void vscode.workspace
+      .openTextDocument({ content: JSON.stringify(payload, null, 2), language: "json" })
+      .then((doc) => vscode.window.showTextDocument(doc, { preview: true }));
+  });
+  // B/A3: retry a BLOCKED task (reset→ready) from a blocked tree node OR a blocked Stream row.
+  // Confirm-gated host-side authed POST; refreshes the tree so the status flips visibly.
+  const retryTask = api.commands.registerCommand(RETRY_TASK_COMMAND, (arg?: unknown) => {
+    const ref = taskRefFromArg(arg);
+    if (ref !== undefined) {
+      void runRetry(api, control, ref.project, ref.task);
     }
   });
   // Q3a (ADR-0046): the editor-area Intake "New Work" window — Intake as its OWN tab (the user's
@@ -1685,6 +1750,8 @@ export function registerConductor(
     open,
     openSession,
     openTaskDiff,
+    showEventJson,
+    retryTask,
     newWork,
   ];
   // Dispose the editor-area panels (+ their bridges) on deactivate when they were built.
@@ -1695,6 +1762,29 @@ export function registerConductor(
     disposables.push(intakePanel);
   }
   return disposables;
+}
+
+/** Extracts a {project, task} ref from EITHER a sessions-tree task node (nodeTaskRef) OR a live
+ * Stream FeedEvent (flat .project/.task strings), so the task actions (retry / open-diff) work from
+ * both surfaces. Returns undefined when neither shape carries a task. */
+function taskRefFromArg(arg: unknown): { readonly project: string; readonly task: string } | undefined {
+  const node = nodeTaskRef(arg);
+  if (node !== undefined) {
+    return node;
+  }
+  if (arg !== null && typeof arg === "object") {
+    const e = arg as { project?: unknown; task?: unknown };
+    if (typeof e.project === "string" && e.project !== "" && typeof e.task === "string" && e.task !== "") {
+      return { project: e.project, task: e.task };
+    }
+  }
+  return undefined;
+}
+
+/** Project id from a tree node OR a Stream FeedEvent — so the project-level control actions
+ * (approve/abort) can be invoked from a Stream row too. */
+function projectIdFromArg(arg: unknown): string | undefined {
+  return nodeProjectId(arg) ?? taskRefFromArg(arg)?.project;
 }
 
 /** Maps a control action to its contributed command id (kept in lockstep with the

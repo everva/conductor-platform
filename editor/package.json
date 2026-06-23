@@ -159,6 +159,18 @@
         "title": "Conductor: Open Task Diff",
         "category": "Conductor",
         "icon": "$(git-compare)"
+      },
+      {
+        "command": "conductor.showEventJson",
+        "title": "Conductor: Show Event JSON",
+        "category": "Conductor",
+        "icon": "$(json)"
+      },
+      {
+        "command": "conductor.retryTask",
+        "title": "Conductor: Retry Blocked Task",
+        "category": "Conductor",
+        "icon": "$(debug-restart)"
       }
     ],
     "menus": {
@@ -177,12 +189,12 @@
       "view/item/context": [
         {
           "command": "conductor.openSession",
-          "when": "view == conductor.sessions && viewItem == conductorTask",
+          "when": "view == conductor.sessions && viewItem =~ /conductorTask/",
           "group": "navigation@1"
         },
         {
           "command": "conductor.openTaskDiff",
-          "when": "view == conductor.sessions && viewItem == conductorTask",
+          "when": "view == conductor.sessions && viewItem =~ /conductorTask/",
           "group": "navigation@2"
         },
         {
@@ -204,6 +216,36 @@
           "command": "conductor.abort",
           "when": "view == conductor.sessions && viewItem == conductorProject",
           "group": "1_control@4"
+        },
+        {
+          "command": "conductor.retryTask",
+          "when": "view == conductor.sessions && viewItem == conductorTaskBlocked",
+          "group": "navigation@3"
+        },
+        {
+          "command": "conductor.showEventJson",
+          "when": "view == conductor.events",
+          "group": "navigation@1"
+        },
+        {
+          "command": "conductor.openTaskDiff",
+          "when": "view == conductor.events && viewItem =~ /conductorEvent\\.(review|blocked|diff)/",
+          "group": "navigation@2"
+        },
+        {
+          "command": "conductor.retryTask",
+          "when": "view == conductor.events && viewItem == conductorEvent.blocked",
+          "group": "1_control@1"
+        },
+        {
+          "command": "conductor.approve",
+          "when": "view == conductor.events && viewItem == conductorEvent.review",
+          "group": "1_control@1"
+        },
+        {
+          "command": "conductor.abort",
+          "when": "view == conductor.events && viewItem == conductorEvent.review",
+          "group": "1_control@2"
         }
       ],
       "commandPalette": [
@@ -213,6 +255,14 @@
         },
         {
           "command": "conductor.openTaskDiff",
+          "when": "false"
+        },
+        {
+          "command": "conductor.showEventJson",
+          "when": "false"
+        },
+        {
+          "command": "conductor.retryTask",
           "when": "false"
         }
       ]
