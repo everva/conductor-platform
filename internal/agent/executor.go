@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -153,7 +155,7 @@ func stateTask(t agentclient.TaskInfo) statestore.Task {
 
 // Run provisions a worktree, develops (performer), and verifies (gate). The worktree
 // is held for a later Merge.
-func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, _ agentclient.ScenarioInfo) (RunOutcome, error) {
+func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, scenario agentclient.ScenarioInfo) (RunOutcome, error) {
 	project := e.project(taskInfo.ProjectID)
 	task := stateTask(taskInfo)
 
@@ -165,6 +167,14 @@ func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, _
 	e.mu.Lock()
 	e.ws[task.ID] = ws
 	e.mu.Unlock()
+
+	// The scenario (acceptance) lives in the gateway, not the checkout — so the agent writes it
+	// into the worktree as .conductor/TASK.md for the performer to read (the develop prompt points
+	// claude at it). Best-effort: a write failure shouldn't sink the run (claude still has the
+	// stdin contract); log via the returned error only if it's a hard FS error.
+	if err := writeTaskBrief(ws.Path, taskInfo, scenario); err != nil {
+		return RunOutcome{}, fmt.Errorf("write task brief: %w", err)
+	}
 
 	e.setPhase(task.ID, "developing")
 	verdict, err := e.eng.Develop(ctx, task, ws)
@@ -246,6 +256,32 @@ func (e *RealExecutor) Cleanup(ctx context.Context, taskInfo agentclient.TaskInf
 	delete(e.ws, taskInfo.ID)
 	delete(e.phase, taskInfo.ID)
 	e.mu.Unlock()
+}
+
+// writeTaskBrief writes the scenario (title + acceptance) into the worktree as
+// .conductor/TASK.md so the performer can read WHAT to build (the scenario lives in the gateway,
+// not the checkout — gateway-mediated model). The develop prompt points claude at this file. The
+// brief is the director-authored task spec; the prompt instructs claude not to commit it.
+func writeTaskBrief(wsPath string, task agentclient.TaskInfo, scenario agentclient.ScenarioInfo) error {
+	dir := filepath.Join(wsPath, ".conductor")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	title := scenario.Title
+	if title == "" {
+		title = task.ID
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s\n\n", title)
+	fmt.Fprintf(&b, "Task: %s · Scenario: %s · Lane: %s · Tier: %s\n\n", task.ID, scenario.ID, task.Lane, task.Tier)
+	b.WriteString("## Acceptance criteria\n")
+	if len(scenario.Acceptance) == 0 {
+		b.WriteString("- (none provided — use your judgement for a minimal, correct change)\n")
+	}
+	for _, a := range scenario.Acceptance {
+		fmt.Fprintf(&b, "- %s\n", a)
+	}
+	return os.WriteFile(filepath.Join(dir, "TASK.md"), []byte(b.String()), 0o644)
 }
 
 // toChecks maps engine.Check (the gate evidence) onto the wire Check shape.
