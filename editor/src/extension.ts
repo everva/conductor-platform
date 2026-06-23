@@ -37,6 +37,8 @@ import { FleetReadClient } from "./fleetReadClient";
 import { SessionsTreeProvider, SESSIONS_VIEW_ID, nodeProjectId, nodeTaskRef } from "./sessionsTree";
 import { EventsWatcher } from "./eventsWatcher";
 import { EventsTreeProvider, EVENTS_VIEW_ID } from "./eventsTree";
+import { DiagnosticsTreeProvider, DIAGNOSTICS_VIEW_ID } from "./diagnosticsTree";
+import { buildDiagnosticRows, type DiagSnapshot } from "./diagnostics";
 
 /** Command id for the gateway-connect action. */
 export const CONNECT_COMMAND = "conductor.connect";
@@ -97,6 +99,9 @@ export const OPEN_COMMAND = "conductor.open";
 /** Command id that refetches the native "Conductors" sessions tree (N2). Surfaced as the
  * view's title refresh button + the command palette. */
 export const REFRESH_SESSIONS_COMMAND = "conductor.refreshSessions";
+
+/** Command id that re-probes the native Diagnostics (Status) tree — title button + palette. */
+export const REFRESH_DIAGNOSTICS_COMMAND = "conductor.refreshDiagnostics";
 
 /** Command id that deep-links the Command Center to a specific session (N3). Invoked by a
  * sessions-tree task click with `[projectId, taskId]` arguments: it opens/reveals the panel
@@ -1919,6 +1924,51 @@ export function activate(context: vscode.ExtensionContext): void {
     treeDataProvider: eventsTree,
   });
 
+  // Native Diagnostics (Status) tree: a token-FREE, at-a-glance read of the editor↔gateway↔
+  // credential wiring for debugging (why isn't the login reaching the gateway?). It gathers a
+  // snapshot host-side — connection state, /healthz + /readyz reachability, bearer + claude-token
+  // PRESENCE (booleans), and a token-free credential presence probe — then renders DiagRows. The
+  // base URL is normalized once; all probes are best-effort (never throw into the tree).
+  const diagBase = normalizeBaseUrl(gatewayUrl);
+  const probe = async (path: string): Promise<"ok" | "fail" | "unknown"> => {
+    if (!diagBase) {
+      return "unknown";
+    }
+    try {
+      const r = await fetch(`${diagBase}${path}`);
+      return r.ok ? "ok" : "fail";
+    } catch {
+      return "fail";
+    }
+  };
+  const collectSnapshot = async (): Promise<DiagSnapshot> => {
+    const [healthz, readyz, bearer, claudeLocal, claudeOnGateway] = await Promise.all([
+      probe("/healthz"),
+      probe("/readyz"),
+      context.secrets.get(GATEWAY_TOKEN_KEY).then((t) => t !== undefined && t !== ""),
+      manager.hasClaudeToken(),
+      credential.status(CLAUDE_CREDENTIAL_KIND),
+    ]);
+    return {
+      gatewayUrl,
+      connection: manager.state,
+      healthz,
+      readyz,
+      bearerStored: bearer,
+      claudeLocal,
+      claudeOnGateway,
+    };
+  };
+  const diagnosticsProvider = new DiagnosticsTreeProvider(async () =>
+    buildDiagnosticRows(await collectSnapshot()),
+  );
+  const diagnosticsView = vscode.window.createTreeView(DIAGNOSTICS_VIEW_ID, {
+    treeDataProvider: diagnosticsProvider,
+  });
+  const refreshDiagnostics = vscode.commands.registerCommand(REFRESH_DIAGNOSTICS_COMMAND, () => {
+    diagnosticsProvider.refresh();
+  });
+
   // Push the intervention + diff status-bar items + dispose-wrappers that stop the host WS
   // subscriptions on deactivate (so the host sockets are torn down with the extension), plus the
   // N2 sessions tree (view + refresh command + the provider's change emitter).
@@ -1937,6 +1987,9 @@ export function activate(context: vscode.ExtensionContext): void {
     sessionsProvider,
     eventsView,
     eventsTree,
+    diagnosticsView,
+    refreshDiagnostics,
+    diagnosticsProvider,
     ...disposables,
   );
 

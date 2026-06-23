@@ -34,6 +34,16 @@ export type CredentialResult =
       status: number;
     };
 
+/** Outcome of a presence probe ({@link CredentialClient.status}) — derived from the HTTP status
+ * ONLY; the token body is never read. Drives the diagnostics panel's "claude on gateway" row. */
+export type CredentialStatus =
+  | "present"
+  | "absent"
+  | "unauthorized"
+  | "not-configured"
+  | "not-connected"
+  | "unreachable";
+
 /**
  * Host-side authed credential client. Construct one per activation with the normalized gateway
  * base URL + a TokenProvider reading the GATEWAY bearer from SecretStorage; tests pass a fake
@@ -63,6 +73,40 @@ export class CredentialClient {
   /** Removes the stored credential (logout propagation): `DELETE {base}/agent/credentials/{kind}`. */
   remove(kind: string): Promise<CredentialResult> {
     return this.#send("DELETE", kind);
+  }
+
+  /**
+   * Presence probe for the diagnostics panel: `GET {base}/agent/credentials/{kind}`, mapping ONLY
+   * the HTTP status → a CredentialStatus. TOKEN DISCIPLINE: the gateway returns the decrypted token
+   * in the body, but this NEVER reads it (no `.json()`/`.text()`) — only `res.status` — so the
+   * token never enters the editor here. Used to answer "is the claude login on the gateway?".
+   */
+  async status(kind: string): Promise<CredentialStatus> {
+    const token = await this.#tokens.getToken();
+    if (token === undefined || token === "") {
+      return "not-connected";
+    }
+    const url = `${this.#baseUrl}/agent/credentials/${encodeURIComponent(kind)}`;
+    let res: Response;
+    try {
+      res = await this.#fetch(url, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
+    } catch {
+      return "unreachable";
+    }
+    // Body deliberately ignored — we read ONLY the status (the token must not enter the editor).
+    if (res.ok) {
+      return "present";
+    }
+    if (res.status === 404) {
+      return "absent";
+    }
+    if (res.status === 401) {
+      return "unauthorized";
+    }
+    if (res.status === 501 || res.status === 503) {
+      return "not-configured";
+    }
+    return "unreachable";
   }
 
   /**

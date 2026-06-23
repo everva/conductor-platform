@@ -98,6 +98,44 @@ describe("CredentialClient.remove", () => {
   });
 });
 
+describe("CredentialClient.status (presence probe)", () => {
+  it("maps HTTP status → CredentialStatus and NEVER reads the body (token-free)", async () => {
+    const cases: Array<[number, string]> = [
+      [200, "present"],
+      [404, "absent"],
+      [401, "unauthorized"],
+      [503, "not-configured"],
+      [501, "not-configured"],
+      [500, "unreachable"],
+    ];
+    for (const [code, want] of cases) {
+      let bodyRead = false;
+      const fn = fetchMock(() => {
+        // A Response whose json()/text() flips a flag if the client ever reads it (it must not).
+        const res = new Response(JSON.stringify({ token: CLAUDE_SENTINEL }), { status: code });
+        const orig = res.json.bind(res);
+        (res as unknown as { json: () => Promise<unknown> }).json = () => {
+          bodyRead = true;
+          return orig();
+        };
+        return res;
+      });
+      const client = new CredentialClient(BASE, tokenProvider(), fn);
+      const got = await client.status(KIND);
+      expect(got).toBe(want);
+      expect(bodyRead).toBe(false); // the token body must never be read by a presence probe
+    }
+  });
+
+  it("no gateway token → not-connected; thrown fetch → unreachable", async () => {
+    const noTok = new CredentialClient(BASE, noTokenProvider(), fetchMock(() => new Response(null, { status: 200 })));
+    expect(await noTok.status(KIND)).toBe("not-connected");
+    const thrown = new CredentialClient(BASE, tokenProvider(), (() =>
+      Promise.reject(new Error("net"))) as unknown as typeof fetch);
+    expect(await thrown.status(KIND)).toBe("unreachable");
+  });
+});
+
 describe("token-leak guard", () => {
   it("neither the gateway bearer nor the uploaded claude token appears in any returned value", async () => {
     const results: unknown[] = [];

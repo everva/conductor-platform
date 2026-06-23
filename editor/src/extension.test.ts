@@ -49,6 +49,7 @@ import {
   OPEN_SESSION_COMMAND,
   OPEN_TASK_DIFF_COMMAND,
   REFRESH_SESSIONS_COMMAND,
+  REFRESH_DIAGNOSTICS_COMMAND,
   FIRST_LAUNCH_KEY,
   OPEN_CONDUCTOR_ACTION,
   APPROVE_ACTION,
@@ -90,6 +91,7 @@ import type { Intervention } from "./notifier";
 import type { TaskDiff } from "./diffObserver";
 import { SESSIONS_VIEW_ID } from "./sessionsTree";
 import { EVENTS_VIEW_ID } from "./eventsTree";
+import { DIAGNOSTICS_VIEW_ID } from "./diagnosticsTree";
 
 // The slice of the vscode API the diff flows use, assembled from the mock. Cast at the
 // seam because the headless mock is structurally (not nominally) the real `vscode` types.
@@ -1346,8 +1348,13 @@ describe("activate", () => {
     // L3: the push/remove credential commands (registered in activate, not registerConductor).
     expect(commands.registerCommand).toHaveBeenCalledWith(PUSH_CREDENTIAL_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(REMOVE_CREDENTIAL_COMMAND, expect.any(Function));
-    // 28 (post-L1) + L3's two new commands (pushCredential + removeCredential) = 30.
-    expect(subscriptions).toHaveLength(30);
+    // Diagnostics: the native Status tree view + its refresh command are registered.
+    expect(window.createTreeView).toHaveBeenCalledWith(DIAGNOSTICS_VIEW_ID, {
+      treeDataProvider: expect.anything(),
+    });
+    expect(commands.registerCommand).toHaveBeenCalledWith(REFRESH_DIAGNOSTICS_COMMAND, expect.any(Function));
+    // 30 (post-L3) + diagnostics' three (view + refresh command + provider) = 33.
+    expect(subscriptions).toHaveLength(33);
   });
 
   it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {
