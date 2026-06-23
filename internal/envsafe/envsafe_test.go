@@ -53,6 +53,32 @@ func TestSanitize_DenylistsDaemonSecretsKeepsRest(t *testing.T) {
 	}
 }
 
+// TestSanitize_PreservesClaudeOAuthToken pins the Faz L1↔L2 contract (ADR-0049): the
+// portable claude OAuth token the editor mints (`claude setup-token`) is delivered to the
+// performer via the CLAUDE_CODE_OAUTH_TOKEN env var, which the headless `claude -p` reads.
+// The performer subprocess inherits Sanitize(os.Environ()) (command_engine.execRunner), so
+// this var MUST survive sanitization. A regression here (e.g. someone adding a CLAUDE_/*_TOKEN
+// prefix to the denylist) would silently break editor-mediated login — fail loudly instead.
+func TestSanitize_PreservesClaudeOAuthToken(t *testing.T) {
+	const tok = "sk-ant-oat-fake-do-not-strip"
+	got := Sanitize([]string{
+		"CLAUDE_CODE_OAUTH_TOKEN=" + tok,
+		"GH_TOKEN=ghp_stripme",
+	})
+	var kept bool
+	for _, kv := range got {
+		if kv == "CLAUDE_CODE_OAUTH_TOKEN="+tok {
+			kept = true
+		}
+		if strings.HasPrefix(kv, "GH_TOKEN=") {
+			t.Errorf("GH_TOKEN must be stripped, but survived")
+		}
+	}
+	if !kept {
+		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN must be preserved verbatim (Faz L2 depends on it), but was stripped")
+	}
+}
+
 // TestSanitize_DoesNotMutateInput proves the input slice is left untouched.
 func TestSanitize_DoesNotMutateInput(t *testing.T) {
 	in := []string{"GH_TOKEN=ghp_fake", "PATH=/bin"}

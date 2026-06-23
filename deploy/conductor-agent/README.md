@@ -25,12 +25,21 @@ davinci (host-agent)  ──HTTP/tailscale──▶  conductor-api gateway (k8s)
 The remaining steps need an interactive `claude` login, your GitHub token, and your
 approval — none of which can be done autonomously.
 
-### 1. Log in to claude on davinci
-```bash
-ssh davinci
-claude            # complete the interactive subscription login (browser/oauth)
-claude -p 'print OK'   # confirm it works headlessly
-```
+### 1. Provide the claude credential (SSH-free — Faz L1/L2, ADR-0049)
+The performer is `claude -p`, which authenticates from the **portable** OAuth token minted by
+`claude setup-token`. The editor-mediated path means you never SSH in for an interactive login:
+
+1. In the **Conductor Editor**, run **"Conductor: Log In"** (command palette). It opens a
+   terminal running `claude setup-token` (browser OAuth) and stores the printed token in the
+   editor's SecretStorage.
+2. Copy that same token into `CLAUDE_CODE_OAUTH_TOKEN` in `conductor-agent.env` (step 4 below).
+   `envsafe` keeps this var, so it reaches the `claude -p` subprocess; the agent warns on
+   startup if it's missing.
+
+`claude setup-token` mints a **host-portable, long-lived** token (`sk-ant-oat…`), so minting on
+your Mac and pasting on davinci works — no keychain/login on davinci. (Fallback: an interactive
+`ssh davinci && claude` login still works if you prefer; then leave `CLAUDE_CODE_OAUTH_TOKEN`
+empty.) Confirm headless auth: `ssh davinci && CLAUDE_CODE_OAUTH_TOKEN=… claude -p 'print OK'`.
 
 ### 2. Install the optiway toolchain on davinci (for the verify gate)
 The gate runs optiway's real build/lint/test, so davinci needs the toolchain:

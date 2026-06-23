@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -97,6 +98,18 @@ func run() error {
 		return err
 	}
 
+	// Faz L2 (ADR-0049): the performer is `claude -p`, which authenticates from
+	// CLAUDE_CODE_OAUTH_TOKEN (the portable token minted by the editor's "Conductor: Log In",
+	// or `claude setup-token`). The token flows to the develop subprocess via the inherited,
+	// envsafe-sanitized environment (envsafe KEEPS CLAUDE_CODE_OAUTH_TOKEN). If it is unset
+	// AND the performer is claude, warn (non-fatal): the host may still have an interactive
+	// claude login, but editor-mediated login is the SSH-free path. We check presence only —
+	// the token value is NEVER read or logged (account-level secret).
+	if usesClaudePerformer(devArgv) && os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") == "" {
+		logger.Warn("CLAUDE_CODE_OAUTH_TOKEN is not set; the claude performer will rely on an interactive login on this host. " +
+			"Mint a portable token in the editor (\"Conductor: Log In\") and set CLAUDE_CODE_OAUTH_TOKEN to run without an SSH login.")
+	}
+
 	exec, err := agent.NewRealExecutor(agent.ExecutorConfig{
 		RootDir:    cfg.root,
 		Repo:       cfg.repo,
@@ -160,6 +173,13 @@ func resolveRecipe(cfg config, logger *slog.Logger) ([]string, []verify.Gate, er
 		return nil, nil, errors.New("no verify gates configured: provide -recipe-dir with a .conductor/config.yaml that declares gates (the gate is the sole merge authority)")
 	}
 	return developCmd, gates, nil
+}
+
+// usesClaudePerformer reports whether the develop argv invokes the `claude` CLI (so the
+// performer authenticates via CLAUDE_CODE_OAUTH_TOKEN / an interactive claude login). Matches
+// on the command's base name so an absolute path (e.g. /usr/local/bin/claude) still counts.
+func usesClaudePerformer(developCmd []string) bool {
+	return len(developCmd) > 0 && filepath.Base(developCmd[0]) == "claude"
 }
 
 func defaultHostID() string {
