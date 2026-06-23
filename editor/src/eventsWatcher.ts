@@ -64,6 +64,10 @@ export interface EventsWatcherDeps {
   onChange: () => void;
   fetchImpl?: typeof fetch;
   cap?: number;
+  // OPTIONAL (M2): called when the live WS closes (server/error close), so the host can drive
+  // auto-reconnect. Token-free (no args). Fires only for the active handle's close — a `stop()`
+  // closes the handle too, so the host guards on its own connection intent before reconnecting.
+  onClose?: () => void;
 }
 
 /**
@@ -80,11 +84,15 @@ export class EventsWatcher {
   readonly #onChange: () => void;
   readonly #fetch: typeof fetch;
   readonly #cap: number;
+  readonly #onClose: (() => void) | undefined;
 
   /** Newest-first ring of recent events (most-recent at index 0). */
   #ring: FeedEvent[] = [];
   /** The single active WS handle (undefined when stopped / never started). */
   #handle: WsHandle | undefined;
+  /** Monotonic open generation. Bumped on every start()/stop() so a SUPERSEDED handle's onClose
+   * (after a restart or deliberate stop) is recognized as stale and does NOT signal #onClose. */
+  #generation = 0;
 
   constructor(deps: EventsWatcherDeps) {
     this.#restBaseUrl = deps.restBaseUrl;
@@ -94,6 +102,7 @@ export class EventsWatcher {
     this.#onChange = deps.onChange;
     this.#fetch = deps.fetchImpl ?? fetch;
     this.#cap = deps.cap ?? DEFAULT_CAP;
+    this.#onClose = deps.onClose;
   }
 
   /** The current ring (newest-first). The tree provider reads this on getChildren. */
@@ -112,7 +121,9 @@ export class EventsWatcher {
       return; // not connected → nothing to subscribe to.
     }
 
-    // Close a predecessor BEFORE opening a new one (single active handle; no leak).
+    // Close a predecessor BEFORE opening a new one (single active handle; no leak). Bump the
+    // generation FIRST so the predecessor's onClose is recognized as stale (see the guard below).
+    const gen = ++this.#generation;
     this.#handle?.close();
     this.#handle = undefined;
 
@@ -141,13 +152,20 @@ export class EventsWatcher {
       },
       onMessage: (data) => this.#onFrame(data),
       onClose: () => {
-        /* server/error close: extension.ts restarts on the next "connected" transition. */
+        // An UNEXPECTED server/error close of THIS generation's handle drives auto-reconnect (M2).
+        // A stop()/restart bumps the generation, so a superseded handle's close is ignored — the
+        // host never sees a reconnect signal it caused itself.
+        if (gen === this.#generation) {
+          this.#onClose?.();
+        }
       },
     });
   }
 
-  /** Closes the active WS handle (idempotent; safe if never started). Leaves the ring intact. */
+  /** Closes the active WS handle (idempotent; safe if never started). Leaves the ring intact.
+   * Bumps the generation so the close is recognized as deliberate (no reconnect signal). */
   stop(): void {
+    this.#generation++;
     this.#handle?.close();
     this.#handle = undefined;
   }

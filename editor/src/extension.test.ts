@@ -1359,8 +1359,9 @@ describe("activate", () => {
     expect(window.createTreeView).toHaveBeenCalledWith(ACTIVITY_VIEW_ID, {
       treeDataProvider: expect.anything(),
     });
-    // 33 (post-diagnostics) + Activity's three (view + provider + nowBar status item) = 36.
-    expect(subscriptions).toHaveLength(36);
+    // 33 (post-diagnostics) + Activity's three (view + provider + nowBar status item) = 36,
+    // + the M2 auto-reconnect controller's dispose = 37.
+    expect(subscriptions).toHaveLength(37);
   });
 
   it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {

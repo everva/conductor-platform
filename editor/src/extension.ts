@@ -36,6 +36,7 @@ import { DiffContentClient, type FullTaskDiff } from "./diffContentClient";
 import { FleetReadClient } from "./fleetReadClient";
 import { SessionsTreeProvider, SESSIONS_VIEW_ID, nodeProjectId, nodeTaskRef } from "./sessionsTree";
 import { EventsWatcher } from "./eventsWatcher";
+import { ReconnectController } from "./reconnect";
 import { EventsTreeProvider, EVENTS_VIEW_ID } from "./eventsTree";
 import { DiagnosticsTreeProvider, DIAGNOSTICS_VIEW_ID } from "./diagnosticsTree";
 import { buildDiagnosticRows, type DiagSnapshot } from "./diagnostics";
@@ -1736,6 +1737,22 @@ export function activate(context: vscode.ExtensionContext): void {
   const gatewayUrl = readGatewayUrl();
 
   const statusBar = vscode.window.createStatusBarItem();
+  // M2: the auto-reconnect loop, assigned just after the ConnectionManager (it drives the loop via
+  // manager.restore). Forward-declared here so the manager's onStateChange + the status-bar helper
+  // can reference it; both run only at fire time, by which point it is assigned. (Must be `let`: it
+  // is referenced lexically before its assignment, which a const declaration would forbid.)
+  // eslint-disable-next-line prefer-const
+  let reconnect: ReconnectController | undefined;
+  // updateConnectionStatusBar renders the link state, but shows a RECONNECTING label while the loop
+  // is actively retrying a dropped link (so the user sees "trying to get back", not a dead
+  // "disconnected"). A live "connected" always wins.
+  const updateConnectionStatusBar = (): void => {
+    if (manager.state !== "connected" && reconnect !== undefined && reconnect.phase !== "idle") {
+      statusBar.text = "$(sync~spin) Conductor: reconnecting";
+    } else {
+      statusBar.text = statusBarText(manager.state);
+    }
+  };
 
   // 4C-3: a SEPARATE status-bar item for pending interventions ($(bell) Conductor: N
   // intervention(s)), shown only when the count > 0. The connection item above keeps
@@ -1833,6 +1850,16 @@ export function activate(context: vscode.ExtensionContext): void {
       activityTree.refresh();
       updateNowBar();
     },
+    // M2: an UNEXPECTED live-WS close while we believe we're connected means the gateway link
+    // dropped (gateway restart / network blip / sleep). Kick the auto-reconnect loop instead of
+    // sitting "disconnected" until a manual Reload. Guarded by manager.state so a deliberate
+    // stop() (on disconnect) never self-triggers a reconnect (defense-in-depth with the watcher's
+    // own stale-handle guard). reconnect/manager are forward refs, resolved at fire time.
+    onClose: () => {
+      if (manager.state === "connected") {
+        reconnect?.kick();
+      }
+    },
   });
   const eventsTree = new EventsTreeProvider(eventsWatcher);
 
@@ -1840,7 +1867,7 @@ export function activate(context: vscode.ExtensionContext): void {
     secrets: context.secrets,
     gateway: makeGatewayProbe(gatewayUrl),
     onStateChange: (state) => {
-      statusBar.text = statusBarText(state);
+      updateConnectionStatusBar();
       // P3: publish the `conductor.connected` when-clause context key so the sessions-tree
       // context menus + the control keybindings only offer actions while the gateway is live.
       void vscode.commands.executeCommand("setContext", CONTEXT_CONNECTED, state === "connected");
@@ -1869,7 +1896,26 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     },
   });
-  statusBar.text = statusBarText(manager.state);
+
+  // M2: the auto-reconnect loop. Its single job is to re-establish a DROPPED link: each attempt
+  // re-validates the stored token via manager.restore(), which — on success — fires the
+  // onStateChange("connected") path above and so restarts the watchers + refreshes the trees. It
+  // is KICKED by the eventsWatcher's onClose (an unexpected WS drop) and by a failed restore-on-
+  // activate while a token is stored; it backs off exponentially and stops once reconnected. With
+  // NO stored token (the user disconnected) the attempt returns "stop", so it never spins.
+  reconnect = new ReconnectController({
+    attempt: async () => {
+      if (!(await manager.hasStoredToken())) {
+        return "stop";
+      }
+      await manager.restore();
+      return manager.state === "connected" ? "connected" : "retry";
+    },
+    onPhase: () => updateConnectionStatusBar(),
+  });
+  context.subscriptions.push({ dispose: () => reconnect?.stop() });
+
+  updateConnectionStatusBar();
   statusBar.command = CONNECT_COMMAND;
   statusBar.show();
 
@@ -2042,7 +2088,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Silent restore: re-validate a stored token (if any) and mirror the result onto the
   // status bar via onStateChange. Fire-and-forget; never throws, never logs the token.
-  void manager.restore();
+  // M2: if restore leaves us NOT connected but a token IS stored, the gateway was down at startup
+  // (a stored, still-valid token can't connect) — kick the auto-reconnect loop so the link comes
+  // up on its own once the gateway is back, instead of waiting for a manual Connect/Reload.
+  void manager.restore().then(async () => {
+    if (manager.state !== "connected" && (await manager.hasStoredToken())) {
+      reconnect?.kick();
+    }
+  });
 }
 
 /** Extension deactivation hook. Disposables are cleaned up via context.subscriptions. */

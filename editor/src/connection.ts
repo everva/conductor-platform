@@ -133,6 +133,13 @@ export class ConnectionManager {
     return { ok: true };
   }
 
+  /** Reports whether a gateway bearer token is stored (no getter — returns a BOOLEAN, never the
+   * token). Drives the auto-reconnect loop (M2): retry restore ONLY while a token exists; an empty
+   * slot means the user explicitly disconnected, so the loop must stop rather than spin. */
+  async hasStoredToken(): Promise<boolean> {
+    return (await this.#secrets.get(GATEWAY_TOKEN_KEY)) !== undefined;
+  }
+
   /** Explicit disconnect: forget the token (delete the SecretStorage entry) and
    * go "disconnected". This is one of only two paths that clear the stored token (the
    * other being a definitive 401 during `restore`). */

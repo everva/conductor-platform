@@ -184,4 +184,51 @@ describe("EventsWatcher", () => {
     watcher.stop();
     expect(connector.last().handle.close).toHaveBeenCalledTimes(1);
   });
+
+  // M2: the onClose signal that drives auto-reconnect. It must fire ONLY for an unexpected close of
+  // the CURRENT handle — never for a deliberate stop() or a superseded (restarted) handle, or the
+  // host would reconnect against a link it just tore down itself.
+  describe("onClose (auto-reconnect signal)", () => {
+    function makeWithOnClose() {
+      const connector = makeFakeConnector();
+      const onClose = vi.fn();
+      const watcher = new EventsWatcher({
+        restBaseUrl: REST_BASE,
+        wsBaseUrl: WS_BASE,
+        tokenProvider: { getToken: () => Promise.resolve(SENTINEL) },
+        wsConnector: connector,
+        onChange: vi.fn(),
+        fetchImpl: makeFetch([]),
+        onClose,
+      });
+      return { watcher, connector, onClose };
+    }
+
+    it("fires onClose when the current handle closes unexpectedly", async () => {
+      const { watcher, connector, onClose } = makeWithOnClose();
+      await watcher.start();
+      connector.last().handlers.onClose(); // simulate a server/error WS drop
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT fire onClose for a deliberate stop()", async () => {
+      const { watcher, connector, onClose } = makeWithOnClose();
+      await watcher.start();
+      const handle = connector.last();
+      watcher.stop();
+      handle.handlers.onClose(); // the close that stop() triggers
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("does NOT fire onClose for a SUPERSEDED handle after restart (only the live one)", async () => {
+      const { watcher, connector, onClose } = makeWithOnClose();
+      await watcher.start();
+      const first = connector.last();
+      await watcher.start(); // restart → new generation
+      first.handlers.onClose(); // stale handle's close — must be ignored
+      expect(onClose).not.toHaveBeenCalled();
+      connector.last().handlers.onClose(); // the LIVE handle dropping → signals
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+  });
 });
