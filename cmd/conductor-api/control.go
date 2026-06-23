@@ -476,6 +476,55 @@ func (s *apiServer) handleApprove(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"project": id, "approved_task": approvedID})
 }
 
+// handleRetry: POST /projects/{id}/tasks/{task}/retry — reset a BLOCKED task back to
+// "ready" so the agent re-picks it (PickReady only takes todo/ready). A blocked task is
+// otherwise stranded: it failed develop/verify and there was no way to re-run it short of
+// re-intaking the scenario. The registry transition blocked→ready is valid (registry.go
+// transitions table). Only a blocked task can be retried (else 409); the stale AbortRequested
+// flag is cleared so the re-run is not immediately aborted. Store-reflection only (ADR-0025):
+// the agent honors the ready status on its next lease. Idempotency-friendly + bearer-authed.
+func (s *apiServer) handleRetry(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	taskID := r.PathValue("task")
+	ctx := r.Context()
+
+	if _, err := s.store.GetProject(ctx, id); err != nil {
+		if errors.Is(err, statestore.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		s.serverError(w, "retry: get project", err)
+		return
+	}
+
+	task, err := s.store.GetTask(ctx, taskID)
+	if err != nil {
+		if errors.Is(err, statestore.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		s.serverError(w, "retry: get task", err)
+		return
+	}
+	if task.ProjectID != id {
+		writeError(w, http.StatusNotFound, "task not found in project")
+		return
+	}
+	if task.Status != "blocked" {
+		writeError(w, http.StatusConflict, "only a blocked task can be retried")
+		return
+	}
+
+	if err := s.updateTask(ctx, taskID, func(t *statestore.Task) {
+		t.Status = "ready"       // blocked→ready (valid registry transition); re-pickable
+		t.AbortRequested = false // clear any stale abort so the re-run is not killed on start
+	}); err != nil {
+		s.serverError(w, "retry: update task", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"project": id, "task": taskID, "status": "ready"})
+}
+
 // --- control DTO + helpers ---
 
 // intakeResultDTO is the JSON shape returned by POST intake: the created and

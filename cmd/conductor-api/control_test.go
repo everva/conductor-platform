@@ -440,3 +440,54 @@ func TestControlEndpointsRequireAuth(t *testing.T) {
 		}
 	}
 }
+
+// --- retry (blocked→ready) ---
+
+func TestRetryBlockedTask200(t *testing.T) {
+	s, store := emptyServer()
+	ctx := context.Background()
+	mustCreate(t, store.CreateProject(ctx, statestore.Project{ID: "proj-x", Repo: "owner/x", BaseBranch: "develop"}))
+	mustCreate(t, store.CreateTask(ctx, statestore.Task{
+		ID: "T-1", ProjectID: "proj-x", Lane: "backend", Tier: "T2",
+		Status: "blocked", AbortRequested: true,
+	}))
+
+	rec := doBody(t, s, http.MethodPost, "/projects/proj-x/tasks/T-1/retry", bearer(), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	got, _ := store.GetTask(ctx, "T-1")
+	if got.Status != "ready" {
+		t.Fatalf("status = %q, want ready (re-pickable)", got.Status)
+	}
+	if got.AbortRequested {
+		t.Fatalf("retry must clear the stale AbortRequested so the re-run is not killed on start")
+	}
+}
+
+func TestRetryNonBlocked409(t *testing.T) {
+	s, store := emptyServer()
+	ctx := context.Background()
+	mustCreate(t, store.CreateProject(ctx, statestore.Project{ID: "proj-x", Repo: "owner/x", BaseBranch: "develop"}))
+	// A running task is not retryable (only blocked is).
+	mustCreate(t, store.CreateTask(ctx, statestore.Task{ID: "T-1", ProjectID: "proj-x", Status: "running"}))
+
+	rec := doBody(t, s, http.MethodPost, "/projects/proj-x/tasks/T-1/retry", bearer(), "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (only blocked can retry); body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRetryUnknown404(t *testing.T) {
+	s, store := emptyServer()
+	ctx := context.Background()
+	// Unknown project → 404.
+	if rec := doBody(t, s, http.MethodPost, "/projects/nope/tasks/T-1/retry", bearer(), ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown project: status = %d, want 404", rec.Code)
+	}
+	// Known project, unknown task → 404.
+	mustCreate(t, store.CreateProject(ctx, statestore.Project{ID: "proj-x", Repo: "owner/x", BaseBranch: "develop"}))
+	if rec := doBody(t, s, http.MethodPost, "/projects/proj-x/tasks/ghost/retry", bearer(), ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown task: status = %d, want 404", rec.Code)
+	}
+}
