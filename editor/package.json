@@ -69,6 +69,14 @@
       {
         "view": "conductor.events",
         "contents": "No events yet.\n[Connect to a gateway](command:conductor.connect)\nto watch the live event stream."
+      },
+      {
+        "view": "conductor.activity",
+        "contents": "No activity yet.\n[Connect to a gateway](command:conductor.connect)\nthen create work — live progress shows here.\n\n[Take the Getting Started tour](command:conductor.openTour)."
+      },
+      {
+        "view": "conductor.diagnostics",
+        "contents": "Diagnostics show your connection + login health.\n[Connect to a gateway](command:conductor.connect)\nto populate them."
       }
     ],
     "commands": [
