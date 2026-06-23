@@ -62,6 +62,18 @@ type Executor interface {
 	Cleanup(ctx context.Context, task agentclient.TaskInfo)
 }
 
+// ProgressProbe is an OPTIONAL Executor capability: it reports the current phase
+// (provisioning|developing|verifying) and how many files the performer has changed so far, so
+// the runner can emit a live progress PULSE during the long, otherwise-silent develop/verify
+// phases — feeding the editor's "Now" view. RealExecutor implements it; an executor that
+// doesn't simply gets no pulse (RunOnce still works).
+type ProgressProbe interface {
+	Progress(taskID string) (phase string, filesChanged int)
+}
+
+// progressInterval is how often the develop/verify heartbeat emits a progress event.
+const progressInterval = 20 * time.Second
+
 // Config configures a Runner.
 type Config struct {
 	ProjectID    string
@@ -69,16 +81,19 @@ type Config struct {
 	Capabilities []string
 	// PollInterval is how often a held task's decision is polled. Defaults to 15s.
 	PollInterval time.Duration
-	Logger       *slog.Logger
+	// ProgressInterval is how often the develop/verify "Now" pulse is emitted. Defaults to 20s.
+	ProgressInterval time.Duration
+	Logger           *slog.Logger
 }
 
 // Runner is the host-agent's one-task orchestrator.
 type Runner struct {
-	gw   Gateway
-	ex   Executor
-	cfg  Config
-	log  *slog.Logger
-	poll time.Duration
+	gw       Gateway
+	ex       Executor
+	cfg      Config
+	log      *slog.Logger
+	poll     time.Duration
+	progress time.Duration
 }
 
 // Outcome classifies what RunOnce did, for the loop + logging.
@@ -102,7 +117,11 @@ func New(gw Gateway, ex Executor, cfg Config) *Runner {
 	if poll <= 0 {
 		poll = 15 * time.Second
 	}
-	return &Runner{gw: gw, ex: ex, cfg: cfg, log: log, poll: poll}
+	prog := cfg.ProgressInterval
+	if prog <= 0 {
+		prog = progressInterval
+	}
+	return &Runner{gw: gw, ex: ex, cfg: cfg, log: log, poll: poll, progress: prog}
 }
 
 // RunOnce leases at most one task and drives it to a terminal outcome (merged,
@@ -129,7 +148,7 @@ func (r *Runner) RunOnce(ctx context.Context) (Outcome, error) {
 	scenario := r.scenarioFor(ctx, task)
 	r.report(ctx, task.ID, "develop", "started", map[string]any{"task": task.ID})
 
-	out, err := r.ex.Run(ctx, task, scenario)
+	out, err := r.runWithProgress(ctx, task, scenario)
 	if err != nil {
 		// An infra failure (provision/develop/verify error) is reported as blocked —
 		// never fake-green — so the task is re-runnable, not silently lost.
@@ -219,6 +238,43 @@ func (r *Runner) report(ctx context.Context, taskID, phase, kind string, payload
 	if err := r.gw.Report(ctx, r.cfg.ProjectID, taskID, phase, kind, payload); err != nil {
 		r.log.Debug("agent: report failed", "task", taskID, "phase", phase, "kind", kind, "err", err)
 	}
+}
+
+// runWithProgress runs ex.Run while emitting a periodic progress event (phase + elapsed seconds
+// + files-changed) so the editor's "Now" view has a live pulse during the long, otherwise-silent
+// develop/verify phases. The pulse is best-effort and stops the instant Run returns; if the
+// executor has no ProgressProbe, it just runs Run. The heartbeat never blocks or fails the run.
+func (r *Runner) runWithProgress(ctx context.Context, task agentclient.TaskInfo, scenario agentclient.ScenarioInfo) (RunOutcome, error) {
+	pp, ok := r.ex.(ProgressProbe)
+	if !ok {
+		return r.ex.Run(ctx, task, scenario)
+	}
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(r.progress)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				phase, files := pp.Progress(task.ID)
+				if phase == "" {
+					phase = "working"
+				}
+				r.report(ctx, task.ID, phase, "progress", map[string]any{
+					"elapsed_seconds": int(time.Since(start).Seconds()),
+					"files_changed":   files,
+				})
+			}
+		}
+	}()
+	out, err := r.ex.Run(ctx, task, scenario)
+	close(done)
+	return out, err
 }
 
 // Loop runs RunOnce repeatedly, heart-beating in the background and sleeping idle

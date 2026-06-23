@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,10 @@ type fakeGateway struct {
 	mergedSHA    string
 	released     bool
 	reports      int
+
+	// mu guards the recorded fields against the runner's concurrent progress heartbeat.
+	mu             sync.Mutex
+	progressPhases []string // phases of every kind=="progress" report
 }
 
 func (f *fakeGateway) Lease(_ context.Context, _, _ string, _ []string) (agentclient.LeasedTask, bool, error) {
@@ -33,8 +38,13 @@ func (f *fakeGateway) Lease(_ context.Context, _, _ string, _ []string) (agentcl
 func (f *fakeGateway) Scenarios(_ context.Context, _ string) ([]agentclient.ScenarioInfo, error) {
 	return f.scenarios, nil
 }
-func (f *fakeGateway) Report(_ context.Context, _, _, _, _ string, _ map[string]any) error {
+func (f *fakeGateway) Report(_ context.Context, _, _, phase, kind string, _ map[string]any) error {
+	f.mu.Lock()
 	f.reports++
+	if kind == "progress" {
+		f.progressPhases = append(f.progressPhases, phase)
+	}
+	f.mu.Unlock()
 	return nil
 }
 func (f *fakeGateway) Result(_ context.Context, _, _ string, report agentclient.ResultReport) (string, error) {
@@ -179,5 +189,42 @@ func TestRunOnce_AlwaysReleasesOnMergeError(t *testing.T) {
 	}
 	if !gw.released || !ex.cleaned {
 		t.Fatalf("a merge error must STILL release the lease + cleanup (defer)")
+	}
+}
+
+// progressExecutor implements ProgressProbe + a Run that blocks long enough for the heartbeat
+// to tick, so the progress-pulse path is exercised.
+type progressExecutor struct {
+	fakeExecutor
+}
+
+func (p *progressExecutor) Run(ctx context.Context, t agentclient.TaskInfo, s agentclient.ScenarioInfo) (RunOutcome, error) {
+	time.Sleep(25 * time.Millisecond) // allow ≥1 progress tick at ProgressInterval=5ms
+	return p.fakeExecutor.Run(ctx, t, s)
+}
+
+func (p *progressExecutor) Progress(_ string) (string, int) { return "developing", 3 }
+
+// TestRunOnce_EmitsProgressPulse proves the runner emits a live progress pulse (kind=="progress"
+// with the executor's phase) DURING Run, feeding the editor's "Now" view.
+func TestRunOnce_EmitsProgressPulse(t *testing.T) {
+	gw := &fakeGateway{leaseTask: leased(), resultDecision: "blocked"}
+	ex := &progressExecutor{fakeExecutor{out: RunOutcome{Result: "blocked"}}}
+	r := New(gw, ex, Config{ProjectID: "p", HostID: "davinci", PollInterval: time.Millisecond, ProgressInterval: 5 * time.Millisecond})
+
+	if _, err := r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	gw.mu.Lock()
+	phases := append([]string(nil), gw.progressPhases...)
+	gw.mu.Unlock()
+	if len(phases) == 0 {
+		t.Fatalf("expected ≥1 progress pulse during develop, got none")
+	}
+	for _, ph := range phases {
+		if ph != "developing" {
+			t.Fatalf("progress phase = %q, want developing", ph)
+		}
 	}
 }

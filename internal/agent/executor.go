@@ -3,6 +3,9 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/everva/conductor-platform/internal/agentclient"
@@ -60,8 +63,13 @@ type RealExecutor struct {
 	merger *conductor.GitMerger
 	cfg    ExecutorConfig
 
+	// mu guards ws + phase against the runner's concurrent ProgressProbe heartbeat.
+	mu sync.Mutex
 	// ws holds the live worktree per in-flight task (single task at a time; map for safety).
 	ws map[string]engine.Workspace
+	// phase is the current phase per in-flight task (provisioning|developing|verifying),
+	// read by Progress for the "Now" pulse.
+	phase map[string]string
 }
 
 // NewRealExecutor builds the executor from config, mirroring the daemon's wiring
@@ -87,7 +95,45 @@ func NewRealExecutor(cfg ExecutorConfig) (*RealExecutor, error) {
 		func(projectID string) string { return cfg.RootDir + "/clones/" + projectID },
 		conductor.WithPush(conductor.PushConfig{Enabled: cfg.Push, Remote: cfg.PushRemote, GHToken: cfg.GHToken}),
 	)
-	return &RealExecutor{prov: prov, eng: eng, verf: verf, merger: merger, cfg: cfg, ws: map[string]engine.Workspace{}}, nil
+	return &RealExecutor{prov: prov, eng: eng, verf: verf, merger: merger, cfg: cfg, ws: map[string]engine.Workspace{}, phase: map[string]string{}}, nil
+}
+
+// setPhase records the current phase for a task (guarded; read by Progress).
+func (e *RealExecutor) setPhase(taskID, phase string) {
+	e.mu.Lock()
+	e.phase[taskID] = phase
+	e.mu.Unlock()
+}
+
+// Progress reports the task's current phase + how many files the performer has changed so far
+// (git status count in the worktree). Implements agent.ProgressProbe so the runner emits a live
+// "Now" pulse during develop/verify. Safe to call concurrently with Run.
+func (e *RealExecutor) Progress(taskID string) (string, int) {
+	e.mu.Lock()
+	phase := e.phase[taskID]
+	ws, ok := e.ws[taskID]
+	e.mu.Unlock()
+	files := 0
+	if ok && ws.Path != "" {
+		files = countChangedFiles(ws.Path)
+	}
+	return phase, files
+}
+
+// countChangedFiles returns the number of changed (staged/unstaged/untracked) files in a git
+// worktree via `git status --porcelain`. Best-effort: any error → 0.
+func countChangedFiles(dir string) int {
+	out, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if strings.TrimSpace(line) != "" {
+			n++
+		}
+	}
+	return n
 }
 
 // project rebuilds the statestore.Project the execution packages consume from the
@@ -111,17 +157,22 @@ func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, _
 	project := e.project(taskInfo.ProjectID)
 	task := stateTask(taskInfo)
 
+	e.setPhase(task.ID, "provisioning")
 	ws, err := e.prov.Workspace(ctx, project, task)
 	if err != nil {
 		return RunOutcome{}, fmt.Errorf("provision workspace: %w", err)
 	}
+	e.mu.Lock()
 	e.ws[task.ID] = ws
+	e.mu.Unlock()
 
+	e.setPhase(task.ID, "developing")
 	verdict, err := e.eng.Develop(ctx, task, ws)
 	if err != nil {
 		return RunOutcome{}, fmt.Errorf("develop: %w", err)
 	}
 
+	e.setPhase(task.ID, "verifying")
 	review, checks, err := e.verf.Verify(ctx, verdict, ws, e.cfg.Gates, "")
 	if err != nil {
 		return RunOutcome{}, fmt.Errorf("verify: %w", err)
@@ -142,7 +193,9 @@ func (e *RealExecutor) Merge(ctx context.Context, taskInfo agentclient.TaskInfo,
 	project := e.project(taskInfo.ProjectID)
 	task := stateTask(taskInfo)
 
+	e.mu.Lock()
 	ws, ok := e.ws[task.ID]
+	e.mu.Unlock()
 	if !ok {
 		// Worktree gone (e.g. a fresh agent run after a restart): re-attach the branch.
 		w, err := e.prov.WorkspaceForBranch(ctx, project, task, branch)
@@ -150,7 +203,9 @@ func (e *RealExecutor) Merge(ctx context.Context, taskInfo agentclient.TaskInfo,
 			return "", fmt.Errorf("re-attach branch %q: %w", branch, err)
 		}
 		ws = w
+		e.mu.Lock()
 		e.ws[task.ID] = ws
+		e.mu.Unlock()
 	}
 
 	if approved {
@@ -180,12 +235,17 @@ func (e *RealExecutor) Merge(ctx context.Context, taskInfo agentclient.TaskInfo,
 
 // Cleanup removes the task's worktree (best-effort).
 func (e *RealExecutor) Cleanup(ctx context.Context, taskInfo agentclient.TaskInfo) {
+	e.mu.Lock()
 	ws, ok := e.ws[taskInfo.ID]
+	e.mu.Unlock()
 	if !ok {
 		return
 	}
 	_ = e.prov.Cleanup(ctx, ws)
+	e.mu.Lock()
 	delete(e.ws, taskInfo.ID)
+	delete(e.phase, taskInfo.ID)
+	e.mu.Unlock()
 }
 
 // toChecks maps engine.Check (the gate evidence) onto the wire Check shape.
