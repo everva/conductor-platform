@@ -91,7 +91,20 @@ bu altyapıyı kurmadan ilerleme."
 5. **Bekleyen deploy** (VARDIYE-3 terminal sonrası): agent `37d8230`+ → davinci, editör re-inject.
 6. ADR + memory güncelle.
 
-## DURUM
-- Plan yazıldı. **VARDIYE-3 canlı geliştiriyor (kesme).** Compact sonrası §0.1 → M1 → M3 → M2.
-- 3 madde: status-flip (gateway), auto-reconnect (editör), e2e-harness (efemer test-gateway+seed+
-  Playwright, KENDİM). Hepsi additive + CI-yeşil + Playwright-doğrulamalı.
+## DURUM — ÜÇÜ DE TAMAM (2026-06-23, CI-yeşil)
+- **M1 status-flip ✅** (`caeb07f`→develop `2e1dcbb`; ADR-0050): gateway `handleAgentLease` lease→
+  `running`, sahip-release→`ready` (terminal status ezilmez, sahip-olmayan dokunmaz). agent_test +
+  GERÇEK-PG `TestAgentLeaseStatusFlipPG` + golangci-0 + `-race`. CI-yeşil.
+- **M3 e2e-harness ✅** (develop `6fbfa4d`): opt-in **gerçek-gateway** Playwright harness
+  `web/e2e-realgw/` (`npm run e2e:realgw`) — gerçek conductor-api (efemer memory store) + REST seed
+  (onboard→intake→lease) + same-origin `vite preview.proxy` (CORS'suz) → board `Running` + `/tasks`
+  running, MOCK'SUZ. KENDİM koştum: 2/2 yeşil + ekran-görüntüsü. CI hermetik kalır (page.route).
+  Hangi-DB/hangi-veri `web/e2e-realgw/README.md`'de tabloyla belgelendi.
+- **M2 auto-reconnect ✅** (develop `a402492`): pure `ReconnectController` (üstel backoff 1s→30s;
+  7 fake-timer testi) + `EventsWatcher.onClose` (generation-guard) + `ConnectionManager.hasStoredToken`;
+  extension.ts wire (WS-drop / startup-restore-fail → kick; "reconnecting" status-bar; dispose→stop).
+  Editör gate (tsc×2+eslint-0+vitest 310+esbuild) + GERÇEK fork electron smoke (VS Code 1.125.1).
+- KALAN (kullanıcı kararı): VARDIYE-1/2/3 **blocked** (held DEĞİL — agent develop/gate başarısız;
+  aktif lease yok) → tetikçi ayrı (davinci performer + optiway recipe gate), editör-gözlemlenebilirlik
+  DEĞİL. Bekleyen agent deploy (pulse-phase `37d8230`→davinci) VARDIYE terminal olduğu için ARTIK
+  serbest ama prod-restart = kullanıcı onayı.
