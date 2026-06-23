@@ -36,6 +36,14 @@ export interface FeedEvent {
   readonly task: string;
   readonly phase: string;
   readonly kind: string;
+  // OPTIONAL, additive (for the "Now"/Activity view): a few token-FREE payload fields the live
+  // status summary reads. Present only on the events that carry them; the events tree ignores
+  // them. elapsedSeconds/filesChanged ride on kind=="progress"; result/summary on the verdict
+  // (kind=="decision"). summary is the agent's secret-free description (build/git error text).
+  readonly elapsedSeconds?: number;
+  readonly filesChanged?: number;
+  readonly result?: string;
+  readonly summary?: string;
 }
 
 /**
@@ -199,5 +207,19 @@ export function toFeedEvent(x: unknown): FeedEvent | undefined {
     typeof o.id === "string" && o.id !== ""
       ? o.id
       : `${ts}:${project}:${task}:${phase}:${o.kind}`;
-  return { id, ts, project, task, phase, kind: o.kind };
+  // Pull the optional token-free payload fields the "Now" view uses, INCLUDING each key only when
+  // defined (exactOptionalPropertyTypes forbids an explicit `undefined` on an optional field).
+  const p = o.payload && typeof o.payload === "object" ? (o.payload as Record<string, unknown>) : {};
+  return {
+    id,
+    ts,
+    project,
+    task,
+    phase,
+    kind: o.kind,
+    ...(typeof p.elapsed_seconds === "number" ? { elapsedSeconds: p.elapsed_seconds } : {}),
+    ...(typeof p.files_changed === "number" ? { filesChanged: p.files_changed } : {}),
+    ...(typeof p.result === "string" && p.result !== "" ? { result: p.result } : {}),
+    ...(typeof p.summary === "string" && p.summary !== "" ? { summary: p.summary } : {}),
+  };
 }

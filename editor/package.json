@@ -46,6 +46,10 @@
           "name": "Conductors"
         },
         {
+          "id": "conductor.activity",
+          "name": "Activity"
+        },
+        {
           "id": "conductor.diagnostics",
           "name": "Diagnostics"
         }

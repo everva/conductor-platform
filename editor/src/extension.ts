@@ -39,6 +39,8 @@ import { EventsWatcher } from "./eventsWatcher";
 import { EventsTreeProvider, EVENTS_VIEW_ID } from "./eventsTree";
 import { DiagnosticsTreeProvider, DIAGNOSTICS_VIEW_ID } from "./diagnosticsTree";
 import { buildDiagnosticRows, type DiagSnapshot } from "./diagnostics";
+import { ActivityTreeProvider, ACTIVITY_VIEW_ID } from "./activityTree";
+import { summarizeActivity, activityNowText } from "./activity";
 
 /** Command id for the gateway-connect action. */
 export const CONNECT_COMMAND = "conductor.connect";
@@ -1824,9 +1826,13 @@ export function activate(context: vscode.ExtensionContext): void {
     wsBaseUrl: deriveWsUrl(normalizeBaseUrl(gatewayUrl)),
     tokenProvider: { getToken: () => Promise.resolve(context.secrets.get(GATEWAY_TOKEN_KEY)) },
     wsConnector,
-    // The closure reads eventsTree only when a ring change fires (after start()), by which point
-    // the const below is initialized — so the forward reference is safe (not used before init).
-    onChange: () => eventsTree.refresh(),
+    // The closure reads eventsTree/activity surfaces only when a ring change fires (after
+    // start()), by which point the consts below are initialized — forward reference is safe.
+    onChange: () => {
+      eventsTree.refresh();
+      activityTree.refresh();
+      updateNowBar();
+    },
   });
   const eventsTree = new EventsTreeProvider(eventsWatcher);
 
@@ -1969,6 +1975,27 @@ export function activate(context: vscode.ExtensionContext): void {
     diagnosticsProvider.refresh();
   });
 
+  // "Now" live activity (digestible status): a status-bar headline + a compact Activity tree,
+  // both summarizing the events-watcher ring into ONE plain-language line per active task
+  // ("Geliştiriyor… 4dk · 2 dosya", "Onay bekliyor", "Tıkandı: …"). Updated on every events
+  // change (the watcher's onChange above calls activityTree.refresh() + updateNowBar). Token-free
+  // (the model reads only token-free FeedEvent fields). Clicking a row opens that task's session.
+  const activityTree = new ActivityTreeProvider(() => summarizeActivity(eventsWatcher.events()));
+  const activityView = vscode.window.createTreeView(ACTIVITY_VIEW_ID, { treeDataProvider: activityTree });
+  const nowBar = vscode.window.createStatusBarItem();
+  const updateNowBar = (): void => {
+    const text = activityNowText(summarizeActivity(eventsWatcher.events()));
+    if (text !== "") {
+      nowBar.text = text;
+      nowBar.tooltip = "Conductor — şu an ne yapıyor (tıkla: Command Center)";
+      nowBar.command = OPEN_COMMAND;
+      nowBar.show();
+    } else {
+      nowBar.hide();
+    }
+  };
+  updateNowBar();
+
   // Push the intervention + diff status-bar items + dispose-wrappers that stop the host WS
   // subscriptions on deactivate (so the host sockets are torn down with the extension), plus the
   // N2 sessions tree (view + refresh command + the provider's change emitter).
@@ -1990,6 +2017,9 @@ export function activate(context: vscode.ExtensionContext): void {
     diagnosticsView,
     refreshDiagnostics,
     diagnosticsProvider,
+    activityView,
+    activityTree,
+    nowBar,
     ...disposables,
   );
 

@@ -92,6 +92,7 @@ import type { TaskDiff } from "./diffObserver";
 import { SESSIONS_VIEW_ID } from "./sessionsTree";
 import { EVENTS_VIEW_ID } from "./eventsTree";
 import { DIAGNOSTICS_VIEW_ID } from "./diagnosticsTree";
+import { ACTIVITY_VIEW_ID } from "./activityTree";
 
 // The slice of the vscode API the diff flows use, assembled from the mock. Cast at the
 // seam because the headless mock is structurally (not nominally) the real `vscode` types.
@@ -1293,8 +1294,9 @@ describe("activate", () => {
     await Promise.resolve();
 
     // 4C-3 adds the intervention status-bar item; 4C-1b adds the diff one; Q4.2 adds the native
-    // fleet-glance one — so four are created (connection + intervention + diff + fleet).
-    expect(window.createStatusBarItem).toHaveBeenCalledTimes(4);
+    // fleet-glance one; the "Now" activity adds one — so five are created (connection +
+    // intervention + diff + fleet + now).
+    expect(window.createStatusBarItem).toHaveBeenCalledTimes(5);
     const statusBar = window.createStatusBarItem.mock.results[0]?.value as {
       text: string;
       show: () => void;
@@ -1353,8 +1355,12 @@ describe("activate", () => {
       treeDataProvider: expect.anything(),
     });
     expect(commands.registerCommand).toHaveBeenCalledWith(REFRESH_DIAGNOSTICS_COMMAND, expect.any(Function));
-    // 30 (post-L3) + diagnostics' three (view + refresh command + provider) = 33.
-    expect(subscriptions).toHaveLength(33);
+    // Activity ("Now"): the native Activity tree view is registered (+ a status-bar item).
+    expect(window.createTreeView).toHaveBeenCalledWith(ACTIVITY_VIEW_ID, {
+      treeDataProvider: expect.anything(),
+    });
+    // 33 (post-diagnostics) + Activity's three (view + provider + nowBar status item) = 36.
+    expect(subscriptions).toHaveLength(36);
   });
 
   it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {
