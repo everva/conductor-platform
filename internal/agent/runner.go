@@ -74,6 +74,21 @@ type ProgressProbe interface {
 // progressInterval is how often the develop/verify heartbeat emits a progress event.
 const progressInterval = 20 * time.Second
 
+// eventPhase maps the executor's granular step (provisioning|developing|verifying) to a VALID
+// events.Phase ("plan"|"develop"|"verify") — the gateway's Event.Validate rejects any other
+// phase, which would silently drop the progress pulse. The granular step is preserved in the
+// payload ("step") for the editor's "Now" sentence.
+func eventPhase(step string) string {
+	switch step {
+	case "provisioning":
+		return "plan"
+	case "verifying":
+		return "verify"
+	default:
+		return "develop"
+	}
+}
+
 // Config configures a Runner.
 type Config struct {
 	ProjectID    string
@@ -262,12 +277,10 @@ func (r *Runner) runWithProgress(ctx context.Context, task agentclient.TaskInfo,
 				return
 			case <-t.C:
 				phase, files := pp.Progress(task.ID)
-				if phase == "" {
-					phase = "working"
-				}
-				r.report(ctx, task.ID, phase, "progress", map[string]any{
+				r.report(ctx, task.ID, eventPhase(phase), "progress", map[string]any{
 					"elapsed_seconds": int(time.Since(start).Seconds()),
 					"files_changed":   files,
+					"step":            phase, // granular step (provisioning|developing|verifying)
 				})
 			}
 		}

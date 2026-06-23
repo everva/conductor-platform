@@ -44,6 +44,9 @@ export interface FeedEvent {
   readonly filesChanged?: number;
   readonly result?: string;
   readonly summary?: string;
+  // The granular progress step (provisioning|developing|verifying) — the event's coarse Phase is
+  // a valid events.Phase (plan/develop/verify), so the precise step rides in the payload.
+  readonly step?: string;
 }
 
 /**
@@ -221,5 +224,6 @@ export function toFeedEvent(x: unknown): FeedEvent | undefined {
     ...(typeof p.files_changed === "number" ? { filesChanged: p.files_changed } : {}),
     ...(typeof p.result === "string" && p.result !== "" ? { result: p.result } : {}),
     ...(typeof p.summary === "string" && p.summary !== "" ? { summary: p.summary } : {}),
+    ...(typeof p.step === "string" && p.step !== "" ? { step: p.step } : {}),
   };
 }

@@ -222,9 +222,11 @@ func TestRunOnce_EmitsProgressPulse(t *testing.T) {
 	if len(phases) == 0 {
 		t.Fatalf("expected ≥1 progress pulse during develop, got none")
 	}
+	// The report maps the granular step "developing" → the VALID events.Phase "develop" (the
+	// gateway rejects any other phase). The granular step rides in the payload.
 	for _, ph := range phases {
-		if ph != "developing" {
-			t.Fatalf("progress phase = %q, want developing", ph)
+		if ph != "develop" {
+			t.Fatalf("progress phase = %q, want develop (valid events.Phase)", ph)
 		}
 	}
 }

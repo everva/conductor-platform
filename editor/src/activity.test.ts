@@ -30,6 +30,15 @@ describe("summarizeActivity → plain lines", () => {
     expect(rows[0]!.text).toBe("Test ediliyor · 45sn");
   });
 
+  it("production shape: coarse valid phase + granular step in payload", () => {
+    // The gateway validates phase∈{plan,develop,verify}; the precise step rides in `step`.
+    expect(summarizeActivity([ev({ kind: "progress", phase: "develop", step: "developing", elapsedSeconds: 120, filesChanged: 1 })])[0]!.text).toBe(
+      "Geliştiriyor · 2dk · 1 dosya",
+    );
+    expect(summarizeActivity([ev({ kind: "progress", phase: "plan", step: "provisioning" })])[0]!.text).toBe("Hazırlanıyor");
+    expect(summarizeActivity([ev({ kind: "progress", phase: "verify", step: "verifying", elapsedSeconds: 300 })])[0]!.text).toBe("Test ediliyor · 5dk");
+  });
+
   it("provisioning shows 'Hazırlanıyor'", () => {
     const rows = summarizeActivity([ev({ kind: "progress", phase: "provisioning" })]);
     expect(rows[0]!.text).toBe("Hazırlanıyor");
