@@ -1,6 +1,7 @@
 package statestore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -52,6 +53,7 @@ func runConformanceSuite(t *testing.T, newStore storeFactory) {
 		{"ReleaseLeaseOwnedFencesByOwner", confReleaseLeaseOwned},
 		{"AcquireLeaseConcurrentOneWinner", confAcquireConcurrent},
 		{"TaskDiffStoreRoundTrip", confTaskDiffRoundTrip},
+		{"CredentialStoreRoundTrip", confCredentialRoundTrip},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -115,6 +117,68 @@ func confTaskDiffRoundTrip(t *testing.T, s StateStore) {
 	// Empty id → ErrInvalid (guards a malformed write).
 	if err := tds.PutTaskDiff(ctx, TaskDiff{ProjectID: "", TaskID: "t1"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("PutTaskDiff(empty project) err = %v, want ErrInvalid", err)
+	}
+}
+
+// confCredentialRoundTrip exercises the ADDITIVE CredentialStore seam (L3, ADR-0049): both
+// stores implement it (type-asserted from StateStore). It proves put→get round-trip of the
+// sealed bytes, upsert (a second put for the same kind overwrites), delete (+ idempotent
+// delete of an absent kind), ErrNotFound for a missing/deleted kind, and ErrInvalid on an empty
+// kind — identically across MemoryStore and PostgresStore. The store holds only ciphertext +
+// nonce (the gateway seals/opens with the master key), so this never deals in plaintext.
+func confCredentialRoundTrip(t *testing.T, s StateStore) {
+	t.Helper()
+	ctx := context.Background()
+	cs, ok := s.(CredentialStore)
+	if !ok {
+		t.Fatalf("%T does not implement CredentialStore", s)
+	}
+
+	// Missing → ErrNotFound.
+	if _, err := cs.GetCredential(ctx, "claude_oauth"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetCredential(missing) err = %v, want ErrNotFound", err)
+	}
+
+	// Put → Get round-trip (byte slices compared field-by-field).
+	c := Credential{Kind: "claude_oauth", Ciphertext: []byte{0x01, 0x02, 0x03}, Nonce: []byte{0x09, 0x08}}
+	if err := cs.PutCredential(ctx, c); err != nil {
+		t.Fatalf("PutCredential: %v", err)
+	}
+	got, err := cs.GetCredential(ctx, "claude_oauth")
+	if err != nil {
+		t.Fatalf("GetCredential: %v", err)
+	}
+	if got.Kind != c.Kind || !bytes.Equal(got.Ciphertext, c.Ciphertext) || !bytes.Equal(got.Nonce, c.Nonce) {
+		t.Fatalf("round-trip mismatch: got %+v, want %+v", got, c)
+	}
+
+	// Upsert overwrites.
+	c2 := Credential{Kind: "claude_oauth", Ciphertext: []byte{0xaa, 0xbb}, Nonce: []byte{0xcc}}
+	if err := cs.PutCredential(ctx, c2); err != nil {
+		t.Fatalf("PutCredential(upsert): %v", err)
+	}
+	got, err = cs.GetCredential(ctx, "claude_oauth")
+	if err != nil {
+		t.Fatalf("GetCredential after upsert: %v", err)
+	}
+	if !bytes.Equal(got.Ciphertext, c2.Ciphertext) || !bytes.Equal(got.Nonce, c2.Nonce) {
+		t.Fatalf("upsert did not overwrite: %+v", got)
+	}
+
+	// Delete → ErrNotFound; deleting an absent kind is idempotent (no error).
+	if err := cs.DeleteCredential(ctx, "claude_oauth"); err != nil {
+		t.Fatalf("DeleteCredential: %v", err)
+	}
+	if _, err := cs.GetCredential(ctx, "claude_oauth"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetCredential after delete err = %v, want ErrNotFound", err)
+	}
+	if err := cs.DeleteCredential(ctx, "claude_oauth"); err != nil {
+		t.Fatalf("DeleteCredential(absent) must be idempotent, got %v", err)
+	}
+
+	// Empty kind → ErrInvalid.
+	if err := cs.PutCredential(ctx, Credential{Kind: "", Ciphertext: []byte{0x01}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("PutCredential(empty kind) err = %v, want ErrInvalid", err)
 	}
 }
 
