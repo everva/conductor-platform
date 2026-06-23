@@ -14,3 +14,5 @@
 /web/playwright/.cache/
 /web/*.tsbuildinfo
 /web/.vite/
+# Real-gateway e2e harness scratch (web/e2e-realgw/run.sh): built gateway binary + logs.
+/web/.tmp-realgw/

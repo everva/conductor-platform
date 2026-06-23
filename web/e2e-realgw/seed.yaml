@@ -1,0 +1,14 @@
+# Deterministic seed scenario for the REAL-gateway e2e harness (M3). Intaked via
+# POST /projects/{id}/intake (intake.LoadYAML → Intake, claude-free + deterministic),
+# producing task E2E-RUN, which run.sh then leases via the agent API so the board shows
+# it RUNNING with the gateway's REAL persisted status — the M1 consistency, proven
+# against a real conductor-api (not page.route mocks).
+id: E2E-RUN
+title: "Real-gateway e2e — leased task should appear Running on the board"
+lane: backend
+tier: T2
+deps: []
+acceptance:
+  - "This scenario exists only to seed a leasable task for the real-gateway board e2e."
+# Repo-EXTERNAL holdout ref (ADR-0018), required by intake; never served by the gateway here.
+hidden_holdout_ref: "store://holdouts/E2E-RUN/none"

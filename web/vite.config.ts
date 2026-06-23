@@ -11,22 +11,28 @@ import react from "@vitejs/plugin-react";
 // prod the ingress routes both the static app and the API under one origin (3C).
 const apiTarget = process.env.VITE_API_TARGET ?? "http://localhost:8080";
 
+// gatewayProxy maps the gateway's REST + WS paths to VITE_API_TARGET so the browser stays
+// same-origin (ApiClient base URL "") and the gateway needs no CORS change. Shared by the dev
+// server AND `vite preview` (the latter so the OPT-IN real-gateway e2e harness — run.sh /
+// playwright.realgw.config.ts — drives the built app against a real conductor-api without CORS;
+// the hermetic e2e suite page.route-mocks these paths so the proxy is never exercised there).
+const gatewayProxy = {
+  "/projects": { target: apiTarget, changeOrigin: true },
+  "/hosts": { target: apiTarget, changeOrigin: true },
+  "/status": { target: apiTarget, changeOrigin: true },
+  "/events": { target: apiTarget, changeOrigin: true },
+  // /ws is the WebSocket event stream — needs ws:true to upgrade the connection.
+  // changeOrigin is FALSE here (unlike the REST routes): the proxied handshake then
+  // keeps the browser's Host (localhost:5173), which matches the Origin the browser
+  // sends. The gateway's WS Accept is same-origin by default (cmd/conductor-api/
+  // events.go) and 403s a cross-origin handshake — exactly what changeOrigin:true
+  // causes by rewriting Host to the :8080 target while Origin stays :5173. Prod serves
+  // the app + API under one ingress origin, so this only affects the dev/preview proxy.
+  "/ws": { target: apiTarget, changeOrigin: false, ws: true },
+};
+
 export default defineConfig({
   plugins: [react()],
-  server: {
-    proxy: {
-      "/projects": { target: apiTarget, changeOrigin: true },
-      "/hosts": { target: apiTarget, changeOrigin: true },
-      "/status": { target: apiTarget, changeOrigin: true },
-      "/events": { target: apiTarget, changeOrigin: true },
-      // /ws is the WebSocket event stream — needs ws:true to upgrade the connection.
-      // changeOrigin is FALSE here (unlike the REST routes): the proxied handshake then
-      // keeps the browser's Host (localhost:5173), which matches the Origin the browser
-      // sends. The gateway's WS Accept is same-origin by default (cmd/conductor-api/
-      // events.go) and 403s a cross-origin handshake — exactly what changeOrigin:true
-      // causes by rewriting Host to the :8080 target while Origin stays :5173. Prod serves
-      // the app + API under one ingress origin, so this only affects the dev proxy.
-      "/ws": { target: apiTarget, changeOrigin: false, ws: true },
-    },
-  },
+  server: { proxy: gatewayProxy },
+  preview: { proxy: gatewayProxy },
 });

@@ -12,6 +12,7 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "e2e": "playwright test",
+    "e2e:realgw": "bash e2e-realgw/run.sh",
     "gen:events": "cd .. && go run ./cmd/eventgen -out web/src/types/events.gen.ts",
     "gate": "npm run typecheck && npm run lint && npm run test"
   },

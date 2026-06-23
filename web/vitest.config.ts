@@ -3,14 +3,14 @@ import react from "@vitejs/plugin-react";
 
 // Vitest configuration (kept separate from vite.config.ts so the vite/vitest
 // type surfaces stay isolated). jsdom env + a setup file that wires
-// @testing-library/jest-dom matchers; e2e/ is Playwright's and excluded.
+// @testing-library/jest-dom matchers; e2e/ + e2e-realgw/ are Playwright's and excluded.
 export default defineConfig({
   plugins: [react()],
   test: {
     globals: true,
     environment: "jsdom",
     setupFiles: ["./vitest.setup.ts"],
-    exclude: ["e2e/**", "node_modules/**", "dist/**"],
+    exclude: ["e2e/**", "e2e-realgw/**", "node_modules/**", "dist/**"],
     // The org self-hosted runner is shared; under CPU contention jsdom renders +
     // user-event interactions that take <1s locally have intermittently blown the
     // default 5000ms per-test timeout (uniform "Test timed out in 5000ms" across the

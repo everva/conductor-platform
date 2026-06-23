@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/everva/conductor-platform/internal/statestore"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -152,5 +153,62 @@ func TestHandleOnboardPG(t *testing.T) {
 	}
 	if len(projects) != 1 || projects[0].Repo != "everva/pg-onboard" {
 		t.Fatalf("want exactly one persisted project for everva/pg-onboard, got %+v", projects)
+	}
+}
+
+// TestAgentLeaseStatusFlipPG is the GERÇEK-PG round-trip proof of M1: against a REAL
+// Postgres-backed gateway, leasing a task flips its persisted status to "running" so the
+// editor's sessions tree — which reads GET /projects/{id}/tasks (Task.Status) — matches the
+// board's lease-derived "running" instead of showing a stale "todo". An owner release with no
+// terminal verdict reverts it to "ready" so it is re-runnable. control_test.go / agent_test.go
+// prove this over the in-memory store; this exercises the same path through the real DB the
+// live davinci gateway uses.
+func TestAgentLeaseStatusFlipPG(t *testing.T) {
+	dsn := requirePGDSN(t)
+	ctx := context.Background()
+
+	_, schemaDSN, drop := freshSchema(t, ctx, dsn)
+	defer drop()
+
+	store, closeStore, err := newStore(ctx, config{dsn: schemaDSN}, testLogger())
+	if err != nil {
+		t.Fatalf("newStore: %v", err)
+	}
+	defer closeStore()
+
+	mustCreate(t, store.CreateProject(ctx, statestore.Project{ID: "p", Repo: "everva/p", BaseBranch: "develop", Readiness: "ready"}))
+	mustCreate(t, store.CreateTask(ctx, statestore.Task{ID: "T-1", ProjectID: "p", Lane: "backend", Tier: "T2", Status: "todo"}))
+
+	srv := &apiServer{store: store, token: testToken, clock: fixedClock, logger: testLogger()}
+	h := srv.routes()
+
+	call := func(method, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+testToken)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Lease the task through the REST agent API (the davinci host's exact path).
+	if rec := call(http.MethodPost, "/projects/p/agent/lease", `{"host_id":"davinci","capabilities":["backend"]}`); rec.Code != http.StatusOK {
+		t.Fatalf("lease: status=%d body=%s", rec.Code, strings.TrimSpace(rec.Body.String()))
+	}
+
+	// The editor's data source — GET /projects/{id}/tasks — now reports the task running.
+	tasks := call(http.MethodGet, "/projects/p/tasks", "")
+	if tasks.Code != http.StatusOK || !strings.Contains(tasks.Body.String(), `"status":"running"`) {
+		t.Fatalf("after lease, /tasks should show running (editor tree source): status=%d body=%s", tasks.Code, strings.TrimSpace(tasks.Body.String()))
+	}
+	if got, _ := store.GetTask(ctx, "T-1"); got.Status != "running" {
+		t.Fatalf("persisted status after lease = %q, want running", got.Status)
+	}
+
+	// Owner release with no terminal verdict reverts to ready (re-runnable), in the real DB.
+	if rec := call(http.MethodPost, "/projects/p/agent/lease/release", `{"host_id":"davinci","task_id":"T-1"}`); rec.Code != http.StatusOK {
+		t.Fatalf("release: status=%d body=%s", rec.Code, strings.TrimSpace(rec.Body.String()))
+	}
+	if got, _ := store.GetTask(ctx, "T-1"); got.Status != "ready" {
+		t.Fatalf("persisted status after owner release = %q, want ready", got.Status)
 	}
 }
