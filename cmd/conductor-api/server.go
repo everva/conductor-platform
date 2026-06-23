@@ -20,6 +20,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/everva/conductor-platform/internal/credstore"
 	"github.com/everva/conductor-platform/internal/events"
 	"github.com/everva/conductor-platform/internal/intake"
 	"github.com/everva/conductor-platform/internal/statestore"
@@ -66,6 +67,12 @@ type apiServer struct {
 	// clients promptly (review F3) instead of dropping them when the process exits.
 	// It is optional: nil (e.g. in tests) leaves /ws bound to the request context only.
 	baseCtx context.Context
+	// sealer encrypts/decrypts the L3 credential store (ADR-0049): the editor uploads the
+	// portable claude OAuth token, the gateway SEALS it before it touches Postgres, and the
+	// agent fetches the decrypted token over the authed channel. It is OPTIONAL — nil when no
+	// master key (CONDUCTOR_CREDENTIAL_KEY) is configured, in which case the credential
+	// endpoints fail CLOSED (503) rather than ever storing/serving plaintext.
+	sealer *credstore.Sealer
 }
 
 // now returns the current time via the injected clock, defaulting to time.Now so
@@ -119,6 +126,14 @@ func (s *apiServer) routes() http.Handler {
 	mux.Handle("POST /projects/{id}/agent/tasks/{task}/result", s.requireAuth(http.HandlerFunc(s.handleAgentResult)))
 	mux.Handle("GET /projects/{id}/agent/tasks/{task}/decision", s.requireAuth(http.HandlerFunc(s.handleAgentDecision)))
 	mux.Handle("POST /projects/{id}/agent/tasks/{task}/merged", s.requireAuth(http.HandlerFunc(s.handleAgentMerged)))
+
+	// L3 (ADR-0049): the gateway-distributed encrypted credential store. The editor uploads the
+	// director's portable claude OAuth token once (PUT), each agent fetches the decrypted token
+	// at startup (GET), and logout removes it (DELETE). Authed; the token is sealed at rest and
+	// only ever crosses the wire over this authed channel — never logged.
+	mux.Handle("PUT /agent/credentials/{kind}", s.requireAuth(http.HandlerFunc(s.handleAgentPutCredential)))
+	mux.Handle("GET /agent/credentials/{kind}", s.requireAuth(http.HandlerFunc(s.handleAgentGetCredential)))
+	mux.Handle("DELETE /agent/credentials/{kind}", s.requireAuth(http.HandlerFunc(s.handleAgentDeleteCredential)))
 
 	// Historical event replay: standard bearer auth (header only).
 	mux.Handle("GET /events", s.requireAuth(http.HandlerFunc(s.handleEvents)))

@@ -124,6 +124,9 @@ type reportRequest struct {
 type mergedRequest struct {
 	SHA string `json:"sha"`
 }
+type putCredentialRequest struct {
+	Token string `json:"token"`
+}
 
 // Lease asks the gateway for the next ready task for the project, self-registering
 // the host with its capabilities. ok=false means there is no work right now (the
@@ -200,6 +203,41 @@ func (c *Client) Merged(ctx context.Context, projectID, taskID, sha string) erro
 // finishes or abandons a task.
 func (c *Client) Release(ctx context.Context, projectID, hostID, taskID string) error {
 	_, err := c.do(ctx, http.MethodPost, "/projects/"+projectID+"/agent/lease/release", releaseRequest{HostID: hostID, TaskID: taskID}, nil)
+	return err
+}
+
+// PutCredential uploads a credential (e.g. kind "claude_oauth") to the gateway's encrypted
+// store (L3, ADR-0049). The gateway seals it at rest. The token is sent ONLY in the request
+// body over the authed channel and never logged. A 503 (no master key on the gateway) or 501
+// (no credential store) surfaces as an *Error so the caller can report it.
+func (c *Client) PutCredential(ctx context.Context, kind, token string) error {
+	_, err := c.do(ctx, http.MethodPut, "/agent/credentials/"+kind, putCredentialRequest{Token: token}, nil)
+	return err
+}
+
+// GetCredential fetches + decrypts a credential from the gateway (L3). found=false (no error)
+// means none is stored (the gateway returned 404) — the agent then falls back to its own env /
+// an interactive login. The returned token lives only in memory; it is never logged.
+func (c *Client) GetCredential(ctx context.Context, kind string) (token string, found bool, err error) {
+	var out struct {
+		Token string `json:"token"`
+	}
+	status, err := c.do(ctx, http.MethodGet, "/agent/credentials/"+kind, nil, &out)
+	if err != nil {
+		var e *Error
+		if errors.As(err, &e) && e.Status == http.StatusNotFound {
+			return "", false, nil // none stored — caller falls back
+		}
+		return "", false, err
+	}
+	_ = status
+	return out.Token, true, nil
+}
+
+// DeleteCredential removes a credential from the gateway store (logout propagation). Idempotent
+// (deleting an absent kind succeeds on the gateway).
+func (c *Client) DeleteCredential(ctx context.Context, kind string) error {
+	_, err := c.do(ctx, http.MethodDelete, "/agent/credentials/"+kind, nil, nil)
 	return err
 }
 

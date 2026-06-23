@@ -40,6 +40,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/everva/conductor-platform/internal/credstore"
 	"github.com/everva/conductor-platform/internal/events"
 	"github.com/everva/conductor-platform/internal/intake"
 	"github.com/everva/conductor-platform/internal/statestore"
@@ -61,6 +62,10 @@ type config struct {
 	addr  string
 	dsn   string
 	token string
+	// credentialKey is the base64 32-byte AES-256 master key for the L3 credential store
+	// (ADR-0049). Env-only (like the token) — sourced from a k8s secret. Empty = the
+	// credential endpoints are DISABLED (fail-closed); the gateway never stores plaintext.
+	credentialKey string
 }
 
 // parseConfig resolves flags (each falling back to an env var) and the
@@ -84,7 +89,25 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		// Token is read from the environment ONLY — never a flag — so it does not
 		// appear in the process argument list.
 		token: os.Getenv("CONDUCTOR_API_TOKEN"),
+		// Credential master key (L3) — env-only secret, like the token.
+		credentialKey: os.Getenv("CONDUCTOR_CREDENTIAL_KEY"),
 	}, nil
+}
+
+// buildSealer turns the configured base64 master key into a credstore.Sealer (L3, ADR-0049).
+// An EMPTY key returns (nil, nil) — the credential store is intentionally disabled and the
+// endpoints fail closed. A NON-EMPTY but malformed/wrong-length key is a hard error: an
+// operator who set the key meant to enable encryption, so we refuse to start rather than
+// silently run with the feature off. The key bytes are never logged.
+func buildSealer(base64Key string) (*credstore.Sealer, error) {
+	key, err := credstore.KeyFromBase64(base64Key)
+	if errors.Is(err, credstore.ErrNotConfigured) {
+		return nil, nil // disabled — fail-closed at the endpoints.
+	}
+	if err != nil {
+		return nil, fmt.Errorf("CONDUCTOR_CREDENTIAL_KEY invalid: %w", err)
+	}
+	return credstore.New(key)
 }
 
 // run wires the service and serves until the context is cancelled (SIGINT/
@@ -130,6 +153,15 @@ func run(ctx context.Context, argv []string, logger *slog.Logger, stderr io.Writ
 	// Release the event bus backend (its own pgxpool / subscriptions) on exit.
 	defer closeBus()
 
+	// L3 (ADR-0049): build the credential sealer from the master key, if configured. No key →
+	// nil sealer → the credential endpoints fail closed (503). A configured-but-invalid key is
+	// a hard startup error (never silently disable encryption when an operator intended it on).
+	sealer, err := buildSealer(cfg.credentialKey)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "conductor-api: %v\n", err)
+		return 1
+	}
+
 	api := &apiServer{
 		store: store,
 		bus:   bus,
@@ -144,12 +176,15 @@ func run(ctx context.Context, argv []string, logger *slog.Logger, stderr io.Writ
 		// It only DRAFTS proposed scenarios for human review at POST /distill; it
 		// persists nothing. Tests inject a stub via the apiServer field instead.
 		distiller: intake.NewCommandDistiller(),
+		sealer:    sealer,
 	}
 
-	// Log ONLY the addr and the backend NAME — never the DSN or the token.
+	// Log ONLY the addr and the backend NAME — never the DSN or the token. Also log WHETHER the
+	// credential store is enabled (a boolean — never the key) so operators can confirm L3 config.
 	logger.Info("conductor-api starting",
 		slog.String("addr", cfg.addr),
-		slog.String("store_backend", storeBackendName(cfg.dsn)))
+		slog.String("store_backend", storeBackendName(cfg.dsn)),
+		slog.Bool("credential_store_enabled", sealer != nil))
 
 	server := &http.Server{
 		Addr:              cfg.addr,

@@ -463,3 +463,131 @@ func (s *apiServer) handleAgentMerged(w http.ResponseWriter, r *http.Request) {
 		map[string]any{"sha": req.SHA, "base": project.BaseBranch})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "done"})
 }
+
+// ─────────────────────────────────────────────────────────────────────────────────────
+// L3 (ADR-0049) — the gateway-distributed encrypted credential store. The editor uploads
+// the director's portable claude OAuth token once (PUT), the gateway SEALS it
+// (credstore AES-256-GCM, master key from a k8s secret) before it touches Postgres, each
+// agent fetches the decrypted token at startup (GET) over this authed channel, and logout
+// removes it (DELETE). Fail-closed: with no master key configured (s.sealer == nil) the
+// PUT/GET endpoints return 503 rather than ever storing/serving plaintext.
+//
+// TOKEN DISCIPLINE: the token appears ONLY in the request/response body over the authed
+// channel; it is NEVER logged (serverError logs an op + a shape-only error, and credstore
+// errors carry no key/nonce/plaintext). PUT/DELETE return no body; GET returns the token
+// only to an authed caller.
+// ─────────────────────────────────────────────────────────────────────────────────────
+
+// credentialPutRequest is the body of PUT /agent/credentials/{kind}: the plaintext token to
+// seal. It is sealed immediately; it is never persisted in the clear or logged.
+type credentialPutRequest struct {
+	Token string `json:"token"`
+}
+
+// credentialGetResponse is the body of GET /agent/credentials/{kind}: the decrypted token,
+// returned only to an authed caller over the authed channel (and never logged).
+type credentialGetResponse struct {
+	Token string `json:"token"`
+}
+
+// credStore type-asserts the optional CredentialStore seam, returning false (→ caller writes
+// 501) when the configured store has no credential persistence.
+func (s *apiServer) credStore() (statestore.CredentialStore, bool) {
+	cs, ok := s.store.(statestore.CredentialStore)
+	return cs, ok
+}
+
+// handleAgentPutCredential: PUT /agent/credentials/{kind} — seal + upsert the uploaded token.
+// 204 on success; 400 empty kind/token; 501 no credential store; 503 no master key (fail-closed).
+func (s *apiServer) handleAgentPutCredential(w http.ResponseWriter, r *http.Request) {
+	kind := strings.TrimSpace(r.PathValue("kind"))
+	if kind == "" {
+		writeError(w, http.StatusBadRequest, "kind is required")
+		return
+	}
+	cs, ok := s.credStore()
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "credential storage not configured")
+		return
+	}
+	if s.sealer == nil {
+		writeError(w, http.StatusServiceUnavailable, "credential encryption not configured")
+		return
+	}
+	var req credentialPutRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(req.Token) == "" {
+		writeError(w, http.StatusBadRequest, "token is required")
+		return
+	}
+	ciphertext, nonce, err := s.sealer.Seal([]byte(req.Token))
+	if err != nil {
+		s.serverError(w, "credential: seal", err)
+		return
+	}
+	if err := cs.PutCredential(r.Context(), statestore.Credential{Kind: kind, Ciphertext: ciphertext, Nonce: nonce}); err != nil {
+		s.serverError(w, "credential: put", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAgentGetCredential: GET /agent/credentials/{kind} — fetch + decrypt the token for an
+// authed caller (the agent). 200 {token}; 404 none stored; 501 no store; 503 no master key.
+func (s *apiServer) handleAgentGetCredential(w http.ResponseWriter, r *http.Request) {
+	kind := strings.TrimSpace(r.PathValue("kind"))
+	if kind == "" {
+		writeError(w, http.StatusBadRequest, "kind is required")
+		return
+	}
+	cs, ok := s.credStore()
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "credential storage not configured")
+		return
+	}
+	if s.sealer == nil {
+		writeError(w, http.StatusServiceUnavailable, "credential encryption not configured")
+		return
+	}
+	c, err := cs.GetCredential(r.Context(), kind)
+	if errors.Is(err, statestore.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "credential not found")
+		return
+	}
+	if err != nil {
+		s.serverError(w, "credential: get", err)
+		return
+	}
+	token, err := s.sealer.Open(c.Ciphertext, c.Nonce)
+	if err != nil {
+		// Decrypt failed (e.g. the master key was rotated away from the one that sealed this
+		// row). Shape-only error; never log the ciphertext/nonce/token.
+		s.serverError(w, "credential: open", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, credentialGetResponse{Token: string(token)})
+}
+
+// handleAgentDeleteCredential: DELETE /agent/credentials/{kind} — forget the credential
+// (logout propagation). 204; idempotent (deleting an absent kind succeeds). No master key
+// needed (delete does not decrypt). 501 when no credential store is configured.
+func (s *apiServer) handleAgentDeleteCredential(w http.ResponseWriter, r *http.Request) {
+	kind := strings.TrimSpace(r.PathValue("kind"))
+	if kind == "" {
+		writeError(w, http.StatusBadRequest, "kind is required")
+		return
+	}
+	cs, ok := s.credStore()
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "credential storage not configured")
+		return
+	}
+	if err := cs.DeleteCredential(r.Context(), kind); err != nil {
+		s.serverError(w, "credential: delete", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
