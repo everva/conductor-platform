@@ -21,6 +21,30 @@ davinci (host-agent)  ──HTTP/tailscale──▶  conductor-api gateway (k8s)
   governance empty → **held-for-review** (fail-safe). optiway `main` is never touched.
 - **davinci → gateway reachability confirmed** over tailscale (`http://conductor-api:8080`).
 
+## macOS host (launchd) — e.g. `everva`
+
+A second performer host on macOS, added like davinci. The mac advertises `macos,ios-build,
+maestro,web,backend` capabilities (Xcode + node), so it can pick up iOS/macOS tasks a Linux host
+cannot. Templates: [`macos/run-agent.sh`](macos/run-agent.sh) + [`macos/ai.everva.conductor-agent.plist`](macos/ai.everva.conductor-agent.plist).
+
+**Already staged autonomously on `everva`** (`~/conductor-agent/`): the darwin/amd64 agent binary,
+the `claude` CLI (npm-global), the path-adjusted recipe (`recipe/.conductor/config.yaml` +
+`recipe/gate-verify.sh`), the 0600 `conductor-agent.env` (gateway/project/repo/base + capabilities
++ secrets replicated from davinci), the `run-agent.sh` wrapper, and the LaunchAgent plist (plist
+lint OK). Node is v25 (≥22, satisfies optiway's engine). **NOT loaded** — the live connection
+can't be validated until Tailscale is up.
+
+**You do (2 steps — needs the box's network + your hand):**
+1. **Bring Tailscale up on everva** so it resolves `conductor-api` (the tailnet gateway): open the
+   Tailscale app (it was stopped) and connect. Verify: `ssh everva 'curl -fsS http://conductor-api.tail01ebbd.ts.net:8080/healthz'` → `ok`.
+2. **Load the agent service:** `ssh everva 'launchctl load ~/Library/LaunchAgents/ai.everva.conductor-agent.plist'`.
+   Watch it: `ssh everva 'tail -f ~/conductor-agent/logs/agent.err.log'` — expect "recipe loaded",
+   "fetched the claude credential from the gateway", "starting". It then registers as host `everva`
+   and leases capability-matched tasks. (The claude credential auto-flows from the gateway's L3
+   store — no interactive login, since you already pushed it for davinci.)
+
+Cross-compile (if you rebuild the binary): `GOOS=darwin GOARCH=amd64 go build -o conductor-agent ./cmd/conductor-agent`.
+
 ## ▶ You do (needs your credentials / decisions)
 The remaining steps need an interactive `claude` login, your GitHub token, and your
 approval — none of which can be done autonomously.

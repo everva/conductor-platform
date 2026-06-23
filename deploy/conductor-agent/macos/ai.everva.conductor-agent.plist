@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- LaunchAgent for the conductor host-agent on macOS. Copy to ~/Library/LaunchAgents/, then
+     `launchctl load` it (see ../README.md). KeepAlive restarts it on crash / after sleep, the
+     macOS analogue of systemd Restart=always. Secrets live in the 0600 env file, not here. -->
+<plist version="1.0"><dict>
+  <key>Label</key><string>ai.everva.conductor-agent</string>
+  <key>ProgramArguments</key><array><string>/Users/everva/conductor-agent/run-agent.sh</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Users/everva/conductor-agent/logs/agent.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/everva/conductor-agent/logs/agent.err.log</string>
+</dict></plist>
