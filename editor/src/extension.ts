@@ -125,6 +125,14 @@ export const NEW_WORK_COMMAND = "conductor.newWork";
  * a blocked sessions-tree task node or a blocked decision row in the live Stream. */
 export const RETRY_TASK_COMMAND = "conductor.retryTask";
 
+/** Command id that (re)opens the native Getting Started walkthrough — the "how to use Conductor
+ * well" tour. Auto-opened once on first launch; re-runnable from the palette anytime. */
+export const OPEN_TOUR_COMMAND = "conductor.openTour";
+
+/** The walkthrough's fully-qualified id (`<publisher>.<name>#<walkthroughId>`), the argument
+ * `workbench.action.openWalkthrough` expects. */
+export const WALKTHROUGH_ID = "everva.conductor-editor#conductor.gettingStarted";
+
 /** WebviewPanel viewType + tab title of the editor-area Intake window (Q3a). A singleton panel
  * (its own tab) that mounts the standalone IntakeChat surface (data-surface="intake"). */
 export const INTAKE_VIEW_TYPE = "conductor.intake";
@@ -1736,6 +1744,12 @@ export function registerConductor(
   const newWork = api.commands.registerCommand(NEW_WORK_COMMAND, () => {
     intakePanel?.open();
   });
+  // PO onboarding: (re)open the native Getting Started tour — "nasıl iyi kullanılacak" — from the
+  // palette anytime. Auto-opened once on first launch (see activate). Delegates to the built-in
+  // walkthrough surface, so no custom UI to maintain.
+  const openTour = api.commands.registerCommand(OPEN_TOUR_COMMAND, () => {
+    void api.commands.executeCommand("workbench.action.openWalkthrough", WALKTHROUGH_ID, false);
+  });
   // Faz-Q / Q0.4 (ADR-0044): the sidebar webview Fleet view is gone — the cockpit mounts ONLY in
   // the editor-area Command Center, so a single HostBridge owns the one live event stream. The
   // sidebar keeps only the native "Conductors" tree (registered in `activate`, the selection driver).
@@ -1753,6 +1767,7 @@ export function registerConductor(
     showEventJson,
     retryTask,
     newWork,
+    openTour,
   ];
   // Dispose the editor-area panels (+ their bridges) on deactivate when they were built.
   if (commandCenter) {
@@ -2174,6 +2189,10 @@ export function activate(context: vscode.ExtensionContext): void {
   if (context.globalState.get(FIRST_LAUNCH_KEY) !== true) {
     void context.globalState.update(FIRST_LAUNCH_KEY, true);
     void vscode.commands.executeCommand(REVEAL_CONTAINER_COMMAND);
+    // PO onboarding: on the very first launch, open the Getting Started tour so a new director is
+    // GUIDED through connect → log in → create → watch → review, instead of facing an empty, silent
+    // layout. One-time (same globalState gate); re-openable anytime via OPEN_TOUR_COMMAND.
+    void vscode.commands.executeCommand("workbench.action.openWalkthrough", WALKTHROUGH_ID, false);
   }
 
   // Silent restore: re-validate a stored token (if any) and mirror the result onto the

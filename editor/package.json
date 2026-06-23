@@ -64,7 +64,7 @@
     "viewsWelcome": [
       {
         "view": "conductor.sessions",
-        "contents": "No Conductors to show.\n[Connect to a gateway](command:conductor.connect)\nto see your projects and sessions."
+        "contents": "No Conductors to show.\n[Connect to a gateway](command:conductor.connect)\nto see your projects and sessions.\n\nNew here? [Take the Getting Started tour](command:conductor.openTour)."
       },
       {
         "view": "conductor.events",
@@ -171,6 +171,12 @@
         "title": "Conductor: Retry Blocked Task",
         "category": "Conductor",
         "icon": "$(debug-restart)"
+      },
+      {
+        "command": "conductor.openTour",
+        "title": "Conductor: Open Getting Started Tour",
+        "category": "Conductor",
+        "icon": "$(compass)"
       }
     ],
     "menus": {
@@ -284,6 +290,88 @@
         "key": "ctrl+alt+r",
         "mac": "cmd+alt+r",
         "when": "conductor.connected"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "conductor.gettingStarted",
+        "title": "Get started with Conductor",
+        "description": "Direct your AI engineering fleet — connect, create work, watch it build, review and approve.",
+        "steps": [
+          {
+            "id": "connect",
+            "title": "Connect to your gateway",
+            "description": "Link the editor to your control plane.\n[Connect to your gateway](command:conductor.connect)",
+            "media": {
+              "markdown": "media/walkthrough/connect.md",
+              "altText": "Connect to your gateway"
+            },
+            "completionEvents": [
+              "onContext:conductor.connected",
+              "onCommand:conductor.connect"
+            ]
+          },
+          {
+            "id": "login",
+            "title": "Log in to Claude",
+            "description": "Mint a portable Claude login your hosts reuse.\n[Log in to Claude](command:conductor.login)",
+            "media": {
+              "markdown": "media/walkthrough/login.md",
+              "altText": "Log in to Claude"
+            },
+            "completionEvents": [
+              "onCommand:conductor.login"
+            ]
+          },
+          {
+            "id": "shareLogin",
+            "title": "Share your login with the fleet",
+            "description": "Push your login to the gateway so every host gets it.\n[Share your login with the fleet](command:conductor.pushCredential)",
+            "media": {
+              "markdown": "media/walkthrough/share-login.md",
+              "altText": "Share your login with the fleet"
+            },
+            "completionEvents": [
+              "onCommand:conductor.pushCredential"
+            ]
+          },
+          {
+            "id": "createWork",
+            "title": "Create work",
+            "description": "Open intake — write a spec directly or distill one.\n[Create work](command:conductor.newWork)",
+            "media": {
+              "markdown": "media/walkthrough/create-work.md",
+              "altText": "Create work"
+            },
+            "completionEvents": [
+              "onCommand:conductor.newWork"
+            ]
+          },
+          {
+            "id": "watch",
+            "title": "Watch it build",
+            "description": "Open the Command Center + the readable live Stream.\n[Watch it build](command:conductor.open)",
+            "media": {
+              "markdown": "media/walkthrough/watch.md",
+              "altText": "Watch it build"
+            },
+            "completionEvents": [
+              "onCommand:conductor.open"
+            ]
+          },
+          {
+            "id": "review",
+            "title": "Review & approve",
+            "description": "Approve, open the diff, or retry — inline.\n[Review & approve](command:conductor.open)",
+            "media": {
+              "markdown": "media/walkthrough/review.md",
+              "altText": "Review & approve"
+            },
+            "completionEvents": [
+              "onCommand:conductor.approve"
+            ]
+          }
+        ]
       }
     ]
   },

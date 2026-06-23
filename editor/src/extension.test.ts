@@ -78,6 +78,8 @@ import {
   registerConductor,
   renderDiffDocument,
   runApproveTask,
+  OPEN_TOUR_COMMAND,
+  WALKTHROUGH_ID,
   runConnect,
   runControl,
   runRetry,
@@ -195,9 +197,9 @@ describe("registerConductor", () => {
 
     // connect + disconnect + login + logout + pause + resume + abort + approve + diff-provider +
     // show-diff + open (N0) + openSession (N3) + openTaskDiff (P3) + showEventJson + retryTask (A/B) +
-    // newWork (Q3a) = 16. (Q0.4: no sidebar webview view; the CC + Intake panels are built only when a
-    // fleetConfig is supplied — registerConductor here gets none, so no panel is pushed.)
-    expect(disposables).toHaveLength(16);
+    // newWork (Q3a) + openTour = 17. (Q0.4: no sidebar webview view; the CC + Intake panels are built
+    // only when a fleetConfig is supplied — registerConductor here gets none, so no panel is pushed.)
+    expect(disposables).toHaveLength(17);
     expect(commands.registerCommand).toHaveBeenCalledWith(CONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(DISCONNECT_COMMAND, expect.any(Function));
     // L1: the editor-mediated claude login/logout commands.
@@ -251,6 +253,16 @@ describe("registerConductor", () => {
     created.__fireMessage({ kind: "webview-ready" });
     // Project-only select (no `task`) → the board scopes to web-shop.
     expect(created.webview.postMessage).toHaveBeenCalledWith({ kind: "select", project: "web-shop" });
+  });
+
+  it("openTour opens the native Getting Started walkthrough", () => {
+    const { manager } = makeManager({});
+    registerConductor(diffApi, manager, "http://gw.test", makeControl(), new DiffStore());
+
+    const tourCb = commands.registerCommand.mock.calls.find((c) => c[0] === OPEN_TOUR_COMMAND)?.[1] as () => void;
+    expect(tourCb).toBeDefined();
+    tourCb();
+    expect(commands.executeCommand).toHaveBeenCalledWith("workbench.action.openWalkthrough", WALKTHROUGH_ID, false);
   });
 });
 
@@ -1399,8 +1411,8 @@ describe("activate", () => {
     });
     // 33 (post-diagnostics) + Activity's three (view + provider + nowBar status item) = 36,
     // + the M2 auto-reconnect controller's dispose = 37, + the A/B Stream commands
-    // (showEventJson + retryTask) = 39.
-    expect(subscriptions).toHaveLength(39);
+    // (showEventJson + retryTask) = 39, + the openTour command = 40.
+    expect(subscriptions).toHaveLength(40);
   });
 
   it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {
