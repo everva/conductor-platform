@@ -98,17 +98,14 @@ func run() error {
 		return err
 	}
 
-	// Faz L2 (ADR-0049): the performer is `claude -p`, which authenticates from
-	// CLAUDE_CODE_OAUTH_TOKEN (the portable token minted by the editor's "Conductor: Log In",
-	// or `claude setup-token`). The token flows to the develop subprocess via the inherited,
-	// envsafe-sanitized environment (envsafe KEEPS CLAUDE_CODE_OAUTH_TOKEN). If it is unset
-	// AND the performer is claude, warn (non-fatal): the host may still have an interactive
-	// claude login, but editor-mediated login is the SSH-free path. We check presence only —
-	// the token value is NEVER read or logged (account-level secret).
-	if usesClaudePerformer(devArgv) && os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") == "" {
-		logger.Warn("CLAUDE_CODE_OAUTH_TOKEN is not set; the claude performer will rely on an interactive login on this host. " +
-			"Mint a portable token in the editor (\"Conductor: Log In\") and set CLAUDE_CODE_OAUTH_TOKEN to run without an SSH login.")
-	}
+	client := agentclient.New(cfg.gateway, token)
+
+	// Faz L2+L3 (ADR-0049): resolve the claude credential for the `claude -p` performer.
+	// Precedence: an existing CLAUDE_CODE_OAUTH_TOKEN in the env wins; otherwise FETCH the
+	// editor-uploaded token from the gateway's encrypted credential store (L3) and inject it
+	// into this process's env so the develop subprocess inherits it (envsafe KEEPS it). If
+	// neither is available, warn (non-fatal: the host may have an interactive claude login).
+	ensureClaudeAuth(context.Background(), client, devArgv, logger)
 
 	exec, err := agent.NewRealExecutor(agent.ExecutorConfig{
 		RootDir:    cfg.root,
@@ -125,7 +122,6 @@ func run() error {
 		return err
 	}
 
-	client := agentclient.New(cfg.gateway, token)
 	runner := agent.New(client, exec, agent.Config{
 		ProjectID: cfg.project, HostID: cfg.hostID, Capabilities: cfg.capabilities,
 		PollInterval: cfg.poll, Logger: logger,
@@ -180,6 +176,53 @@ func resolveRecipe(cfg config, logger *slog.Logger) ([]string, []verify.Gate, er
 // on the command's base name so an absolute path (e.g. /usr/local/bin/claude) still counts.
 func usesClaudePerformer(developCmd []string) bool {
 	return len(developCmd) > 0 && filepath.Base(developCmd[0]) == "claude"
+}
+
+// claudeCredentialKind is the credential "kind" the editor uploads and the agent fetches
+// from the gateway's encrypted store (L3, ADR-0049). It is the env var name the headless
+// performer (`claude -p`) reads, so the agent sets exactly that variable after a fetch.
+const claudeCredentialKind = "CLAUDE_CODE_OAUTH_TOKEN"
+
+// credentialFetcher is the slice of the gateway client ensureClaudeAuth needs (L3). A fake
+// satisfies it in tests; *agentclient.Client satisfies it in production.
+type credentialFetcher interface {
+	GetCredential(ctx context.Context, kind string) (token string, found bool, err error)
+}
+
+// ensureClaudeAuth resolves the claude credential for a `claude -p` performer (Faz L2+L3,
+// ADR-0049), with precedence: (1) a CLAUDE_CODE_OAUTH_TOKEN already in the env wins (operator-
+// set / interactive); (2) otherwise FETCH the editor-uploaded token from the gateway's
+// encrypted credential store and os.Setenv it, so the develop subprocess inherits it (envsafe
+// KEEPS this var); (3) neither → warn (non-fatal: the host may have an interactive login).
+//
+// It is a no-op for a non-claude performer. The token VALUE is never logged (account-level
+// secret) — only presence/outcome. A fetch error is logged shape-only (the client's *Error is
+// secret-free) and is non-fatal: the agent still starts and may use an interactive login.
+func ensureClaudeAuth(ctx context.Context, f credentialFetcher, developCmd []string, logger *slog.Logger) {
+	if !usesClaudePerformer(developCmd) {
+		return
+	}
+	if os.Getenv(claudeCredentialKind) != "" {
+		logger.Info("conductor-agent: using CLAUDE_CODE_OAUTH_TOKEN from the environment")
+		return
+	}
+	token, found, err := f.GetCredential(ctx, claudeCredentialKind)
+	if err != nil {
+		logger.Warn("conductor-agent: could not fetch the claude credential from the gateway; "+
+			"relying on an interactive login if present", "err", err)
+		return
+	}
+	if !found {
+		logger.Warn("CLAUDE_CODE_OAUTH_TOKEN is not set and the gateway has no stored claude credential; " +
+			"the claude performer will rely on an interactive login on this host. Run \"Conductor: Log In\" in " +
+			"the editor (and push it to the gateway) to enable SSH-free login.")
+		return
+	}
+	if err := os.Setenv(claudeCredentialKind, token); err != nil {
+		logger.Warn("conductor-agent: could not set CLAUDE_CODE_OAUTH_TOKEN from the fetched credential", "err", err)
+		return
+	}
+	logger.Info("conductor-agent: fetched the claude credential from the gateway (CLAUDE_CODE_OAUTH_TOKEN set)")
 }
 
 func defaultHostID() string {
