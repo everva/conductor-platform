@@ -6,6 +6,7 @@ import { TreeItemCollapsibleState } from "../test/vscode-mock";
 import {
   SessionsTreeProvider,
   taskStatusPresentation,
+  reviewBadgeValue,
   SESSIONS_VIEW_ID,
   nodeProjectId,
   nodeTaskRef,
@@ -38,6 +39,24 @@ describe("taskStatusPresentation", () => {
     expect(taskStatusPresentation("done")).toEqual({ icon: "pass-filled", color: "charts.green" });
     expect(taskStatusPresentation("todo")).toEqual({ icon: "circle-outline" });
     expect(taskStatusPresentation("")).toEqual({ icon: "circle-outline" });
+  });
+});
+
+describe("reviewBadgeValue", () => {
+  it("counts only awaiting-approval + blocked (the Needs-Review lane)", () => {
+    expect(
+      reviewBadgeValue([
+        { status: "awaiting-approval" },
+        { status: "blocked" },
+        { status: "running" },
+        { status: "done" },
+        { status: "ready" },
+        { status: "todo" },
+        { status: "awaiting-approval" },
+      ]),
+    ).toBe(3);
+    expect(reviewBadgeValue([])).toBe(0);
+    expect(reviewBadgeValue([{ status: "running" }, { status: "done" }])).toBe(0);
   });
 });
 

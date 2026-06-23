@@ -34,7 +34,7 @@ import { DiffObserver, type TaskDiff } from "./diffObserver";
 import { reconstructDiffFiles } from "./diffReconstruct";
 import { DiffContentClient, type FullTaskDiff } from "./diffContentClient";
 import { FleetReadClient } from "./fleetReadClient";
-import { SessionsTreeProvider, SESSIONS_VIEW_ID, nodeProjectId, nodeTaskRef } from "./sessionsTree";
+import { SessionsTreeProvider, SESSIONS_VIEW_ID, nodeProjectId, nodeTaskRef, reviewBadgeValue } from "./sessionsTree";
 import { EventsWatcher } from "./eventsWatcher";
 import { ReconnectController } from "./reconnect";
 import { EventsTreeProvider, EVENTS_VIEW_ID, SHOW_EVENT_JSON_COMMAND } from "./eventsTree";
@@ -1848,6 +1848,9 @@ export function activate(context: vscode.ExtensionContext): void {
   // is referenced lexically before its assignment, which a const declaration would forbid.)
   // eslint-disable-next-line prefer-const
   let reconnect: ReconnectController | undefined;
+  // PO "what needs me?" — the activity-bar review badge updater. Forward-declared (reassigned once
+  // the sessions view exists, below) so onStateChange can trigger it; a no-op until then.
+  let updateReviewBadge: () => void = () => {};
   // updateConnectionStatusBar renders the link state, but shows a RECONNECTING label while the loop
   // is actively retrying a dropped link (so the user sees "trying to get back", not a dead
   // "disconnected"). A live "connected" always wins.
@@ -1954,6 +1957,8 @@ export function activate(context: vscode.ExtensionContext): void {
       eventsTree.refresh();
       activityTree.refresh();
       updateNowBar();
+      // PO: keep the "needs your review" badge live as decisions/merges arrive (in-flight guarded).
+      updateReviewBadge();
     },
     // M2: an UNEXPECTED live-WS close while we believe we're connected means the gateway link
     // dropped (gateway restart / network blip / sleep). Kick the auto-reconnect loop instead of
@@ -1999,6 +2004,9 @@ export function activate(context: vscode.ExtensionContext): void {
       } else {
         fleetBar.hide();
       }
+      // PO: refresh the "needs your review" activity-bar badge on every link change — it lights up
+      // when connected and CLEARS on disconnect (the read no-ops to [] without a token → count 0).
+      updateReviewBadge();
     },
   });
 
@@ -2070,9 +2078,30 @@ export function activate(context: vscode.ExtensionContext): void {
   const sessionsView = vscode.window.createTreeView(SESSIONS_VIEW_ID, {
     treeDataProvider: sessionsProvider,
   });
+  // PO "what needs me?" — set a numeric badge on the Conductor activity-bar icon = the count of
+  // tasks awaiting approval or blocked (the board's Needs-Review lane). A guard coalesces the
+  // rapid live-event triggers (one fetch at a time). Token rides only in the read client's header.
+  let reviewBadgeInFlight = false;
+  updateReviewBadge = (): void => {
+    if (reviewBadgeInFlight) {
+      return;
+    }
+    reviewBadgeInFlight = true;
+    void fleetReader
+      .listProjects()
+      .then((projects) => Promise.all(projects.map((p) => fleetReader.listTasks(p.id))))
+      .then((taskLists) => {
+        const n = reviewBadgeValue(taskLists.flat());
+        sessionsView.badge = n > 0 ? { value: n, tooltip: `${n} task${n === 1 ? "" : "s"} need your review` } : undefined;
+      })
+      .finally(() => {
+        reviewBadgeInFlight = false;
+      });
+  };
   const refreshSessions = vscode.commands.registerCommand(REFRESH_SESSIONS_COMMAND, () => {
     sessionsProvider.refresh();
     updateFleetBar(); // Q4.2: keep the native fleet glance in step with a manual tree refresh.
+    updateReviewBadge();
   });
 
   // Q2 (ADR-0045): the native "Conductor Events" panel tree. createTreeView attaches to the

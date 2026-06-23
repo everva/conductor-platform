@@ -48,6 +48,22 @@ export function taskStatusPresentation(status: string): { readonly icon: string;
 }
 
 /**
+ * Counts the tasks that NEED THE DIRECTOR — awaiting-approval (held, green gate) or blocked
+ * (failed, needs a retry/fix). Drives the activity-bar review badge ("what needs me right now?").
+ * GROUNDED in the board's Needs-Review lane (web/src/fleet/board.ts: awaiting-approval + blocked).
+ * Pure + token-free (reads only the status string); exported so a test pins it.
+ */
+export function reviewBadgeValue(tasks: readonly { readonly status: string }[]): number {
+  let n = 0;
+  for (const t of tasks) {
+    if (t.status === "awaiting-approval" || t.status === "blocked") {
+      n++;
+    }
+  }
+  return n;
+}
+
+/**
  * The native "Conductors" tree. Lazy + async: root yields projects, a project yields its tasks.
  * The command ids are INJECTED (so this module needs no back-import from extension.ts):
  * `openCommand` (`conductor.open`) SELECTS a project (passes its id → the Command Center's board
