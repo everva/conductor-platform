@@ -40,7 +40,32 @@ taraması yalnız input placeholder string içerir, token değil; webview bundle
 - **Frozen-additive (ADR-0021):** web/src + Go daemon yolları + gateway-token akışı dokunulmadı; gate sole
   merge authority kaldı; agent PG'ye dokunmaz.
 
-## L3 (opsiyonel, açık) — gateway-dağıtımlı şifreli credential-store
-Editör (authed) claude token'ı gateway'in **şifreli at-rest** credential-store'una yükler; agent başlangıçta
-authed FETCH eder → host'ta hiç secret-file yok; editör = TEK login noktası. Envelope-encryption/sealed +
-secret-leak adversarial review ŞART. L1+L2 çalıştıktan sonra; kullanıcı kararı.
+## L3 ✅ SEVK — gateway-dağıtımlı şifreli credential-store (kullanıcı kararı: "L3'ü yap")
+Editör (authed) claude token'ı gateway'in **şifreli at-rest** store'una yükler; agent başlangıçta authed FETCH
+eder → host'ta hiç secret-file yok; editör = TEK login noktası. 4 additive katman (her biri CI 3-job yeşil):
+- **L3a `8f4de59`** — `internal/credstore` (AES-256-GCM Seal/Open; fresh crypto/rand nonce; Open GCM-tag doğrular,
+  hata opak; `KeyFromBase64`/`New` fail-closed) + statestore `CredentialStore` seam (Memory+PG, **yalnız
+  ciphertext+nonce** persist; frozen StateStore dokunulmadı) + migration `00009_agent_credentials`. GERÇEK-PG
+  conformance.
+- **L3b `9588a3e`** — gateway `PUT/GET/DELETE /agent/credentials/{kind}` (hepsi requireAuth). Opsiyonel
+  `*credstore.Sealer` (`CONDUCTOR_CREDENTIAL_KEY` k8s-secret'ten, base64-32B). **FAIL-CLOSED:** key yok → sealer
+  nil → PUT/GET **503** (asla plaintext); non-empty-invalid key → HARD startup error. Token yalnız body/header,
+  **asla loglanmaz** (decrypt-fail dahil; serverError op+shape-only). agentclient `PutCredential`/`GetCredential`
+  (404→found=false)/`DeleteCredential`.
+- **L3c `68a32c0`** — agent başlangıçta `ensureClaudeAuth`: env-CLAUDE_CODE_OAUTH_TOKEN öncelikli; yoksa
+  gateway'den FETCH → `os.Setenv` (L2 wire; envsafe KORUR) → host'ta secret-file YOK, token yalnız süreç
+  belleğinde. Bulunamazsa/hata non-fatal warn (değer asla loglanmaz). Non-claude performer → no-op.
+- **L3d `1509e17`** — editör `conductor.pushCredential` (SecretStorage'dan claude token oku → authed upload) +
+  `conductor.removeCredential`. Host-side `CredentialClient` (gateway bearer yalnız header, claude token yalnız
+  body; CredentialResult kapalı enum, secret taşımaz). Token webview'e GİRMEZ (host-only; webview bundle taraması
+  0 credential-ref). Editör gate + GERÇEK fork electron smoke.
+
+**SECRET-LEAK ADVERSARIAL REVIEW ✅ (3 bağımsız mercek — crypto/at-rest · transit/logging · editör/webview):
+HEPSİ TEMİZ, 0 crit/high/med/low.** Plaintext store'a girmez; nonce taze; tüm rotalar authed; hiçbir log/error
+token/key/nonce taşımaz (decrypt-fail dahil); fail-closed (key-yok→503, invalid-key→hard-fail); editör akışı
+host-only, getter yok, iki anahtar ayrı. Nit'ler severity-none (PUT body zaten `decodeJSONBody` ile capped; `kind`
+parametreli değer, loglanmaz).
+
+**KALAN (kullanıcı ops):** gateway'e `CONDUCTOR_CREDENTIAL_KEY` (base64 32-byte rastgele) k8s-secret olarak ver
+(yoksa L3 endpoint'leri 503=fail-closed, L1+L2 env-yolu çalışmaya devam eder). Sonra editörde Log In → Push to
+Gateway; agent'lar otomatik fetch eder.

@@ -41,6 +41,21 @@ your Mac and pasting on davinci works — no keychain/login on davinci. (Fallbac
 `ssh davinci && claude` login still works if you prefer; then leave `CLAUDE_CODE_OAUTH_TOKEN`
 empty.) Confirm headless auth: `ssh davinci && CLAUDE_CODE_OAUTH_TOKEN=… claude -p 'print OK'`.
 
+#### 1b. (Optional, recommended) Gateway-distributed login — no secret-file on the host (L3)
+With the gateway's encrypted credential store enabled, you log in ONCE in the editor and every
+agent fetches the token automatically — nothing lands in `conductor-agent.env`:
+1. **One-time gateway setup (ops):** give the gateway a master key as a k8s secret —
+   `CONDUCTOR_CREDENTIAL_KEY` = a base64 32-byte random value
+   (`head -c32 /dev/urandom | base64`). Without it the credential endpoints fail CLOSED (503)
+   and the env path (step 1/4) still works.
+2. In the **Conductor Editor**: **"Conductor: Log In"** → then **"Conductor: Push Login to
+   Gateway"**. The editor uploads the token; the gateway seals it (AES-256-GCM).
+3. Start the agent (step 6) with `CLAUDE_CODE_OAUTH_TOKEN` left EMPTY: at startup it fetches the
+   decrypted token from the gateway over the authed channel and uses it for this run only (the
+   token lives only in the agent's memory — no host secret-file). The startup log confirms
+   "fetched the claude credential from the gateway". Revoke with **"Conductor: Remove Login from
+   Gateway"**.
+
 ### 2. Install the optiway toolchain on davinci (for the verify gate)
 The gate runs optiway's real build/lint/test, so davinci needs the toolchain:
 ```bash

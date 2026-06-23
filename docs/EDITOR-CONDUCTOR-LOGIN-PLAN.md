@@ -96,5 +96,13 @@ Agent UZAK (davinci) olduğundan editör→agent provizyon yolu kritik:
   `TestSanitize_PreservesClaudeOAuthToken` (L1↔L2 regression), agent startup WARN (claude performer + token-yok;
   varlık-only, değer asla loglanmaz) + `usesClaudePerformer`+main_test, env.example + runbook editör-mint→host-env
   birincil/SSH'siz yol. Go gate (build+vet+golangci-0+`-race`).
-- **→ L1+L2 İŞLEVSEL TAMAM**: editörde tek-tık mint → host env → SSH'siz claude login. **KALAN (kullanıcı):**
-  davinci'de `conductor-agent.env`'e token'ı koy (veya editör helper); **L3 opsiyonel — kullanıcıya soruldu.**
+- **→ L1+L2 İŞLEVSEL TAMAM**: editörde tek-tık mint → host env → SSH'siz claude login.
+- **L3 ✅ SEVK (kullanıcı "L3'ü yap" dedi) — gateway-dağıtımlı şifreli credential-store, 4 katman CI 3-job yeşil:**
+  L3a `8f4de59` (credstore AES-256-GCM + statestore CredentialStore seam + migration 00009; GERÇEK-PG conformance),
+  L3b `9588a3e` (gateway PUT/GET/DELETE /agent/credentials, fail-closed `CONDUCTOR_CREDENTIAL_KEY`, token asla
+  loglanmaz, agentclient metodları), L3c `68a32c0` (agent başlangıç fetch→os.Setenv, host'ta secret-file YOK),
+  L3d `1509e17` (editör `conductor.pushCredential`/`removeCredential` + host-side CredentialClient; editör gate +
+  GERÇEK fork electron smoke). **SECRET-LEAK ADVERSARIAL REVIEW ✅ 3 bağımsız mercek HEPSİ TEMİZ (0 crit/high/med/low).**
+- **→ L1+L2+L3 TAMAM.** **KALAN (kullanıcı ops):** gateway'e `CONDUCTOR_CREDENTIAL_KEY` (base64 32-byte) k8s-secret
+  ver (yoksa L3 fail-closed 503, env-yolu çalışır) → editörde Log In → Push to Gateway → agent'lar otomatik fetch.
+  (00009 migration develop deploy'unda canlı-PG'ye uygulandı; additive+inert, fail-closed.)
