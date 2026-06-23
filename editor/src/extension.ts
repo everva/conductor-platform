@@ -23,7 +23,8 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import { deriveWsUrl, makeGatewayProbe, normalizeBaseUrl, GATEWAY_TOKEN_KEY } from "./gateway";
-import { ConnectionManager, type ConnectionState } from "./connection";
+import { ConnectionManager, type ConnectionState, CLAUDE_OAUTH_TOKEN_KEY } from "./connection";
+import { CredentialClient, type CredentialResult } from "./credentialClient";
 import { HostBridge, type WebviewLike } from "./bridge/hostBridge";
 import { isWebviewReady } from "./bridge/protocol";
 import { wsConnector } from "./bridge/wsConnector";
@@ -50,6 +51,18 @@ export const LOGIN_COMMAND = "conductor.login";
 
 /** Command id that forgets the stored claude OAuth token (Faz L1). */
 export const LOGOUT_COMMAND = "conductor.logout";
+
+/** Command id that uploads the stored claude OAuth token to the gateway's encrypted credential
+ * store (Faz L3 — ADR-0049), so every conductor agent fetches it (the editor = single login). */
+export const PUSH_CREDENTIAL_COMMAND = "conductor.pushCredential";
+
+/** Command id that removes the gateway-stored claude credential (Faz L3 logout propagation). */
+export const REMOVE_CREDENTIAL_COMMAND = "conductor.removeCredential";
+
+/** The credential "kind" the editor uploads + the agent fetches. It is the env var name the
+ * headless performer (`claude -p`) reads, kept in lockstep with the agent's
+ * claudeCredentialKind and the gateway path segment. */
+export const CLAUDE_CREDENTIAL_KIND = "CLAUDE_CODE_OAUTH_TOKEN";
 
 /** The Claude Code CLI subcommand that mints a portable, long-lived OAuth token: it prints the
  * token to the terminal and SAVES NOTHING (the xirigo model). We run it in an integrated
@@ -1356,6 +1369,61 @@ export async function runLogout(api: LoginVscodeApi, manager: ConnectionManager)
   await api.window.showInformationMessage("Conductor login cleared.");
 }
 
+/**
+ * The L3 push flow (`conductor.pushCredential`, ADR-0049): upload the locally-stored claude
+ * OAuth token to the gateway's ENCRYPTED credential store, so every conductor agent fetches it
+ * (the editor is the single login point — no per-host secret-file). Reads the claude token from
+ * SecretStorage host-side and hands it to the CredentialClient (which sends it ONLY in the
+ * request body; the gateway bearer rides only in the Authorization header).
+ *
+ * TOKEN DISCIPLINE: neither secret reaches a message/log — the token-free `CredentialResult`
+ * enum drives a fixed user-facing message. No stored claude token → guide to Log In first.
+ */
+export async function runPushCredential(
+  api: LoginVscodeApi,
+  secrets: SecretStore,
+  client: CredentialClient,
+): Promise<void> {
+  const token = await secrets.get(CLAUDE_OAUTH_TOKEN_KEY);
+  if (token === undefined || token === "") {
+    await api.window.showErrorMessage('No claude login stored. Run "Conductor: Log In" first.');
+    return;
+  }
+  const res = await client.upload(CLAUDE_CREDENTIAL_KIND, token);
+  if (res.ok) {
+    await api.window.showInformationMessage(
+      "Login pushed to the gateway (encrypted). Your conductors will use it.",
+    );
+    return;
+  }
+  await api.window.showErrorMessage(credentialErrorMessage(res));
+}
+
+/** The L3 remove flow (`conductor.removeCredential`): delete the gateway-stored claude
+ * credential (logout propagation). Token-free messaging. */
+export async function runRemoveCredential(api: LoginVscodeApi, client: CredentialClient): Promise<void> {
+  const res = await client.remove(CLAUDE_CREDENTIAL_KIND);
+  if (res.ok) {
+    await api.window.showInformationMessage("Login removed from the gateway.");
+    return;
+  }
+  await api.window.showErrorMessage(credentialErrorMessage(res));
+}
+
+/** Maps a failed CredentialResult to a token-free, actionable message. Pure. */
+function credentialErrorMessage(res: Extract<CredentialResult, { ok: false }>): string {
+  switch (res.reason) {
+    case "not-connected":
+      return "Connect to the gateway first (Conductor: Connect to Gateway).";
+    case "unauthorized":
+      return "The gateway rejected the connection token.";
+    case "not-configured":
+      return "The gateway has no credential encryption configured (set CONDUCTOR_CREDENTIAL_KEY).";
+    case "unreachable":
+      return "Could not reach the gateway.";
+  }
+}
+
 /** The narrow control surface `runControl` drives — the slice of ControlClient it uses.
  * Declared as an interface so the unit tests pass a fake (no real fetch/token) while the
  * production path injects a real ControlClient. None of these carry the token out. */
@@ -1811,6 +1879,20 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   const fetchFullDiff: FetchFullDiff = (project, task) => diffContent.fetchFullDiff(project, task);
 
+  // L3 (ADR-0049): the host-side authed client that uploads/removes the claude credential in the
+  // gateway's encrypted store. Same gateway-bearer TokenProvider seam (Authorization header only);
+  // the claude token it uploads is read from SecretStorage by the command flow and sent only in
+  // the request body — neither secret reaches a message or a webview.
+  const credential = new CredentialClient(normalizeBaseUrl(gatewayUrl), {
+    getToken: () => Promise.resolve(context.secrets.get(GATEWAY_TOKEN_KEY)),
+  });
+  const pushCredential = vscode.commands.registerCommand(PUSH_CREDENTIAL_COMMAND, () => {
+    void runPushCredential(vscode, context.secrets, credential);
+  });
+  const removeCredential = vscode.commands.registerCommand(REMOVE_CREDENTIAL_COMMAND, () => {
+    void runRemoveCredential(vscode, credential);
+  });
+
   // The Fleet view's bridge reads the token from SecretStorage (per request) and talks
   // to the gateway at the configured URL; the token never reaches the webview. The
   // extensionUri lets the provider build the cockpit bundle's webview resource URIs.
@@ -1850,6 +1932,8 @@ export function activate(context: vscode.ExtensionContext): void {
     { dispose: () => eventsWatcher.stop() },
     sessionsView,
     refreshSessions,
+    pushCredential,
+    removeCredential,
     sessionsProvider,
     eventsView,
     eventsTree,

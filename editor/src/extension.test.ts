@@ -29,8 +29,13 @@ import {
   LOGIN_COMMAND,
   LOGOUT_COMMAND,
   CLAUDE_SETUP_TOKEN_CMD,
+  CLAUDE_CREDENTIAL_KIND,
+  PUSH_CREDENTIAL_COMMAND,
+  REMOVE_CREDENTIAL_COMMAND,
   runLogin,
   runLogout,
+  runPushCredential,
+  runRemoveCredential,
   DIFF_SCHEME,
   DIFF_STORE_CAP,
   DIFF_EVICTED_PLACEHOLDER,
@@ -111,6 +116,7 @@ function makeTaskDiff(over: Partial<TaskDiff> = {}): TaskDiff {
   };
 }
 import { CLAUDE_OAUTH_TOKEN_KEY, ConnectionManager, type SecretStore } from "./connection";
+import type { CredentialClient, CredentialResult } from "./credentialClient";
 import { ControlListError } from "./controlClient";
 import { GATEWAY_TOKEN_KEY, type GatewayProbe, type TokenCheck } from "./gateway";
 
@@ -384,6 +390,74 @@ describe("runLogout (L1)", () => {
 
     expect(map.has(CLAUDE_OAUTH_TOKEN_KEY)).toBe(false);
     expect(window.showInformationMessage).toHaveBeenCalledWith("Conductor login cleared.");
+  });
+});
+
+// A SecretStore over an in-memory map (the L3 push flow reads the claude token host-side).
+function makeSecrets(initial: Record<string, string> = {}) {
+  const map = new Map(Object.entries(initial));
+  return { get: (k: string) => Promise.resolve(map.get(k)) };
+}
+// A fake CredentialClient: records calls + returns a fixed result. Cast at the seam (the flow
+// only calls upload/remove).
+function makeCredential(result: CredentialResult = { ok: true }) {
+  const upload = vi.fn(() => Promise.resolve(result));
+  const remove = vi.fn(() => Promise.resolve(result));
+  return { client: { upload, remove } as unknown as CredentialClient, upload, remove };
+}
+
+describe("runPushCredential (L3)", () => {
+  it("uploads the stored claude token under the claude kind; success message (no token)", async () => {
+    const secrets = makeSecrets({ [CLAUDE_OAUTH_TOKEN_KEY]: "sk-ant-oat-PUSH" });
+    const { client, upload } = makeCredential({ ok: true });
+
+    await runPushCredential({ window }, secrets, client);
+
+    expect(upload).toHaveBeenCalledWith(CLAUDE_CREDENTIAL_KIND, "sk-ant-oat-PUSH");
+    expect(window.showInformationMessage).toHaveBeenCalled();
+    // The success message must not echo the token.
+    const msg = window.showInformationMessage.mock.calls[0]?.[0];
+    expect(msg).not.toContain("sk-ant-oat-PUSH");
+    expect(window.showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it("with no stored claude token → guides to Log In and does NOT upload", async () => {
+    const secrets = makeSecrets({}); // no claude token
+    const { client, upload } = makeCredential();
+
+    await runPushCredential({ window }, secrets, client);
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(window.showErrorMessage).toHaveBeenCalledWith(expect.stringContaining("Log In"));
+  });
+
+  it("surfaces a token-free error when the gateway is not connected", async () => {
+    const secrets = makeSecrets({ [CLAUDE_OAUTH_TOKEN_KEY]: "sk-ant-oat-PUSH" });
+    const { client } = makeCredential({ ok: false, reason: "not-connected", status: 0 });
+
+    await runPushCredential({ window }, secrets, client);
+
+    expect(window.showErrorMessage).toHaveBeenCalledWith(expect.stringContaining("Connect to the gateway"));
+    const err = window.showErrorMessage.mock.calls[0]?.[0];
+    expect(err).not.toContain("sk-ant-oat-PUSH");
+  });
+
+  it("surfaces a token-free error when the gateway has no encryption configured", async () => {
+    const secrets = makeSecrets({ [CLAUDE_OAUTH_TOKEN_KEY]: "sk-ant-oat-PUSH" });
+    const { client } = makeCredential({ ok: false, reason: "not-configured", status: 503 });
+
+    await runPushCredential({ window }, secrets, client);
+
+    expect(window.showErrorMessage).toHaveBeenCalledWith(expect.stringContaining("CONDUCTOR_CREDENTIAL_KEY"));
+  });
+});
+
+describe("runRemoveCredential (L3)", () => {
+  it("removes the gateway credential and reports", async () => {
+    const { client, remove } = makeCredential({ ok: true });
+    await runRemoveCredential({ window }, client);
+    expect(remove).toHaveBeenCalledWith(CLAUDE_CREDENTIAL_KIND);
+    expect(window.showInformationMessage).toHaveBeenCalledWith("Login removed from the gateway.");
   });
 });
 
@@ -1269,8 +1343,11 @@ describe("activate", () => {
     // L1: the editor-mediated claude login/logout commands are registered too.
     expect(commands.registerCommand).toHaveBeenCalledWith(LOGIN_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(LOGOUT_COMMAND, expect.any(Function));
-    // 26 (post-Q3a) + L1's two new commands (login + logout) = 28.
-    expect(subscriptions).toHaveLength(28);
+    // L3: the push/remove credential commands (registered in activate, not registerConductor).
+    expect(commands.registerCommand).toHaveBeenCalledWith(PUSH_CREDENTIAL_COMMAND, expect.any(Function));
+    expect(commands.registerCommand).toHaveBeenCalledWith(REMOVE_CREDENTIAL_COMMAND, expect.any(Function));
+    // 28 (post-L1) + L3's two new commands (pushCredential + removeCredential) = 30.
+    expect(subscriptions).toHaveLength(30);
   });
 
   it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {

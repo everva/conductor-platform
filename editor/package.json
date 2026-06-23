@@ -106,6 +106,16 @@
         "category": "Conductor"
       },
       {
+        "command": "conductor.pushCredential",
+        "title": "Conductor: Push Login to Gateway",
+        "category": "Conductor"
+      },
+      {
+        "command": "conductor.removeCredential",
+        "title": "Conductor: Remove Login from Gateway",
+        "category": "Conductor"
+      },
+      {
         "command": "conductor.pause",
         "title": "Conductor: Pause Project",
         "category": "Conductor"
