@@ -81,5 +81,20 @@ Agent UZAK (davinci) olduğundan editör→agent provizyon yolu kritik:
 
 ## DURUM
 - Plan yazıldı; xirigo (`claude setup-token`→taşınabilir oauth token) + editör ConnectionManager + agent envsafe
-  grounded. **L1'den implement** (compact sonrası), her faz CI-yeşil. ADR-0049. PROD gateway-mediated sistem ZATEN
-  canlı (develop @ `236fac3`; [[conductor-prod-gateway-mediated]]) — bu feature onun login-DX'ini editöre taşır.
+  grounded. PROD gateway-mediated sistem ZATEN canlı (develop @ `236fac3`; [[conductor-prod-gateway-mediated]]) —
+  bu feature onun login-DX'ini editöre taşır. ADR-0049 (`docs/decisions/0049-...`).
+- **§0.1 DOĞRULANDI (uydurma yok):** (1) headless env değişkeni = **`CLAUDE_CODE_OAUTH_TOKEN`** (Claude Code resmi
+  dökümanı; `setup-token` token'ı yalnız terminale yazar, taşınabilir/bir-yıl). (2) `envsafe.Sanitize` bu değişkeni
+  **KORUR** (denylist; `internal/envsafe/envsafe.go:48` + test).
+- **L1 ✅ SEVK `de3b5c4`** (editör-only; CI 3-job yeşil): `conductor.login`/`logout` (ADR-0049) — entegre terminalde
+  `claude setup-token` → password input → SecretStorage `CLAUDE_OAUTH_TOKEN_KEY`. `ConnectionManager` ADDITIVE
+  (gateway-token akışı + `#state` DOKUNULMADI; ayrı store/has/clear, **getter YOK**). `LoginVscodeApi` ayrı dar
+  yüzey (DiffVscodeApi gibi). Leak-guard testleri (connection.test + extension.test) + emitted-bundle taraması
+  (yalnız placeholder string) + **GERÇEK fork electron smoke** (VS Code 1.125.1, komutlar register, N1 startup yeşil).
+- **L2 ✅ SEVK `da0a8ea`** (CI 3-job yeşil): performer `CLAUDE_CODE_OAUTH_TOKEN`'ı tüketir — wire ZATEN vardı
+  (`command_engine.execRunner` = `Sanitize(os.Environ())+env`, envsafe KORUR); bu commit pinler+belgeler:
+  `TestSanitize_PreservesClaudeOAuthToken` (L1↔L2 regression), agent startup WARN (claude performer + token-yok;
+  varlık-only, değer asla loglanmaz) + `usesClaudePerformer`+main_test, env.example + runbook editör-mint→host-env
+  birincil/SSH'siz yol. Go gate (build+vet+golangci-0+`-race`).
+- **→ L1+L2 İŞLEVSEL TAMAM**: editörde tek-tık mint → host env → SSH'siz claude login. **KALAN (kullanıcı):**
+  davinci'de `conductor-agent.env`'e token'ı koy (veya editör helper); **L3 opsiyonel — kullanıcıya soruldu.**
