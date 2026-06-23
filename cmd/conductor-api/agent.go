@@ -144,6 +144,20 @@ func (s *apiServer) handleAgentLease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Advance the leased task to "running" so the STORED status matches the live lease
+	// (M1). The board derives "running" from the active lease, but /tasks readers — the
+	// editor's sessions tree — show Task.Status, which previously stayed todo/ready while
+	// the task was actually executing, producing a tree-vs-board mismatch. The lease record
+	// already holds the host; here we only advance the lifecycle status. A release with no
+	// terminal verdict reverts it (see handleAgentReleaseLease). Best-effort: if this write
+	// fails the lease is still held and the reaper will free it, so log + still return the
+	// task rather than fabricating a 500 the agent can't act on.
+	if err := s.updateTask(ctx, task.ID, func(t *statestore.Task) { t.Status = registry.StatusRunning }); err != nil {
+		s.serverError(w, "agent lease: mark task running", err)
+		return
+	}
+	task.Status = registry.StatusRunning
+
 	writeJSON(w, http.StatusOK, agentLeaseResponse{
 		Task:  toTaskDTO(task),
 		Lease: agentLeaseDTO{ProjectID: id, HostID: req.HostID, TaskID: task.ID, AcquiredAt: lease.AcquiredAt},
@@ -192,9 +206,35 @@ func (s *apiServer) handleAgentReleaseLease(w http.ResponseWriter, r *http.Reque
 	}
 
 	reg := registry.NewRegistry(s.store)
+
+	// Capture ownership BEFORE releasing: only the lease OWNER should revert the task's
+	// running status. A non-owner release is an idempotent no-op (the lease stays), so it
+	// must NOT touch the status of a task another host is actively running.
+	owned := false
+	if l, err := s.store.GetLease(r.Context(), id); err == nil {
+		owned = l.HostID == req.HostID && l.TaskID == req.TaskID
+	}
+
 	if err := reg.ReleaseLeaseOwned(r.Context(), id, req.HostID, req.TaskID); err != nil {
 		s.serverError(w, "agent release lease", err)
 		return
+	}
+
+	// Revert the task to "ready" ONLY if the owner released it while it was still "running"
+	// (M1): the agent released without a terminal verdict — a crash, merge conflict, or
+	// abandon — so the lease→running flip would otherwise strand it as permanently "running"
+	// with no holder. A task already moved to blocked / awaiting-approval / done by the
+	// result/merge path is left untouched. A missing task (idempotent release after the task
+	// was deleted) is a clean no-op.
+	if owned {
+		if err := s.updateTask(r.Context(), req.TaskID, func(t *statestore.Task) {
+			if t.Status == registry.StatusRunning {
+				t.Status = registry.StatusReady
+			}
+		}); err != nil && !errors.Is(err, statestore.ErrNotFound) {
+			s.serverError(w, "agent release lease: revert status", err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"released": true})
 }

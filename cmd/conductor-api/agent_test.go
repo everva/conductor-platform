@@ -64,6 +64,15 @@ func TestAgentLease_LeasesReadyTask(t *testing.T) {
 	if err != nil || len(h.Capabilities) != 1 || h.Capabilities[0] != "backend" {
 		t.Fatalf("host not registered with caps: %+v err=%v", h, err)
 	}
+	// M1: the leased task's STORED status is flipped to "running" so /tasks readers (the
+	// editor's sessions tree) match the board's lease-derived "running" — no more mismatch.
+	if res.Task.Status != "running" {
+		t.Fatalf("lease response task status = %q, want running", res.Task.Status)
+	}
+	got, err := store.GetTask(ctx, "T-1")
+	if err != nil || got.Status != "running" {
+		t.Fatalf("stored task status = %q (err=%v), want running", got.Status, err)
+	}
 }
 
 func TestAgentLease_NoWork204_StillRegisters(t *testing.T) {
@@ -177,6 +186,11 @@ func TestAgentReleaseLease(t *testing.T) {
 	if _, err := store.GetLease(ctx, "p"); err != nil {
 		t.Fatalf("non-owner release must NOT drop the lease: %v", err)
 	}
+	// A non-owner release must also NOT revert the running status — the owner is still
+	// actively running the task (M1: only the owner's release reverts).
+	if got, _ := store.GetTask(ctx, "T-1"); got.Status != "running" {
+		t.Fatalf("non-owner release reverted status to %q, want running preserved", got.Status)
+	}
 
 	// The owner release drops it.
 	if rec := doBody(t, s, http.MethodPost, "/projects/p/agent/lease/release", bearer(), `{"host_id":"davinci","task_id":"T-1"}`); rec.Code != http.StatusOK {
@@ -184,6 +198,40 @@ func TestAgentReleaseLease(t *testing.T) {
 	}
 	if _, err := store.GetLease(ctx, "p"); err == nil {
 		t.Fatalf("owner release must drop the lease")
+	}
+	// M1: a release with no terminal verdict reverts the lease→running flip back to "ready"
+	// so the abandoned task is re-runnable (not stranded as a hostless "running").
+	if got, _ := store.GetTask(ctx, "T-1"); got.Status != "ready" {
+		t.Fatalf("released running task status = %q, want ready (re-runnable)", got.Status)
+	}
+}
+
+// TestAgentReleaseLease_DoesNotClobberTerminalStatus proves the M1 release-revert only
+// touches a still-"running" task: a task the result path already moved to blocked (or
+// awaiting-approval / done) keeps that status across the lease release.
+func TestAgentReleaseLease_DoesNotClobberTerminalStatus(t *testing.T) {
+	s, store := agentServer(t)
+	ctx := context.Background()
+	seedProject(t, store, "p")
+	seedTodoTask(t, store, "p", "T-1", nil)
+
+	// Lease (→ running), then the agent reports a failing gate → blocked.
+	if rec := doBody(t, s, http.MethodPost, "/projects/p/agent/lease", bearer(), `{"host_id":"davinci","capabilities":["backend"]}`); rec.Code != http.StatusOK {
+		t.Fatalf("lease status = %d, want 200", rec.Code)
+	}
+	if rec := doBody(t, s, http.MethodPost, "/projects/p/agent/tasks/T-1/result", bearer(), `{"result":"changes-requested","summary":"gate failed"}`); rec.Code != http.StatusOK {
+		t.Fatalf("result status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if got, _ := store.GetTask(ctx, "T-1"); got.Status != "blocked" {
+		t.Fatalf("after blocked result status = %q, want blocked", got.Status)
+	}
+
+	// The owner release must NOT revert blocked → ready.
+	if rec := doBody(t, s, http.MethodPost, "/projects/p/agent/lease/release", bearer(), `{"host_id":"davinci","task_id":"T-1"}`); rec.Code != http.StatusOK {
+		t.Fatalf("owner release status = %d, want 200", rec.Code)
+	}
+	if got, _ := store.GetTask(ctx, "T-1"); got.Status != "blocked" {
+		t.Fatalf("release clobbered terminal status to %q, want blocked preserved", got.Status)
 	}
 }
 
