@@ -81,6 +81,10 @@ func branchName(projectID, taskID string) string {
 	return fmt.Sprintf("conductor/%s-%s", projectID, taskID)
 }
 
+// BranchName is the exported per-task branch name, so the agent's re-verify-on-retry flow can
+// compute the preserved branch to re-attach (WorkspaceForBranch) instead of re-developing.
+func BranchName(projectID, taskID string) string { return branchName(projectID, taskID) }
+
 // EnsureClone makes sure a single isolated clone of the project exists under
 // RootDir, creating it once and configuring writable gh-token auth. It is
 // idempotent: a second call reuses the existing clone (it only refreshes the

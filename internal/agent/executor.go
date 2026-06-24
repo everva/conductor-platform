@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -221,9 +222,44 @@ func stateTask(t agentclient.TaskInfo) statestore.Task {
 
 // Run provisions a worktree, develops (performer), and verifies (gate). The worktree
 // is held for a later Merge.
+//
+// FLOW (the pipeline must not strand good work): two robustness rules keep a retried/blocked task
+// moving to a real gate decision instead of looping:
+//  1. RE-VERIFY-ON-RETRY — if a prior run already COMMITTED on this task's branch, re-verify that
+//     commit instead of throwing it away and re-developing from scratch. A pass → held; gate findings
+//     → the code needs changes, so fall through to a fresh develop; a verify ERROR (infra, e.g. a
+//     broken test DB) is surfaced so the operator fixes it and retries → re-verify (not re-develop).
+//  2. VERDICT-ROBUSTNESS — a develop that COMMITTED but emitted a malformed/absent final verdict JSON
+//     still proceeds to verify: the performer's self-verdict is ignored anyway (Rule#9 — the gate is
+//     the sole authority), so good committed code must reach the gate, never block on a parse nit.
 func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, scenario agentclient.ScenarioInfo) (RunOutcome, error) {
 	project := e.project(taskInfo.ProjectID)
 	task := stateTask(taskInfo)
+	branch := provisioner.BranchName(project.ID, task.ID)
+
+	// (1) Re-verify a preserved branch from a prior run before re-developing.
+	if ws, err := e.prov.WorkspaceForBranch(ctx, project, task, branch); err == nil {
+		if aheadOfBase(ws.Path, project.BaseBranch) {
+			e.mu.Lock()
+			e.ws[task.ID] = ws
+			e.mu.Unlock()
+			e.setPhase(task.ID, "verifying")
+			review, checks, verr := e.verf.Verify(ctx, engine.Verdict{}, ws, e.cfg.Gates, scenario.HoldoutRef)
+			if verr != nil {
+				return RunOutcome{}, fmt.Errorf("re-verify preserved branch: %w", verr)
+			}
+			if review.Result == "pass" {
+				return e.buildOutcome(ctx, project, ws, review, checks), nil
+			}
+			// The preserved commit fails the gate → it genuinely needs changes; discard + develop fresh.
+			e.prov.Cleanup(ctx, ws)
+			e.mu.Lock()
+			delete(e.ws, task.ID)
+			e.mu.Unlock()
+		} else {
+			e.prov.Cleanup(ctx, ws) // branch exists but carries no work → develop fresh
+		}
+	}
 
 	e.setPhase(task.ID, "provisioning")
 	ws, err := e.prov.Workspace(ctx, project, task)
@@ -243,9 +279,16 @@ func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, s
 	}
 
 	e.setPhase(task.ID, "developing")
-	verdict, err := e.eng.Develop(ctx, task, ws)
-	if err != nil {
-		return RunOutcome{}, fmt.Errorf("develop: %w", err)
+	verdict, derr := e.eng.Develop(ctx, task, ws)
+	if derr != nil {
+		// (2) Verdict-robustness: a develop that COMMITTED work proceeds to verify even if the final
+		// verdict JSON was malformed/absent — the gate is the authority (Rule#9). A develop with NO
+		// commit is a real block (auth wall, empty output, killed before any work) → surface it.
+		if (errors.Is(derr, engine.ErrMalformedVerdict) || errors.Is(derr, engine.ErrNoVerdict)) && aheadOfBase(ws.Path, project.BaseBranch) {
+			verdict = engine.Verdict{}
+		} else {
+			return RunOutcome{}, fmt.Errorf("develop: %w", derr)
+		}
 	}
 
 	e.setPhase(task.ID, "verifying")
@@ -255,17 +298,20 @@ func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, s
 	if err != nil {
 		return RunOutcome{}, fmt.Errorf("verify: %w", err)
 	}
+	return e.buildOutcome(ctx, project, ws, review, checks), nil
+}
 
+// buildOutcome assembles the RunOutcome (result + branch + checks) and best-effort attaches the
+// branch-vs-base diff (review parity — observability only; a diff failure never fails the run, the
+// verdict stands). The bounded summary rides a KindDiff event; the full-file patch is stored for the
+// native side-by-side diff. Shared by the develop and the re-verify paths so both surface the change.
+func (e *RealExecutor) buildOutcome(ctx context.Context, project statestore.Project, ws engine.Workspace, review engine.ReviewResult, checks []engine.Check) RunOutcome {
 	out := RunOutcome{
 		Result:  review.Result,
 		Branch:  ws.Branch,
 		Summary: review.Summary,
 		Checks:  toChecks(checks),
 	}
-	// Review parity (Faz-S): compute the branch-vs-base diff over THIS worktree so the director can
-	// SEE the change. Reuses the daemon's pure-git GitDiffer (no DB). Best-effort — a diff failure
-	// is observability-only and never fails the run (the verdict above stands). The bounded summary
-	// rides a KindDiff event; the full-file patch is stored for the native side-by-side diff.
 	differ := conductor.NewGitDiffer()
 	if summary, derr := differ.Diff(ctx, project, ws); derr == nil {
 		out.Diff = &summary
@@ -274,7 +320,19 @@ func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, s
 			out.FullTruncated = truncated
 		}
 	}
-	return out, nil
+	return out
+}
+
+// aheadOfBase reports whether the worktree HEAD has at least one commit beyond the base branch (the
+// performer committed work). Best-effort: any git error → false (treat as no work). Used by the two
+// FLOW rules above to tell "good committed code worth verifying" apart from "an empty/base cut".
+func aheadOfBase(wsPath, base string) bool {
+	out, err := exec.Command("git", "-C", wsPath, "rev-list", "--count", base+"..HEAD").Output()
+	if err != nil {
+		return false
+	}
+	n := strings.TrimSpace(string(out))
+	return n != "" && n != "0"
 }
 
 // Merge squash-merges the verified branch. For an APPROVED held task it re-attaches
