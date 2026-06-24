@@ -22,7 +22,7 @@
 // into the conversation as a turn ("Q: … → A: …") and re-distill. A 422 (the model produced NOTHING,
 // not even questions) still surfaces as the never-fabricate guidance. Conversation accumulates
 // CLIENT-side over the single-string /distill, which now also carries the optional `questions`.
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowRight } from "lucide-react";
 import { ApiError, DistillNoScenariosError } from "../api/client.ts";
 import { holdoutIdFromRef } from "./holdoutRef.ts";
@@ -56,9 +56,14 @@ export interface IntakeClient {
   putHoldout?(id: string, files: Record<string, string>): Promise<{ locator: string }>;
   // enhance expands a rough request into a detailed Turkish spec by reading the project's REAL
   // code on an agent (code-aware). It creates a job + polls until done; the resolved string is
-  // the enhanced spec the director then reviews/edits before distilling. OPTIONAL: absent on a
-  // fake/older client → the Enhance button is hidden.
-  enhance?(projectId: string, roughSpec: string): Promise<string>;
+  // the enhanced spec the director then reviews/edits before distilling. onProgress (optional)
+  // receives the agent's live activity line as it changes. OPTIONAL: absent on a fake/older
+  // client → the Enhance button is hidden.
+  enhance?(
+    projectId: string,
+    roughSpec: string,
+    onProgress?: (detail: string) => void,
+  ): Promise<string>;
 }
 
 export interface IntakeChatProps {
@@ -83,6 +88,11 @@ interface ChatMsg {
   text: string;
   tone?: "warn" | "error";
 }
+
+// ENHANCE_IDLE_SECONDS is how long with NO new agent activity before the live status switches
+// from the latest activity line to an honest "no activity for N s" counter (the user's "15
+// saniyedir idle gibi" — surface real idleness rather than a frozen line).
+const ENHANCE_IDLE_SECONDS = 15;
 
 // SPEC_TEMPLATE seeds the "Write spec directly" path — an operator who already knows
 // the work (or has no claude-assisted distiller available) authors the scenario YAML
@@ -118,6 +128,14 @@ export function IntakeChat({
   // enhancing is true while an agent reads the project code and expands the rough draft into a
   // detailed Turkish spec (code-aware enhance); it can take a couple of minutes.
   const [enhancing, setEnhancing] = useState<boolean>(false);
+  // enhanceActivity is the agent's latest LIVE activity line (📖 Okunuyor / 🔎 Aranıyor / 🤔
+  // Düşünülüyor) streamed from claude's real tool-use; null before the first event. enhanceAt
+  // (a ref, no re-render) is the client time we last saw activity, so idle = now - enhanceAt uses
+  // only the local clock (skew-free). setEnhanceTick fires once a second while enhancing to
+  // re-render the idle counter; its value is unused (the re-render itself recomputes the label).
+  const [enhanceActivity, setEnhanceActivity] = useState<string | null>(null);
+  const enhanceAt = useRef<number>(0);
+  const [, setEnhanceTick] = useState<number>(0);
   // progressLines is the live model-output line count during a streaming distill
   // (Q3c.4); null when not streaming (or before the first progress event).
   const [progressLines, setProgressLines] = useState<number | null>(null);
@@ -145,16 +163,41 @@ export function IntakeChat({
     ]);
   }
 
+  // While enhancing, tick once a second so the idle counter ("⏳ N saniyedir…") re-renders even
+  // when no new activity arrives. The interval is the ONLY thing the tick drives; it stops the
+  // moment the enhance finishes.
+  useEffect(() => {
+    if (!enhancing) return;
+    const t = window.setInterval(() => setEnhanceTick((n) => n + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [enhancing]);
+
+  // enhanceStatusLabel renders the live status: the agent's latest real activity line, or — after
+  // ENHANCE_IDLE_MS with no new activity — an honest "no activity for N s" counter (never a fake
+  // line). Before the first event it shows the initial "examining code" message.
+  function enhanceStatusLabel(): string {
+    if (enhanceActivity === null) return "Kod inceleniyor…";
+    const idleSec = Math.floor((Date.now() - enhanceAt.current) / 1000);
+    if (idleSec >= ENHANCE_IDLE_SECONDS) return `⏳ ${idleSec} saniyedir yeni işlem yok…`;
+    return enhanceActivity;
+  }
+
   // runEnhance sends the rough draft to an agent that READS the project's real code and returns a
   // detailed Turkish spec, which replaces the draft for the director to review/edit before sending.
-  // Code-aware: the grounding (real file/model names) comes from the agent, not a guess.
+  // Code-aware: the grounding (real file/model names) comes from the agent, not a guess. The agent
+  // streams claude's live activity, surfaced via enhanceActivity (resetting the idle timer).
   async function runEnhance() {
     if (!client.enhance || projectId === "" || draft.trim() === "" || enhancing || distilling) return;
     const rough = draft.trim();
     setEnhancing(true);
+    setEnhanceActivity(null);
+    enhanceAt.current = Date.now();
     addMsg("assistant", "Talebin kodu incelenerek detaylandırılıyor… (birkaç dakika sürebilir)");
     try {
-      const enhanced = await client.enhance(projectId, rough);
+      const enhanced = await client.enhance(projectId, rough, (detail) => {
+        setEnhanceActivity(detail);
+        enhanceAt.current = Date.now();
+      });
       setDraft(enhanced);
       addMsg("assistant", "Detaylı Türkçe spec hazır — aşağıda gözden geçir, gerekirse düzenle ve Gönder.");
     } catch (err) {
@@ -165,6 +208,7 @@ export function IntakeChat({
       addMsg("assistant", `Enhance başarısız: ${err instanceof Error ? err.message : String(err)}`, "error");
     } finally {
       setEnhancing(false);
+      setEnhanceActivity(null);
     }
   }
 
@@ -453,8 +497,13 @@ export function IntakeChat({
                   </span>
                 )}
                 {enhancing && (
-                  <span className="intake-spinner" role="status" aria-live="polite">
-                    Kod inceleniyor…
+                  <span
+                    className="intake-spinner"
+                    role="status"
+                    aria-live="polite"
+                    data-testid="enhance-status"
+                  >
+                    {enhanceStatusLabel()}
                   </span>
                 )}
               </div>

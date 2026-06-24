@@ -9,7 +9,7 @@
 //   * an invalid-YAML 400 from intake shows the inline parse error;
 //   * a 401 from distill triggers onUnauthorized.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { IntakeChat } from "./IntakeChat.tsx";
 import type { IntakeClient } from "./IntakeChat.tsx";
@@ -18,6 +18,7 @@ import type { DistillResult, IntakeResult, Project, Scenario } from "../api/type
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function project(over: Partial<Project> = {}): Project {
@@ -386,7 +387,48 @@ describe("IntakeChat", () => {
     // The agent's enhanced Turkish spec replaces the composer draft for review.
     const msg = (await screen.findByLabelText("Message")) as HTMLTextAreaElement;
     expect(msg.value).toBe(enhanced);
-    expect(enhance).toHaveBeenCalledWith("proj-x", "servis şirketini kaldır");
+    expect(enhance).toHaveBeenCalledWith(
+      "proj-x",
+      "servis şirketini kaldır",
+      expect.any(Function),
+    );
+  });
+
+  it("Enhance shows the agent's LIVE activity and an honest idle counter when it stalls", async () => {
+    vi.useFakeTimers();
+    let emit: ((d: string) => void) | undefined;
+    const enhance = vi.fn(
+      (_p: string, _r: string, onProgress?: (d: string) => void): Promise<string> => {
+        emit = onProgress;
+        return new Promise<string>(() => {}); // stays running; we assert the live status UI
+      },
+    );
+    const client = fakeClient({ enhance });
+    // fireEvent (synchronous) — not userEvent — to avoid the userEvent + fake-timers deadlock.
+    render(<IntakeChat projects={[project()]} client={client} onUnauthorized={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "x" } });
+    fireEvent.click(screen.getByRole("button", { name: /Geliştir/ }));
+    await act(async () => {}); // let runEnhance reach its await (emit captured, enhancing=true rendered)
+
+    // Before the first event: the initial "examining code" message.
+    expect(screen.getByTestId("enhance-status").textContent).toBe("Kod inceleniyor…");
+
+    // A REAL activity line from the agent is shown live.
+    act(() => emit?.("📖 Okunuyor: a.ts"));
+    expect(screen.getByTestId("enhance-status").textContent).toBe("📖 Okunuyor: a.ts");
+
+    // No new activity for the idle window → an honest "no activity for N s" counter, not a frozen line.
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    expect(screen.getByTestId("enhance-status").textContent).toMatch(/saniyedir yeni işlem yok/);
+
+    // New activity resets the live line (and the idle timer).
+    act(() => emit?.("🔎 Aranıyor: serviceCompany"));
+    expect(screen.getByTestId("enhance-status").textContent).toBe("🔎 Aranıyor: serviceCompany");
+
+    expect(enhance).toHaveBeenCalledWith("proj-x", "x", expect.any(Function));
   });
 
   it("hides the Enhance button when the client has no enhance capability", () => {

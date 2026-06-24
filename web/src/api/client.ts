@@ -273,9 +273,17 @@ export class ApiClient {
 
   // enhance expands a rough request into a detailed Turkish spec by having an AGENT read the
   // project's REAL code (code-aware). It POSTs the rough text to create a job, then polls the
-  // job until the agent writes back the spec (done) or fails. The rough text + produced spec
-  // cross the authed channel only. Polls are cheap; the agent's claude read can take minutes.
-  async enhance(projectId: string, roughSpec: string): Promise<string> {
+  // job until the agent writes back the spec (done) or fails. While the job runs, the agent
+  // streams claude's REAL activity (read/search/think) into the job's `progress`; onProgress
+  // fires with the latest line whenever it changes (detail OR progress_at), so the UI can show a
+  // live status and reset its idle timer even when the same activity repeats. No fabricated
+  // lines — each one is a real claude event. The rough text + produced spec + progress cross the
+  // authed channel only (secret-free).
+  async enhance(
+    projectId: string,
+    roughSpec: string,
+    onProgress?: (detail: string) => void,
+  ): Promise<string> {
     const created = await this.request<{ id: string; status: string }>(
       "POST",
       `/projects/${encodeURIComponent(projectId)}/enhance`,
@@ -283,15 +291,29 @@ export class ApiClient {
     );
     const jobId = created.id;
     const deadline = Date.now() + 19 * 60_000; // generous: agent code exploration + completeness pass
+    let lastSig = ""; // detail|progress_at, so repeated activity still resets the UI idle timer
     for (;;) {
-      const job = await this.request<{ status: string; result?: string; error?: string }>(
+      const job = await this.request<{
+        status: string;
+        result?: string;
+        error?: string;
+        progress?: string;
+        progress_at?: string;
+      }>(
         "GET",
         `/projects/${encodeURIComponent(projectId)}/enhance/${encodeURIComponent(jobId)}`,
       );
+      if (onProgress && job.progress) {
+        const sig = `${job.progress}|${job.progress_at ?? ""}`;
+        if (sig !== lastSig) {
+          lastSig = sig;
+          onProgress(job.progress);
+        }
+      }
       if (job.status === "done") return job.result ?? "";
       if (job.status === "failed") throw new Error(job.error || "enhance failed");
       if (Date.now() > deadline) throw new Error("enhance timed out — no agent picked it up");
-      await new Promise((r) => setTimeout(r, 2500));
+      await new Promise((r) => setTimeout(r, 2000));
     }
   }
 
