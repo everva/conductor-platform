@@ -72,6 +72,9 @@ FROM node:22-slim AS runtime
 # @anthropic-ai/claude-code: the `claude` CLI the gateway distiller invokes (Faz-R).
 RUN apt-get update && \
     apt-get install -y --no-install-recommends git ca-certificates tini && \
+    # debian installs tini at /usr/bin/tini; the api Deployment's command hardcodes /sbin/tini
+    # (the old alpine path), so symlink it there too — both paths resolve, no chart change needed.
+    ln -sf /usr/bin/tini /sbin/tini && \
     npm install -g @anthropic-ai/claude-code && \
     npm cache clean --force && \
     rm -rf /var/lib/apt/lists/* && \
