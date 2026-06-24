@@ -62,8 +62,17 @@ operating in CLARIFYING mode. Read the conversation below and do EXACTLY ONE of 
         deps: [<dependency ids>]
         acceptance:
           - <machine-verifiable acceptance criterion>
-        hidden_holdout_ref: "store://holdouts/<id>/<file>"   # repo-EXTERNAL only
+        hidden_holdout_ref: "pg://holdouts/<id>"   # repo-EXTERNAL only
     ` + scenariosFenceEnd + `
+
+    THEN, when scenario 1's acceptance can be proven by an automated test, ALSO emit the hidden
+    holdout test for it as a SECOND block (optional but preferred). It is the repo-EXTERNAL test the
+    gate runs to prove the work — keep it self-contained and runnable:
+    ` + holdoutFenceStart + `
+    files:
+      "<relative/path/to/test_file>": |
+        <the full test file contents, e.g. a Playwright or Go test>
+    ` + holdoutFenceEnd + `
 
 (B) If the conversation is ambiguous or underspecified, DO NOT GUESS. Ask the director up to four
     specific multiple-choice clarifying questions, wrapped EXACTLY in these fences:

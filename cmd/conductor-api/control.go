@@ -286,7 +286,8 @@ func distillResultDTOFromOutcome(outcome intake.DistillOutcome) (distillResultDT
 	for _, sc := range outcome.Scenarios {
 		dtos = append(dtos, toScenarioDTO(sc))
 	}
-	return distillResultDTO{Scenarios: dtos, YAML: yamlStr}, nil
+	// Faz-S S4: surface the auto-generated holdout (if any) for the director to review.
+	return distillResultDTO{Scenarios: dtos, YAML: yamlStr, Holdout: outcome.Holdout}, nil
 }
 
 // handleDistillStream: POST /projects/{id}/distill/stream — the STREAMING variant of
@@ -582,6 +583,10 @@ type distillResultDTO struct {
 	Scenarios []scenarioDTO `json:"scenarios"`
 	YAML      string        `json:"yaml"`
 	Questions []questionDTO `json:"questions,omitempty"`
+	// Holdout is the OPTIONAL auto-generated hidden-holdout test (Faz-S S4): path -> file content,
+	// for the director to REVIEW before approving. Omitted when the model emitted none. On approve
+	// the editor PUTs it to /holdouts/{id} (S5) so the gate can run it.
+	Holdout map[string]string `json:"holdout,omitempty"`
 }
 
 // questionDTO is the snake_case JSON shape of a clarifying question (the mirror of

@@ -49,6 +49,11 @@ type DistillOutcome struct {
 	Scenarios []Scenario
 	// Questions is non-empty when the model asked for clarification instead.
 	Questions []Question
+	// Holdout is the OPTIONAL auto-generated hidden-holdout test (Faz-S S4): worktree-relative path
+	// -> file content. Populated only when the model emitted a <<<HOLDOUT>>> block alongside the
+	// scenarios; nil otherwise. The director REVIEWS it before approving (the human is the guard,
+	// since the same model authored the test + will author the code — ADR-0018 note). Never logged.
+	Holdout map[string]string
 }
 
 // ClarifyingDistiller is the ADDITIVE distiller seam (ADR-0047) that may return
@@ -106,6 +111,45 @@ const (
 // top-level `questions:` list (the analogue of scenarioBlock).
 type questionBlock struct {
 	Questions []Question `yaml:"questions"`
+}
+
+// holdoutFenceStart/End delimit the OPTIONAL auto-generated hidden-holdout block (Faz-S S4) the
+// model may emit ALONGSIDE the scenarios. Mirrors the scenarios/questions fences (last-block rule).
+const (
+	holdoutFenceStart = "<<<HOLDOUT"
+	holdoutFenceEnd   = "HOLDOUT>>>"
+)
+
+// holdoutBlock is the YAML wrapper for the auto-generated holdout: worktree-relative path -> file
+// content (the hidden test that proves the scenario's acceptance).
+type holdoutBlock struct {
+	Files map[string]string `yaml:"files"`
+}
+
+// ParseHoldout extracts the OPTIONAL <<<HOLDOUT>>> block (Faz-S S4). Returns (files, true) for a
+// well-formed non-empty block; (nil, false) when absent OR malformed — the holdout is optional, so
+// a parse failure is NOT an error (the scenario still distills; the director just gets no
+// auto-holdout to review). Reuses the package's extractFenced (last-block rule). Never logs content.
+func ParseHoldout(stdout []byte) (map[string]string, bool) {
+	block, ok := extractFenced(string(stdout), holdoutFenceStart, holdoutFenceEnd)
+	if !ok {
+		return nil, false
+	}
+	var hb holdoutBlock
+	if err := yaml.Unmarshal([]byte(block), &hb); err != nil || len(hb.Files) == 0 {
+		return nil, false
+	}
+	// Drop any blank-path / blank-content entries so a sloppy block can't yield an empty file.
+	files := make(map[string]string, len(hb.Files))
+	for path, content := range hb.Files {
+		if strings.TrimSpace(path) != "" && content != "" {
+			files[path] = content
+		}
+	}
+	if len(files) == 0 {
+		return nil, false
+	}
+	return files, true
 }
 
 // QuestionValidationError aggregates why a question set was rejected. Index is the
@@ -253,7 +297,10 @@ func ParseQuestions(stdout []byte) ([]Question, error) {
 func ParseOutcome(stdout []byte) (DistillOutcome, error) {
 	scenarios, scErr := ParseScenarios(stdout)
 	if scErr == nil {
-		return DistillOutcome{Scenarios: scenarios}, nil
+		// Faz-S S4: attach the OPTIONAL auto-generated holdout (best-effort; nil when absent or
+		// malformed — the scenario still distills, the human reviews the holdout if present).
+		holdout, _ := ParseHoldout(stdout)
+		return DistillOutcome{Scenarios: scenarios, Holdout: holdout}, nil
 	}
 	if errors.Is(scErr, ErrMalformedScenarios) {
 		return DistillOutcome{}, scErr
