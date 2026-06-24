@@ -85,6 +85,34 @@ yüzeyi denetlemedim.** Bundan sonra denetim WEB COCKPIT (ürünün kendisi) üz
 4. **X1** ürün kararı: tek event-humanizer kaynağı.
 5. ADR + memory + ledger.
 
+## 2.5 GROUNDING SONUÇLARI (2026-06-24, Playwright ile her yüzey GERÇEKTEN açıldı)
+Hermetik Playwright + zengin mock veri ile HER yüzey gerçek tarayıcıda açılıp screenshot'landı
+(`test-results/po-*.png`). Bulgular ([D]→[K] netleşti):
+
+- **A (Event Stream) — ✅ FIXED + DOĞRULANDI (develop `3e5cf38`, CI yeşil).** A1 insancıl satır
+  (`eventText.ts describeEvent`) + A2 tıkla→biçimli JSON (`<pre>`) + A3 overflow fix. Screenshot
+  `po-event-stream-expanded.png`: "Writing code · 1m · 3 files", kırmızı "Blocked: …", "Needs your
+  review", açık satırda pretty-JSON. Satış-engeli kalktı. (X1 = ADR-0051.)
+- **B (Board) — [K] LARGELY SOLID, blocker YOK.** "N tasks need your review" banner + running/
+  needs-review/blocked sayaçları + 4 lifecycle kolonu + per-kart Review CTA çalışıyor. **DÜZELTME
+  (dürüstlük):** ilk bakışta "needs-review 2 ama 1 kart" sandım → Playwright assertion ile KANITLA:
+  W-1 (awaiting-approval) + I-block (blocked) İKİSİ DE render oluyor (yanlış-okuma). Kart metni dim/
+  düşük-kontrast AMA bu KASITLI de-emphasis (Needs Review sarı vurgulu, eylem gerektirmeyen kolonlar
+  soluk). PO taste kararı → kullanıcı onayı olmadan değiştirilmez.
+- **C (Session) — [K] DEVIN-GRADE, blocker YOK.** SPEC (acceptance + holdout), VERIFIER VERDICT
+  "MERGE-READY" hero + per-gate checks, ACTIVITY timeline (zaten insancıl: "Review · diff ready" /
+  "verdict pass" / "Develop · progress"), DIFF (+6/-0 inline patch), Approve & merge / Abort.
+- **D (Intake) — [K] mutlu-yol SOLID.** Konuşma thread (YOU/ASSISTANT), önerilen plan kartı +
+  hidden-holdout, Intake YAML editörü, "Write spec directly" (claude-siz yol) + "Approve & add to
+  ledger". KALAN minor: D1 claude-down (502) hata-yolu görseli doğrulanmadı (error-route testi
+  gerek) — düşük öncelik, kullanıcı k8s-claude güvenlik kararı bekliyor.
+- **E (empty) — [K] decent.** "No tasks" (dashed icon) + "No events match" boş durumları var.
+  Minor: 0-proje board'unda onboarding CTA yok ("+ New work" var ama yönlendirme zayıf).
+
+**SONUÇ:** Tek gerçek satış-engeli (A) FIXED+verified+CI-yeşil. B/C/D/E büyük ölçüde sağlam;
+kalanlar ya kasıtlı tasarım (B dim) ya minor polish (D1/E) ya da kullanıcı-kararına bağlı (D1
+claude-k8s). Görsel taste değişiklikleri (kontrast vb.) kullanıcı PO onayı olmadan yapılmaz.
+
 ## 3. NOTLAR
 - Gerçek veri/gerçek gateway için `web/e2e-realgw/` harness'ı KULLAN (bu oturumda kuruldu: onboard→
   intake→lease → board/stream gerçek conductor-api'ye karşı, mock'suz). Editör-native değişiklikler
