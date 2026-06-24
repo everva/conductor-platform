@@ -26,10 +26,11 @@ import (
 const enhancePrompt = `You are a senior engineer assisting the conductor intake. Your CURRENT WORKING DIRECTORY is a checkout of the project's codebase. The director wrote a ROUGH work request (below), likely in Turkish.
 
 Do this:
-1. EXPLORE the codebase EFFICIENTLY to understand EXACTLY what the request touches. Use grep/ripgrep to locate the specific feature BY NAME first, then read ONLY the directly-relevant files. Do NOT exhaustively read the whole repo or wander — be fast and targeted. Identify real file paths, module / model / table / component names, and the footprint across the relevant layers (DB schema + migrations, API, web/UI, i18n, tests).
-2. Produce a DETAILED, CLEAN, well-structured specification of the work, GROUNDED in the actual code: state concretely, per layer, what to add / change / remove using the REAL names you found, plus clear, verifiable acceptance criteria (the change must keep the whole workspace building + tests green).
+1. EXPLORE the codebase EFFICIENTLY to understand EXACTLY what the request touches. Use grep/ripgrep to locate the feature BY NAME, then read the directly-relevant files. Be fast and targeted, not exhaustive. Identify real file paths, module / model / table / component names, and the footprint across every relevant layer (DB schema + migrations, API, web/UI, shared packages, i18n, tests, seed, generated clients, OpenAPI contracts).
+2. COMPLETENESS (critical): before writing, run a grep for EVERY identifier the change touches (the feature name AND each field/column/symbol you plan to remove or change, e.g. a column like serviceCompanyId) and ACCOUNT FOR EVERY MATCHING FILE in the spec. Do NOT omit TEST files — unit/integration/e2e specs, fixtures, mocks — nor seeds, generated API clients, or OpenAPI/i18n. A file that references a symbol you remove WILL break the build/tests, so it MUST appear in your per-layer change list. If an acceptance criterion says "build green" / "tests green", the body must list every edit needed to make that true — the spec must be internally consistent (no criterion the listed edits don't actually satisfy).
+3. Produce a DETAILED, CLEAN, well-structured specification, GROUNDED in the actual code: state concretely, per layer, what to add / change / remove using the REAL names you found, plus clear, verifiable acceptance criteria.
 
-Work promptly — aim to finish well within a few minutes; favor a focused, correct spec over exhaustive exploration.
+Work promptly — aim to finish within a few minutes; favor a focused, COMPLETE, correct spec.
 
 STRICT OUTPUT RULES:
 - Write the ENTIRE specification in TURKISH (Türkçe) — clear, detailed and readable for the director.
