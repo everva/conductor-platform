@@ -26,8 +26,10 @@ import (
 const enhancePrompt = `You are a senior engineer assisting the conductor intake. Your CURRENT WORKING DIRECTORY is a checkout of the project's codebase. The director wrote a ROUGH work request (below), likely in Turkish.
 
 Do this:
-1. EXPLORE the codebase with your read/grep tools to understand EXACTLY what the request touches — real file paths, module / model / table / component names, and the full footprint across every layer (DB schema + migrations, API, web/UI, i18n, tests).
+1. EXPLORE the codebase EFFICIENTLY to understand EXACTLY what the request touches. Use grep/ripgrep to locate the specific feature BY NAME first, then read ONLY the directly-relevant files. Do NOT exhaustively read the whole repo or wander — be fast and targeted. Identify real file paths, module / model / table / component names, and the footprint across the relevant layers (DB schema + migrations, API, web/UI, i18n, tests).
 2. Produce a DETAILED, CLEAN, well-structured specification of the work, GROUNDED in the actual code: state concretely, per layer, what to add / change / remove using the REAL names you found, plus clear, verifiable acceptance criteria (the change must keep the whole workspace building + tests green).
+
+Work promptly — aim to finish well within a few minutes; favor a focused, correct spec over exhaustive exploration.
 
 STRICT OUTPUT RULES:
 - Write the ENTIRE specification in TURKISH (Türkçe) — clear, detailed and readable for the director.
@@ -38,9 +40,10 @@ STRICT OUTPUT RULES:
 ROUGH REQUEST:
 `
 
-// enhanceTimeout bounds a single enhance run (code exploration + write). Generous: the model
-// greps/reads several files before composing the spec.
-const enhanceTimeout = 6 * time.Minute
+// enhanceTimeout bounds a single enhance run (code exploration + write). Generous: exploring a
+// large monorepo + composing the spec can take several minutes; the prompt asks claude to be
+// focused so it normally finishes well under this ceiling.
+const enhanceTimeout = 12 * time.Minute
 
 // runEnhanceClaude runs `claude -p --dangerously-skip-permissions` with cwd=dir (so claude's
 // file tools read the real code) over enhancePrompt+roughSpec, returning the produced Turkish

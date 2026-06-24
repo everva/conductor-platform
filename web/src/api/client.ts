@@ -282,7 +282,7 @@ export class ApiClient {
       { rough_spec: roughSpec },
     );
     const jobId = created.id;
-    const deadline = Date.now() + 8 * 60_000; // generous: code exploration + write
+    const deadline = Date.now() + 13 * 60_000; // generous: agent code exploration + write
     for (;;) {
       const job = await this.request<{ status: string; result?: string; error?: string }>(
         "GET",
