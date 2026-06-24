@@ -106,6 +106,85 @@ func TestPGStore_Fetch_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestPGStore_Store_RoundTrip(t *testing.T) {
+	pool, cleanup := pgTestPool(t)
+	defer cleanup()
+	ctx := context.Background()
+	s, err := NewPG(pool)
+	if err != nil {
+		t.Fatalf("NewPG: %v", err)
+	}
+
+	// Store a holdout, get back its pg:// locator, then Fetch it through the SAME store.
+	loc, err := s.Store(ctx, "S-1", map[string][]byte{
+		"healthz_test.ts":    []byte("import {test} from '@playwright/test'\n"),
+		"fixtures/seed.json": []byte("{\"ok\":true}\n"),
+	})
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if loc != "pg://holdouts/S-1" {
+		t.Fatalf("locator = %q, want pg://holdouts/S-1", loc)
+	}
+	h, err := s.Fetch(ctx, loc)
+	if err != nil {
+		t.Fatalf("Fetch after Store: %v", err)
+	}
+	if h.Name != "S-1" || len(h.Files) != 2 {
+		t.Fatalf("round-trip mismatch: name=%q files=%v", h.Name, keys(h.Files))
+	}
+	if got := string(h.Files["healthz_test.ts"]); got != "import {test} from '@playwright/test'\n" {
+		t.Fatalf("content = %q", got)
+	}
+}
+
+func TestPGStore_Store_Overwrite(t *testing.T) {
+	pool, cleanup := pgTestPool(t)
+	defer cleanup()
+	ctx := context.Background()
+	s, _ := NewPG(pool)
+
+	if _, err := s.Store(ctx, "S-2", map[string][]byte{"a.ts": []byte("old-a\n"), "b.ts": []byte("old-b\n")}); err != nil {
+		t.Fatalf("first Store: %v", err)
+	}
+	// A re-approval REPLACES the prior body (clean overwrite, not a merge): only the new file set.
+	if _, err := s.Store(ctx, "S-2", map[string][]byte{"a.ts": []byte("new-a\n")}); err != nil {
+		t.Fatalf("second Store: %v", err)
+	}
+	h, err := s.Fetch(ctx, "pg://holdouts/S-2")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(h.Files) != 1 || string(h.Files["a.ts"]) != "new-a\n" {
+		t.Fatalf("overwrite not clean: %v", keys(h.Files))
+	}
+	if _, stale := h.Files["b.ts"]; stale {
+		t.Fatalf("stale file b.ts survived the overwrite")
+	}
+}
+
+func TestPGStore_Store_Rejects(t *testing.T) {
+	pool, cleanup := pgTestPool(t)
+	defer cleanup()
+	ctx := context.Background()
+	s, _ := NewPG(pool)
+
+	if _, err := s.Store(ctx, "  ", map[string][]byte{"a.ts": []byte("x")}); err == nil {
+		t.Fatalf("empty id must error")
+	}
+	if _, err := s.Store(ctx, "S-3", map[string][]byte{}); err == nil {
+		t.Fatalf("empty file set must error")
+	}
+	// A path-traversal / absolute path is refused at WRITE time (not just read time).
+	if _, err := s.Store(ctx, "S-3", map[string][]byte{"../escape.go": []byte("x")}); err == nil {
+		t.Fatalf("unsafe path must error")
+	}
+	// The rejected unsafe write must not have left rows behind (validated before the tx).
+	if _, err := s.Fetch(ctx, "pg://holdouts/S-3"); err == nil {
+		t.Fatalf("no rows should exist for S-3 after a rejected store")
+	}
+}
+
 func TestPGStore_Fetch_MissingID_Errors(t *testing.T) {
 	pool, cleanup := pgTestPool(t)
 	defer cleanup()

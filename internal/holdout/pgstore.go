@@ -92,6 +92,55 @@ func (s *PGStore) Fetch(ctx context.Context, ref string) (verify.Holdout, error)
 	return verify.Holdout{Name: id, Files: files}, nil
 }
 
+// Store writes a holdout's files to the central Postgres under the given id and returns its pg://
+// locator (Faz-S — the write path the gateway's PUT /holdouts/{id} uses so an intake-approved,
+// auto-generated holdout becomes fetchable by the agent's gate). Each (id, path) is UPSERTed so a
+// re-approval replaces the prior body. Paths are validated with the SAME safeRel guard Fetch reads
+// through (".." / absolute rejected) so an unsafe path is refused at write time, not just read time.
+// The whole set is written in ONE transaction (all-or-nothing). An empty id or empty file set is a
+// clear error; file CONTENTS are never logged (ADR-0018). A nil pool would have failed at NewPG.
+func (s *PGStore) Store(ctx context.Context, id string, files map[string][]byte) (string, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", errors.New("holdout: store needs a non-empty id")
+	}
+	if len(files) == 0 {
+		return "", fmt.Errorf("holdout: store %q given no files", id)
+	}
+	// Validate every path BEFORE opening the transaction so a bad set never partially writes.
+	for path := range files {
+		rel := strings.TrimSpace(path)
+		if rel == "" {
+			return "", fmt.Errorf("holdout: store %q has an empty file path", id)
+		}
+		if err := safeRel(rel); err != nil {
+			return "", fmt.Errorf("holdout: store %q has unsafe path %q: %w", id, path, err)
+		}
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("holdout: begin store %q: %w", id, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after a successful Commit.
+
+	// Replace any prior body for this id so a re-approval is a clean overwrite (not a merge of
+	// stale + new files): delete the id's rows, then insert the new set.
+	if _, err := tx.Exec(ctx, `DELETE FROM holdouts WHERE id = $1`, id); err != nil {
+		return "", fmt.Errorf("holdout: clear store %q: %w", id, err)
+	}
+	const ins = `INSERT INTO holdouts (id, path, content) VALUES ($1, $2, $3)`
+	for path, content := range files {
+		if _, err := tx.Exec(ctx, ins, id, strings.TrimSpace(path), content); err != nil {
+			return "", fmt.Errorf("holdout: insert store %q: %w", id, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("holdout: commit store %q: %w", id, err)
+	}
+	return pgScheme + pgLocatorPrefix + id, nil
+}
+
 // pgHoldoutID extracts the holdout id from a pg:// locator. The locator body must
 // be "holdouts/<id>[/...]"; the id is the path element after the holdouts/ prefix.
 // Trailing path elements (e.g. a spec file name) are ignored, mirroring the
