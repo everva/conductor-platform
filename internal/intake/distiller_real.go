@@ -117,6 +117,12 @@ type ClaudeDistillerConfig struct {
 	// model (e.g. claude-opus-4-8). "" → the subscription's default model (davinci parity, no
 	// --model flag). Operator-configured (env) so the choice lives in deploy config, not code.
 	Model string
+	// Lang, when "tr", makes scenario titles + acceptance come out in Turkish. "" → original
+	// (English/inferred). Operator-configured (CONDUCTOR_DISTILL_LANG).
+	Lang string
+	// Single, when true, makes the distiller prefer ONE atomic scenario and never split a
+	// refactor/removal. Operator-configured (CONDUCTOR_DISTILL_SINGLE); default on in main.
+	Single bool
 }
 
 // claudeOptions is the internal, threaded form of ClaudeDistillerConfig — carried into the exec
@@ -124,6 +130,44 @@ type ClaudeDistillerConfig struct {
 type claudeOptions struct {
 	tokenProvider func(ctx context.Context) (string, error)
 	model         string
+	// lang, when "tr", makes the distiller write every scenario title + acceptance bullet in
+	// Turkish (the director reads them, ADR INTAKE-TR). "" → no language directive (English/
+	// conversation-inferred, the original behavior). Operator-configured.
+	lang string
+	// single, when true, instructs the distiller to STRONGLY prefer one atomic scenario and
+	// NEVER split a single feature/refactor/removal into multiple — the fix for the over-split
+	// that made each partial change fail the whole-workspace build gate. Default true.
+	single bool
+}
+
+// styleDirective returns the additive output directive (language + single-scenario) appended to
+// the distill/clarify prompt just before the conversation. Pure + unit-testable. Empty when no
+// style is requested (lang=="" && !single) → the prompts behave exactly as before (frozen).
+func styleDirective(opts claudeOptions) string {
+	var b strings.Builder
+	if strings.TrimSpace(opts.lang) == "tr" || opts.single {
+		b.WriteString("\nADDITIONAL OUTPUT RULES (MANDATORY — override any conflicting rule above):\n")
+	}
+	if strings.TrimSpace(opts.lang) == "tr" {
+		b.WriteString("- Write EVERY scenario `title` and every `acceptance` bullet in TURKISH (Türkçe) — clear, detailed, clean and readable for the director. Keep field KEYS and the `id`/`tier`/`lane` values in English; only the human-readable prose is Turkish.\n")
+	}
+	if opts.single {
+		b.WriteString("- Produce EXACTLY ONE atomic scenario by default. NEVER split a single feature, refactor, or removal into multiple scenarios — a partial change (schema-only / api-only / web-only) breaks the whole-workspace build gate. Put ALL related DB + API + web + i18n changes into ONE scenario with multiple acceptance bullets. Only emit more than one scenario if the request contains genuinely INDEPENDENT deliverables that can each build AND test green entirely on their own.\n")
+	}
+	return b.String()
+}
+
+// withDirective injects styleDirective into a base prompt right before the trailing
+// "Conversation:" marker so it lands inside the rules section, not after the conversation.
+func withDirective(prompt string, opts claudeOptions) string {
+	d := styleDirective(opts)
+	if d == "" {
+		return prompt
+	}
+	if i := strings.LastIndex(prompt, "\nConversation:"); i >= 0 {
+		return prompt[:i] + "\n" + d + prompt[i:]
+	}
+	return prompt + "\n" + d
 }
 
 // NewCommandDistiller returns a CommandDistiller wired to the REAL `claude -p` CLI via
@@ -140,7 +184,7 @@ func NewCommandDistiller() *CommandDistiller {
 // EXACTLY like NewCommandDistiller (frozen). The gateway wires the provider from its credential
 // store + sealer so `/distill` works in a pod with no ambient claude login.
 func NewCommandDistillerWithClaude(cfg ClaudeDistillerConfig) *CommandDistiller {
-	return newClaudeDistiller(claudeOptions{tokenProvider: cfg.TokenProvider, model: cfg.Model})
+	return newClaudeDistiller(claudeOptions{tokenProvider: cfg.TokenProvider, model: cfg.Model, lang: cfg.Lang, single: cfg.Single})
 }
 
 // newClaudeDistiller builds a CommandDistiller whose three runners share the given options. The
@@ -204,7 +248,7 @@ func claudeRunnerWithPrompt(ctx context.Context, prompt, conversation string, op
 	}
 	cmd := exec.CommandContext(ctx, "claude", claudeArgs(opts)...) //nolint:gosec // fixed subscription claude command; no shell, no API key.
 	cmd.Env = env
-	cmd.Stdin = bytes.NewReader([]byte(prompt + conversation))
+	cmd.Stdin = bytes.NewReader([]byte(withDirective(prompt, opts) + conversation))
 
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -235,7 +279,7 @@ func claudeStreamRunnerWithPrompt(ctx context.Context, prompt, conversation stri
 	}
 	cmd := exec.CommandContext(ctx, "claude", claudeArgs(opts)...) //nolint:gosec // fixed subscription claude command; no shell, no API key.
 	cmd.Env = env
-	cmd.Stdin = bytes.NewReader([]byte(prompt + conversation))
+	cmd.Stdin = bytes.NewReader([]byte(withDirective(prompt, opts) + conversation))
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {

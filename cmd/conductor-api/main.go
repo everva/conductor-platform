@@ -72,6 +72,12 @@ type config struct {
 	// `claude -p --model <distillModel>`. Defaults to claude-opus-4-8 (the user's choice). An
 	// operator can override via CONDUCTOR_DISTILL_MODEL; "" disables the flag (subscription default).
 	distillModel string
+	// distillLang makes distilled scenario titles + acceptance come out in this language.
+	// Defaults to "tr" (Turkish — the director's language); override via CONDUCTOR_DISTILL_LANG.
+	distillLang string
+	// distillSingle makes the distiller prefer ONE atomic scenario (never split a refactor/
+	// removal). Defaults true; override via CONDUCTOR_DISTILL_SINGLE=false.
+	distillSingle bool
 }
 
 // parseConfig resolves flags (each falling back to an env var) and the
@@ -99,6 +105,10 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		credentialKey: os.Getenv("CONDUCTOR_CREDENTIAL_KEY"),
 		// Intake distiller model (Faz-R) — default claude-opus-4-8; override via env.
 		distillModel: envOr("CONDUCTOR_DISTILL_MODEL", "claude-opus-4-8"),
+		// Distiller output style — Turkish + single atomic scenario by default (the director's
+		// ask); both env-overridable.
+		distillLang:   envOr("CONDUCTOR_DISTILL_LANG", "tr"),
+		distillSingle: envOr("CONDUCTOR_DISTILL_SINGLE", "true") != "false",
 	}, nil
 }
 
@@ -209,6 +219,8 @@ func run(ctx context.Context, argv []string, logger *slog.Logger, stderr io.Writ
 	distiller := intake.NewCommandDistillerWithClaude(intake.ClaudeDistillerConfig{
 		TokenProvider: claudeTokenProvider(store, sealer),
 		Model:         cfg.distillModel,
+		Lang:          cfg.distillLang,
+		Single:        cfg.distillSingle,
 	})
 
 	// Faz-S holdout store: a pg:// store over its OWN pool from the same DSN (the statestore does not

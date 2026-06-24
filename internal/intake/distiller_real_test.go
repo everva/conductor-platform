@@ -10,6 +10,49 @@ import (
 	"github.com/everva/conductor-platform/internal/envsafe"
 )
 
+// TestStyleDirective proves the additive output directive: Turkish + single-scenario when
+// requested, EMPTY when neither (the frozen prompts behave exactly as before).
+func TestStyleDirective(t *testing.T) {
+	// Default off → no directive (frozen behavior preserved).
+	if d := styleDirective(claudeOptions{}); d != "" {
+		t.Fatalf("zero opts must yield no directive, got %q", d)
+	}
+	// Turkish → instructs Turkish title/acceptance.
+	d := styleDirective(claudeOptions{lang: "tr"})
+	if !strings.Contains(d, "TURKISH") || !strings.Contains(strings.ToLower(d), "title") {
+		t.Fatalf("tr directive missing Turkish title rule: %q", d)
+	}
+	// Single → forbids splitting a refactor/removal.
+	d = styleDirective(claudeOptions{single: true})
+	if !strings.Contains(d, "EXACTLY ONE") || !strings.Contains(d, "NEVER split") {
+		t.Fatalf("single directive missing the no-split rule: %q", d)
+	}
+	// English (non-tr) lang alone adds no Turkish rule.
+	if d := styleDirective(claudeOptions{lang: "en"}); strings.Contains(d, "TURKISH") {
+		t.Fatalf("non-tr lang must not request Turkish: %q", d)
+	}
+}
+
+// TestWithDirective proves the directive is injected INSIDE the rules (before "Conversation:"),
+// and that a directive-free options set returns the prompt byte-identical (frozen).
+func TestWithDirective(t *testing.T) {
+	base := "RULES:\n- foo\n\nConversation:\n"
+	// No style → unchanged.
+	if got := withDirective(base, claudeOptions{}); got != base {
+		t.Fatalf("no-style must return the prompt unchanged")
+	}
+	// With style → directive lands before the Conversation marker, conversation section intact.
+	got := withDirective(base, claudeOptions{lang: "tr", single: true})
+	conv := strings.Index(got, "\nConversation:")
+	rules := strings.Index(got, "TURKISH")
+	if rules < 0 || conv < 0 || rules > conv {
+		t.Fatalf("directive must be injected before Conversation: got %q", got)
+	}
+	if !strings.HasSuffix(got, "Conversation:\n") {
+		t.Fatalf("the Conversation marker must remain at the end: %q", got)
+	}
+}
+
 // TestClaudeArgs pins the argv: always `-p`, and `--model <m>` only when a model is pinned.
 func TestClaudeArgs(t *testing.T) {
 	if got := claudeArgs(claudeOptions{}); !equalStrings(got, []string{"-p"}) {
