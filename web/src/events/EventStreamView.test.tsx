@@ -165,6 +165,45 @@ describe("EventStreamView", () => {
     expect(onInterventionAction).toHaveBeenCalledWith("p7", "t7");
   });
 
+  it("(a2) renders a human-readable line, not raw JSON, and expands to the full payload on click", async () => {
+    const h = makeFakeHistory([
+      ev({
+        id: "h1",
+        kind: "decision",
+        phase: "verify",
+        payload: { result: "blocked", summary: "build failed: exit 1", checks: [{ name: "gate" }] },
+      }),
+    ]);
+    render(<EventStreamView token="tkn" makeHistory={() => h.loader} />);
+    await flush();
+
+    const row = screen.getByTestId("evt-row");
+    // A1: the row shows the plain-English line, NOT the raw JSON dump.
+    expect(within(row).getByText("Blocked: build failed: exit 1")).toBeInTheDocument();
+    expect(within(row).queryByText(/"result":"blocked"/)).not.toBeInTheDocument();
+
+    // A2: collapsed by default — no JSON detail yet.
+    expect(within(row).queryByTestId("evt-json")).not.toBeInTheDocument();
+    const disclosure = within(row).getByRole("button");
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+
+    // Click → the full, pretty-printed payload appears (newlines = formatted, not the 160-char dump).
+    await act(async () => {
+      disclosure.click();
+    });
+    const json = within(row).getByTestId("evt-json");
+    expect(json.textContent).toContain('"result": "blocked"');
+    expect(json.textContent).toContain('"summary": "build failed: exit 1"');
+    expect(json.textContent).toContain("\n"); // pretty-printed
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
+
+    // Click again → collapses.
+    await act(async () => {
+      disclosure.click();
+    });
+    expect(within(row).queryByTestId("evt-json")).not.toBeInTheDocument();
+  });
+
   it("(d) re-queries history with the new project filter and updates", async () => {
     const h = makeFakeHistory([ev({ id: "h1", project: "p1" })]);
     render(

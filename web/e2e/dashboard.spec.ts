@@ -110,11 +110,20 @@ const EVENTS = [
     task: "t1",
     phase: "develop",
     kind: "progress",
-    payload: { msg: "building" },
+    payload: { step: "developing", elapsed_seconds: 95, files_changed: 3, msg: "building" },
   },
   {
     id: "ev-2",
     ts: "2026-06-18T00:00:02.000Z",
+    project: "p1",
+    task: "t1",
+    phase: "verify",
+    kind: "decision",
+    payload: { result: "blocked", summary: "gate failed: golangci-lint exit 1" },
+  },
+  {
+    id: "ev-3",
+    ts: "2026-06-18T00:00:03.000Z",
     project: "p1",
     task: "t1",
     phase: "review",
@@ -123,7 +132,9 @@ const EVENTS = [
   },
 ];
 
-test("renders the event stream tab with backfilled history (3B-2)", async ({ page }) => {
+test("event stream: human-readable lines, click-to-expand full JSON, no raw dump (PO audit A1/A2/A3)", async ({
+  page,
+}) => {
   await mockWebSocket(page);
   await page.route("**/status", (route) => route.fulfill(json(STATUS)));
   await page.route("**/hosts", (route) => route.fulfill(json(HOSTS)));
@@ -143,7 +154,28 @@ test("renders the event stream tab with backfilled history (3B-2)", async ({ pag
   await page.getByRole("tab", { name: /events/i }).click();
   await expect(page.getByRole("region", { name: /event stream/i })).toBeVisible();
   await expect(page.getByLabel(/intervention needed/i)).toBeVisible();
-  await expect(page.getByText('{"msg":"building"}')).toBeVisible();
+
+  // A1: rows show PLAIN-ENGLISH lines, not raw JSON — and the raw payload dump is NOT
+  // on screen (the old behavior printed `{"step":"developing",…}` truncated).
+  await expect(page.getByText("Writing code · 1m · 3 files")).toBeVisible();
+  await expect(page.getByText("Blocked: gate failed: golangci-lint exit 1")).toBeVisible();
+  await expect(page.getByText("Needs your review")).toBeVisible();
+  await expect(page.getByText(/"step":"developing"/)).toHaveCount(0);
+
+  // A2: collapsed by default — no JSON detail visible until a row is clicked.
+  await expect(page.getByTestId("evt-json")).toHaveCount(0);
+
+  // Click the "blocked" row → its FULL, pretty-printed payload reveals (formatted, not the
+  // 160-char truncated dump). The disclosure button carries the human line in its label.
+  await page.getByRole("button", { name: /Blocked: gate failed/i }).click();
+  const detail = page.getByTestId("evt-json");
+  await expect(detail).toBeVisible();
+  await expect(detail).toContainText('"result": "blocked"');
+  await expect(detail).toContainText('"summary": "gate failed: golangci-lint exit 1"');
+
+  // Visual proof for the PO audit (A1 human lines + A2 expanded JSON + A3 no overflow).
+  await page.screenshot({ path: "test-results/po-event-stream-expanded.png", fullPage: true });
+
   // The pause toggle is present (its display-freeze behavior is covered exhaustively
   // by the deterministic vitest suite; here we only assert it renders in-browser).
   await expect(page.getByRole("button", { name: /^pause$/i })).toBeVisible();

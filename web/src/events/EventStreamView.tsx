@@ -19,7 +19,8 @@ import type { EventQuery } from "../api/types.ts";
 import type { EventTransport } from "../api/useEventStream.ts";
 import { useEventFeed } from "./useEventFeed.ts";
 import type { HistoryLoader } from "./useEventFeed.ts";
-import { absoluteTime, payloadPreview, shortTime } from "../fleet/format.ts";
+import { absoluteTime, shortTime } from "../fleet/format.ts";
+import { describeEvent } from "./eventText.ts";
 import "../fleet/fleet.css";
 import "./events.css";
 
@@ -111,6 +112,21 @@ export function EventStreamView({
 }: EventStreamViewProps) {
   const [filter, setFilter] = useState<FilterState>(EMPTY_FILTER);
   const [paused, setPaused] = useState(false);
+  // Which rows are expanded to show their full formatted JSON payload (A2). A Set, so several
+  // can be open at once; toggled by clicking a row. Kept by event id (stable across re-renders).
+  const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set());
+
+  const toggleExpanded = (id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
   // Memoize the query off the filter state so a fresh object literal each render does
   // not retrigger useEventFeed's backfill/subscription unnecessarily (the filter only
@@ -257,42 +273,68 @@ export function EventStreamView({
         ) : (
           rows.map((e) => {
             const intervention = e.kind === KIND_INTERVENTION_NEEDED;
-            const preview = payloadPreview(e.payload);
+            const desc = describeEvent(e);
+            const expanded = expandedIds.has(e.id);
+            const hasPayload =
+              e.payload !== null &&
+              typeof e.payload === "object" &&
+              Object.keys(e.payload).length > 0;
             return (
               <div
                 key={e.id}
-                className={`evt-row${intervention ? " intervention" : ""}`}
+                className={`evt-row${intervention ? " intervention" : ""}${expanded ? " expanded" : ""}`}
                 data-testid="evt-row"
               >
-                <span className="evt-time" title={absoluteTime(e.ts)}>
-                  {shortTime(e.ts)}
-                </span>
-                <span className="evt-loc mono">
-                  {e.project}
-                  {e.task ? `·${e.task}` : ""}
-                </span>
-                <span className={`badge evt-phase ${e.phase}`}>{e.phase}</span>
-                <span
-                  className={`badge evt-kind${intervention ? " abort" : ""}`}
-                >
-                  {e.kind}
-                </span>
-                {intervention && (
-                  <span className="evt-marker" aria-label="intervention needed">
-                    ⚠ intervention
-                  </span>
-                )}
-                {intervention && onInterventionAction && e.project && (
+                <div className="evt-rowhead">
+                  {/* The whole row is a disclosure button: click anywhere to expand the full,
+                      formatted JSON payload below (A2). Big keyboard/mouse target; the human
+                      line (A1) replaces the old raw-JSON dump. */}
                   <button
                     type="button"
-                    className="fleet-btn evt-act"
-                    onClick={() => onInterventionAction(e.project, e.task)}
-                    title="Resolve this intervention on the fleet view"
+                    className="evt-disclosure"
+                    aria-expanded={expanded}
+                    aria-label={`${shortTime(e.ts)} ${e.project}${e.task ? ` ${e.task}` : ""}: ${desc.text}. ${
+                      expanded ? "Collapse" : "Expand"
+                    } details`}
+                    onClick={() => toggleExpanded(e.id)}
                   >
-                    Resolve
+                    <span className="evt-caret" aria-hidden="true">
+                      {expanded ? "▾" : "▸"}
+                    </span>
+                    <span className="evt-time" title={absoluteTime(e.ts)}>
+                      {shortTime(e.ts)}
+                    </span>
+                    <span className="evt-loc mono">
+                      {e.project}
+                      {e.task ? `·${e.task}` : ""}
+                    </span>
+                    <span className={`badge evt-phase ${e.phase}`}>{e.phase}</span>
+                    <span className={`badge evt-kind${intervention ? " abort" : ""}`}>
+                      {e.kind}
+                    </span>
+                    {intervention && (
+                      <span className="evt-marker" aria-label="intervention needed">
+                        ⚠ intervention
+                      </span>
+                    )}
+                    <span className={`evt-desc evt-lvl-${desc.level}`}>{desc.text}</span>
                   </button>
+                  {intervention && onInterventionAction && e.project && (
+                    <button
+                      type="button"
+                      className="fleet-btn evt-act"
+                      onClick={() => onInterventionAction(e.project, e.task)}
+                      title="Resolve this intervention on the fleet view"
+                    >
+                      Resolve
+                    </button>
+                  )}
+                </div>
+                {expanded && (
+                  <pre className="evt-json mono" data-testid="evt-json">
+                    {hasPayload ? JSON.stringify(e.payload, null, 2) : "No payload."}
+                  </pre>
                 )}
-                {preview && <span className="evt-payload mono muted">{preview}</span>}
               </div>
             );
           })

@@ -82,22 +82,53 @@
 
 .evt-row {
   display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
-  padding: 0.35rem 0.9rem;
+  flex-direction: column;
   border-bottom: 1px solid #23272f;
   font-size: 0.8rem;
-}
-.evt-row:hover {
-  background: #1d2128;
 }
 
 .evt-row.intervention {
   background: #3b1d1d;
   border-left: 3px solid #f87171;
 }
-.evt-row.intervention:hover {
+
+/* The clickable header: the whole row is one disclosure button (A2), with the Resolve
+   affordance sitting beside it (a sibling, never nested — no button-in-button). */
+.evt-rowhead {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.evt-disclosure {
+  flex: 1 1 auto;
+  min-width: 0; /* lets the desc cell ellipsis instead of overflowing the row (A3) */
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.4rem 0.9rem;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.evt-disclosure:hover {
+  background: #1d2128;
+}
+.evt-row.intervention .evt-disclosure:hover {
   background: #46211f;
+}
+.evt-disclosure:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: -2px;
+}
+
+.evt-caret {
+  flex: 0 0 auto;
+  width: 1ch;
+  color: #6b7280;
 }
 
 .evt-time {
@@ -130,15 +161,45 @@
   white-space: nowrap;
 }
 
-/* One-click "Resolve" affordance on an intervention row (3B-3). */
-.evt-act {
-  flex: 0 0 auto;
-}
-
-.evt-payload {
+/* The human-readable line (A1) — the freshest signal at a glance. Ellipsis when long; the
+   full payload is one click away in the expanded JSON, so nothing is lost (A3). */
+.evt-desc {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: #cbd5e1;
+}
+.evt-lvl-attention {
+  color: #fca5a5;
+}
+.evt-lvl-active {
+  color: #93c5fd;
+}
+.evt-lvl-done {
+  color: #86efac;
+}
+.evt-lvl-idle {
+  color: #9aa4b2;
+}
+
+/* One-click "Resolve" affordance on an intervention row (3B-3). */
+.evt-act {
+  flex: 0 0 auto;
+  margin-right: 0.6rem;
+}
+
+/* The full, pretty-printed JSON payload, revealed on expand (A2). Scrolls within the row
+   instead of stretching it — no horizontal blow-out (A3). */
+.evt-json {
+  margin: 0;
+  padding: 0.5rem 0.9rem 0.7rem 2.5rem;
+  background: #0f1216;
+  color: #cbd5e1;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+  border-top: 1px solid #23272f;
 }
