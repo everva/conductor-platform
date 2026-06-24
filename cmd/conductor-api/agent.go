@@ -351,6 +351,43 @@ func (s *apiServer) handleAgentReport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"published": s.bus != nil})
 }
 
+// agentTaskDiffRequest is the body of POST /projects/{id}/agent/tasks/{task}/diff: the full-file
+// patch the agent computed over its worktree (Faz-S review parity), stored so GET .../diff serves
+// the native side-by-side diff for review.
+type agentTaskDiffRequest struct {
+	Base      string `json:"base"`
+	Branch    string `json:"branch"`
+	Patch     string `json:"patch"`
+	Truncated bool   `json:"truncated"`
+}
+
+// handleAgentTaskDiff: POST /projects/{id}/agent/tasks/{task}/diff — store the agent's full-file
+// diff so the editor's native diff (GET .../tasks/{task}/diff) works. 204 on success; 400 bad body;
+// 501 when no diff storage is configured (memory dev) — the bounded KindDiff event still flows, so
+// the Session view's inline diff works even without the full-file store. The patch is never logged.
+func (s *apiServer) handleAgentTaskDiff(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	taskID := r.PathValue("task")
+	var req agentTaskDiffRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	tds, ok := s.store.(statestore.TaskDiffStore)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "diff storage not configured")
+		return
+	}
+	if err := tds.PutTaskDiff(r.Context(), statestore.TaskDiff{
+		ProjectID: id, TaskID: taskID,
+		Base: req.Base, Branch: req.Branch, Patch: req.Patch, Truncated: req.Truncated,
+	}); err != nil {
+		s.serverError(w, "agent task diff: put", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleAgentResult: POST /projects/{id}/agent/tasks/{task}/result — record the
 // agent's verdict and decide what happens next. This is the gateway-mediated analogue
 // of the daemon's verify→governance step. Honest, never-fake-green:

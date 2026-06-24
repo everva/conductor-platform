@@ -243,6 +243,33 @@ func (c *Client) DeleteCredential(ctx context.Context, kind string) error {
 	return err
 }
 
+// TaskDiffBody is the full-file diff the agent stores for a task (Faz-S review parity): the base..
+// branch range + the whole-file unified patch the editor reconstructs the native side-by-side diff
+// from. The patch is never a secret (it is the change the director reviews); not logged regardless.
+type TaskDiffBody struct {
+	Base      string
+	Branch    string
+	Patch     string
+	Truncated bool
+}
+
+// taskDiffRequest is the JSON body of POST /projects/{id}/agent/tasks/{task}/diff.
+type taskDiffRequest struct {
+	Base      string `json:"base"`
+	Branch    string `json:"branch"`
+	Patch     string `json:"patch"`
+	Truncated bool   `json:"truncated"`
+}
+
+// StoreTaskDiff persists a task's full-file diff so GET /projects/{id}/tasks/{task}/diff serves the
+// native side-by-side diff for review. Best-effort at the call site (a store failure is
+// observability-only) — but the method propagates errors so the caller can log if it wants.
+func (c *Client) StoreTaskDiff(ctx context.Context, projectID, taskID string, body TaskDiffBody) error {
+	_, err := c.do(ctx, http.MethodPost, "/projects/"+projectID+"/agent/tasks/"+taskID+"/diff",
+		taskDiffRequest(body), nil)
+	return err
+}
+
 // GetHoldout fetches a holdout body by ref from the gateway (Faz-S S3) so the agent's verify gate
 // can inject the ADR-0018 hidden holdout. found=false (no error) means the gateway has no holdout
 // for that ref (404) — the gate then runs WITHOUT a holdout (public gates still apply) rather than

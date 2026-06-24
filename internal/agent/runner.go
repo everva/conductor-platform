@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/everva/conductor-platform/internal/agentclient"
+	"github.com/everva/conductor-platform/internal/events"
 )
 
 // Gateway is the conductor-api agent-API surface the Runner consumes. *agentclient.Client
@@ -28,6 +29,9 @@ type Gateway interface {
 	Scenarios(ctx context.Context, projectID string) ([]agentclient.ScenarioInfo, error)
 	Report(ctx context.Context, projectID, taskID, phase, kind string, payload map[string]any) error
 	Result(ctx context.Context, projectID, taskID string, report agentclient.ResultReport) (string, error)
+	// StoreTaskDiff persists the FULL-file patch so GET .../tasks/{task}/diff serves the native
+	// side-by-side diff for review (Faz-S review parity). Best-effort (observability).
+	StoreTaskDiff(ctx context.Context, projectID, taskID string, body agentclient.TaskDiffBody) error
 	Decision(ctx context.Context, projectID, taskID string) (string, error)
 	Merged(ctx context.Context, projectID, taskID, sha string) error
 	Release(ctx context.Context, projectID, hostID, taskID string) error
@@ -44,8 +48,15 @@ type RunOutcome struct {
 	Summary string
 	// Checks are the individual gate checks (for the KindDecision event).
 	Checks []agentclient.Check
-	// DiffPatch is the unified diff of the change (optional, for a KindDiff event).
-	DiffPatch string
+	// Diff is the BOUNDED branch-vs-base summary (events.DiffSummary) the agent publishes as the
+	// KindDiff event so the director SEES the change in the Session view + board (review parity with
+	// the in-process daemon). nil when the diff couldn't be computed (observability-only — the run
+	// still reports its verdict).
+	Diff *events.DiffSummary
+	// FullPatch is the whole-file unified patch for the stored TaskDiff (native side-by-side diff);
+	// "" when none/failed. FullTruncated marks a budget cap.
+	FullPatch     string
+	FullTruncated bool
 }
 
 // Executor runs the local, git-and-LLM-native half of a task. The real adapter wires
@@ -170,8 +181,17 @@ func (r *Runner) RunOnce(ctx context.Context) (Outcome, error) {
 		r.log.Warn("agent: run failed; reporting blocked", "task", task.ID, "err", err)
 		out = RunOutcome{Result: "blocked", Summary: "agent run failed: " + err.Error()}
 	}
-	if out.DiffPatch != "" {
-		r.report(ctx, task.ID, "review", "diff", map[string]any{"patch": out.DiffPatch})
+	// Review parity: publish the branch-vs-base diff so the director can SEE the change before
+	// approving. The bounded summary rides a KindDiff event (Session timeline + board diff size);
+	// the full-file patch is stored so the native side-by-side diff (GET .../diff) works. Both
+	// best-effort — a diff failure never sinks the verdict report below.
+	if out.Diff != nil {
+		r.report(ctx, task.ID, "review", "diff", out.Diff.Payload())
+		if out.FullPatch != "" {
+			_ = r.gw.StoreTaskDiff(context.WithoutCancel(ctx), r.cfg.ProjectID, task.ID, agentclient.TaskDiffBody{
+				Base: out.Diff.Base, Branch: out.Diff.Branch, Patch: out.FullPatch, Truncated: out.FullTruncated,
+			})
+		}
 	}
 
 	decision, err := r.gw.Result(ctx, r.cfg.ProjectID, task.ID, agentclient.ResultReport{

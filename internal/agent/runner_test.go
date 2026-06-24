@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/everva/conductor-platform/internal/agentclient"
+	"github.com/everva/conductor-platform/internal/events"
 )
 
 // fakeGateway scripts the gateway agent-API for Runner tests.
@@ -23,6 +24,8 @@ type fakeGateway struct {
 	mergedSHA    string
 	released     bool
 	reports      int
+	diffReports  int                       // count of kind=="diff" reports (the KindDiff event)
+	storedDiff   *agentclient.TaskDiffBody // last StoreTaskDiff body, if any
 
 	// mu guards the recorded fields against the runner's concurrent progress heartbeat.
 	mu             sync.Mutex
@@ -44,6 +47,15 @@ func (f *fakeGateway) Report(_ context.Context, _, _, phase, kind string, _ map[
 	if kind == "progress" {
 		f.progressPhases = append(f.progressPhases, phase)
 	}
+	if kind == "diff" {
+		f.diffReports++
+	}
+	f.mu.Unlock()
+	return nil
+}
+func (f *fakeGateway) StoreTaskDiff(_ context.Context, _, _ string, body agentclient.TaskDiffBody) error {
+	f.mu.Lock()
+	f.storedDiff = &body
 	f.mu.Unlock()
 	return nil
 }
@@ -119,6 +131,39 @@ func TestRunOnce_AutoMerge(t *testing.T) {
 	}
 	if gw.mergedSHA != "9f2c1ab" || !gw.released || !ex.cleaned {
 		t.Fatalf("merged sha/release/cleanup not recorded: %+v cleaned=%v", gw, ex.cleaned)
+	}
+}
+
+func TestRunOnce_EmitsDiffForReview(t *testing.T) {
+	// When the executor produced a diff, the runner publishes a KindDiff event (review parity) AND
+	// stores the full-file patch — so the director can SEE the change before approving.
+	gw := &fakeGateway{leaseTask: leased(), resultDecision: "merge"}
+	ex := &fakeExecutor{out: RunOutcome{
+		Result: "pass", Branch: "conductor/p/T-1",
+		Diff:          &events.DiffSummary{Branch: "conductor/p/T-1", Base: "develop", Patch: "@@ -0,0 +1 @@\n+x\n"},
+		FullPatch:     "full whole-file patch",
+		FullTruncated: false,
+	}, mergeSHA: "sha"}
+	if _, err := newRunner(gw, ex).RunOnce(context.Background()); err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if gw.diffReports != 1 {
+		t.Fatalf("expected exactly 1 KindDiff event, got %d", gw.diffReports)
+	}
+	if gw.storedDiff == nil || gw.storedDiff.Patch != "full whole-file patch" || gw.storedDiff.Base != "develop" {
+		t.Fatalf("full-file diff not stored for the native diff: %+v", gw.storedDiff)
+	}
+}
+
+func TestRunOnce_NoDiff_EmitsNothing(t *testing.T) {
+	// No computed diff (e.g. git failed) → no diff event, no store; the verdict still reports.
+	gw := &fakeGateway{leaseTask: leased(), resultDecision: "merge"}
+	ex := &fakeExecutor{out: RunOutcome{Result: "pass", Branch: "b"}, mergeSHA: "s"}
+	if _, err := newRunner(gw, ex).RunOnce(context.Background()); err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if gw.diffReports != 0 || gw.storedDiff != nil {
+		t.Fatalf("a no-diff outcome must emit nothing: diffReports=%d stored=%v", gw.diffReports, gw.storedDiff)
 	}
 }
 

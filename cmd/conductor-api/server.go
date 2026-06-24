@@ -141,6 +141,7 @@ func (s *apiServer) routes() http.Handler {
 	mux.Handle("POST /agent/heartbeat", s.requireAuth(http.HandlerFunc(s.handleAgentHeartbeat)))
 	mux.Handle("POST /projects/{id}/agent/tasks/{task}/report", s.requireAuth(http.HandlerFunc(s.handleAgentReport)))
 	mux.Handle("POST /projects/{id}/agent/tasks/{task}/result", s.requireAuth(http.HandlerFunc(s.handleAgentResult)))
+	mux.Handle("POST /projects/{id}/agent/tasks/{task}/diff", s.requireAuth(http.HandlerFunc(s.handleAgentTaskDiff)))
 	mux.Handle("GET /projects/{id}/agent/tasks/{task}/decision", s.requireAuth(http.HandlerFunc(s.handleAgentDecision)))
 	mux.Handle("POST /projects/{id}/agent/tasks/{task}/merged", s.requireAuth(http.HandlerFunc(s.handleAgentMerged)))
 	// Faz-S holdout store: the editor PUTs an intake-approved holdout body (S5), the agent's verify

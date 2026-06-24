@@ -232,12 +232,25 @@ func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, s
 		return RunOutcome{}, fmt.Errorf("verify: %w", err)
 	}
 
-	return RunOutcome{
+	out := RunOutcome{
 		Result:  review.Result,
 		Branch:  ws.Branch,
 		Summary: review.Summary,
 		Checks:  toChecks(checks),
-	}, nil
+	}
+	// Review parity (Faz-S): compute the branch-vs-base diff over THIS worktree so the director can
+	// SEE the change. Reuses the daemon's pure-git GitDiffer (no DB). Best-effort — a diff failure
+	// is observability-only and never fails the run (the verdict above stands). The bounded summary
+	// rides a KindDiff event; the full-file patch is stored for the native side-by-side diff.
+	differ := conductor.NewGitDiffer()
+	if summary, derr := differ.Diff(ctx, project, ws); derr == nil {
+		out.Diff = &summary
+		if full, truncated, ferr := differ.FullPatch(ctx, project, ws); ferr == nil {
+			out.FullPatch = full
+			out.FullTruncated = truncated
+		}
+	}
+	return out, nil
 }
 
 // Merge squash-merges the verified branch. For an APPROVED held task it re-attaches
