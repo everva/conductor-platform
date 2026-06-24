@@ -1850,6 +1850,16 @@ export function registerConductor(
   // ControlClient's Authorization header — never in a message.
   const controlDisposables = (["pause", "resume", "abort", "approve"] as const).map((action) =>
     api.commands.registerCommand(controlCommandId(action), (arg?: unknown) => {
+      // Faz-R: approve from a TASK node (sessions-tree awaiting task / Stream review row) is
+      // TASK-PRECISE — it passes that task's id so the gateway approves THAT held task, which
+      // works even when several await approval (the project-scoped auto-resolve would 409 then).
+      if (action === "approve") {
+        const ref = taskRefFromArg(arg);
+        if (ref !== undefined) {
+          void runApproveTask(api, control, ref.project, ref.task);
+          return;
+        }
+      }
       // P3: from the sessions-tree project context menu VS Code passes the clicked node →
       // act on THAT project (no quick-pick). From the palette `arg` is undefined → list+pick.
       // A live-Stream review row passes a FeedEvent → projectIdFromArg resolves its project.

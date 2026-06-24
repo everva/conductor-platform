@@ -253,6 +253,11 @@
           "group": "navigation@3"
         },
         {
+          "command": "conductor.approve",
+          "when": "view == conductor.sessions && viewItem == conductorTaskAwaiting",
+          "group": "navigation@3"
+        },
+        {
           "command": "conductor.showEventJson",
           "when": "view == conductor.events",
           "group": "navigation@1"

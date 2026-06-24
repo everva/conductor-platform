@@ -143,13 +143,33 @@ describe("SessionsTreeProvider", () => {
     expect(icon.id).toBe("git-pull-request");
     expect(icon.color?.id).toBe("charts.yellow");
     expect(item.description).toBe("T3 · web · awaiting-approval");
-    expect(item.contextValue).toBe("conductorTask");
+    // Faz-R: an awaiting-approval task gets a distinct contextValue so the task-precise Approve
+    // shows only on it. It still contains "conductorTask" so the always-on task menus match.
+    expect(item.contextValue).toBe("conductorTaskAwaiting");
     // N3: a task click deep-links the Command Center to this session (openSession + args).
     expect(item.command).toEqual({
       command: OPEN_SESSION,
       title: "Open Session",
       arguments: ["web-shop", "W-1"],
     });
+  });
+
+  it("task contextValue is status-specific: blocked / awaiting / plain (all contain 'conductorTask')", () => {
+    const provider = new SessionsTreeProvider(fakeClient(), OPEN, OPEN_SESSION);
+    const ctx = (status: string) =>
+      provider.getTreeItem({
+        kind: "task",
+        projectId: "p",
+        task: { id: "t", lane: "web", tier: "T2", status },
+      }).contextValue;
+    expect(ctx("blocked")).toBe("conductorTaskBlocked");
+    expect(ctx("awaiting-approval")).toBe("conductorTaskAwaiting");
+    expect(ctx("running")).toBe("conductorTask");
+    expect(ctx("done")).toBe("conductorTask");
+    // All three match the always-on task menus' /conductorTask/ predicate.
+    for (const s of ["blocked", "awaiting-approval", "running"]) {
+      expect(ctx(s)).toContain("conductorTask");
+    }
   });
 
   it("refresh() fires onDidChangeTreeData", () => {

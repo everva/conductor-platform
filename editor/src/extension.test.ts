@@ -270,6 +270,27 @@ describe("registerConductor", () => {
     tourCb();
     expect(commands.executeCommand).toHaveBeenCalledWith("workbench.action.openWalkthrough", WALKTHROUGH_ID, false);
   });
+
+  it("Faz-R: approve from a TASK node is task-precise (approve(project, task)); a project node stays project-scoped", async () => {
+    const { manager } = makeManager({});
+    const control = makeControl();
+    registerConductor(diffApi, manager, "http://gw.test", control, new DiffStore());
+    const approveCb = commands.registerCommand.mock.calls.find((c) => c[0] === APPROVE_COMMAND)?.[1] as (
+      arg?: unknown,
+    ) => void;
+    expect(approveCb).toBeDefined();
+
+    // A sessions-tree awaiting TASK node → approve THAT task id (works with several awaiting).
+    window.showWarningMessage.mockResolvedValueOnce("Yes");
+    approveCb({ kind: "task", projectId: "web-shop", task: { id: "W-1" } });
+    await vi.waitFor(() => expect(control.approve).toHaveBeenCalledWith("web-shop", "W-1"));
+
+    // A project node → project-scoped auto-resolve (approve with NO task id).
+    control.approve.mockClear();
+    window.showWarningMessage.mockResolvedValueOnce("Yes");
+    approveCb({ kind: "project", project: { id: "web-shop" } });
+    await vi.waitFor(() => expect(control.approve).toHaveBeenCalledWith("web-shop"));
+  });
 });
 
 describe("runConnect", () => {

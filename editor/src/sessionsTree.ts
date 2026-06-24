@@ -133,9 +133,15 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<SessionNode
       ? new vscode.ThemeIcon(pres.icon, new vscode.ThemeColor(pres.color))
       : new vscode.ThemeIcon(pres.icon);
     item.description = `${task.tier} · ${task.lane} · ${task.status}`;
-    // A blocked task gets a distinct contextValue so the "Retry" action shows ONLY on it. Both
-    // values contain "conductorTask", so the always-on task menus match via `viewItem =~ /conductorTask/`.
-    item.contextValue = task.status === "blocked" ? "conductorTaskBlocked" : "conductorTask";
+    // A blocked task → "conductorTaskBlocked" (shows Retry); an awaiting-approval task →
+    // "conductorTaskAwaiting" (shows the task-precise Approve, Faz-R); else "conductorTask". All
+    // three contain "conductorTask", so the always-on task menus still match `viewItem =~ /conductorTask/`.
+    item.contextValue =
+      task.status === "blocked"
+        ? "conductorTaskBlocked"
+        : task.status === "awaiting-approval"
+          ? "conductorTaskAwaiting"
+          : "conductorTask";
     item.tooltip = `${task.id} — ${task.status} (${task.tier}/${task.lane})`;
     // Click → deep-link the Command Center to THIS session (N3): the args reach the
     // conductor.openSession handler, which navigates the cockpit's webview to its SessionView.
