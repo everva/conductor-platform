@@ -31,6 +31,13 @@ type EnhanceJob struct {
 	Error string
 	// CreatedAt orders the claim (oldest pending first). Set by the store on create.
 	CreatedAt time.Time
+	// Progress is the latest human-readable live-activity line (e.g. "📖 Okunuyor: …"),
+	// streamed by the agent from claude's real tool-use while a job is running. Secret-free:
+	// only code-structure paths/patterns, never tokens. Empty until the first progress ping.
+	Progress string
+	// ProgressAt is when Progress was last updated; the editor derives "idle for N s" from
+	// now - ProgressAt. Zero until the first progress ping.
+	ProgressAt time.Time
 }
 
 // Enhance job statuses.
@@ -52,6 +59,10 @@ type EnhanceStore interface {
 	// ClaimEnhanceJob atomically moves the OLDEST pending job for the project to running and
 	// returns it. ok=false (no error) when there is nothing pending.
 	ClaimEnhanceJob(ctx context.Context, projectID string) (job EnhanceJob, ok bool, err error)
+	// UpdateEnhanceProgress sets the latest live-activity line for a RUNNING job (progress +
+	// progress_at=now). Best-effort: a no-op (nil, not an error) when the job is missing or no
+	// longer running, so a late ping after completion never errors or clobbers the result.
+	UpdateEnhanceProgress(ctx context.Context, id, detail string) error
 	// CompleteEnhanceJob finishes a running job: errMsg=="" → done with result; else → failed.
 	CompleteEnhanceJob(ctx context.Context, id, result, errMsg string) error
 }
@@ -143,6 +154,24 @@ func (s *MemoryStore) CompleteEnhanceJob(ctx context.Context, id, result, errMsg
 	return nil
 }
 
+// UpdateEnhanceProgress records the latest live-activity line for a RUNNING job (best-effort:
+// a no-op when the job is missing or already finished, so a late ping never errors/clobbers).
+func (s *MemoryStore) UpdateEnhanceProgress(ctx context.Context, id, detail string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.enhance[id]
+	if !ok || j.Status != EnhanceRunning {
+		return nil
+	}
+	j.Progress = detail
+	j.ProgressAt = time.Now()
+	s.enhance[id] = j
+	return nil
+}
+
 // ── PostgresStore ─────────────────────────────────────────────────────────────────────
 
 // CreateEnhanceJob inserts a pending job.
@@ -160,14 +189,18 @@ VALUES ($1, $2, $3, 'pending')`
 
 // GetEnhanceJob returns the job by id, or a wrapped ErrNotFound.
 func (s *PostgresStore) GetEnhanceJob(ctx context.Context, id string) (EnhanceJob, error) {
-	const q = `SELECT id, project_id, rough_spec, status, result, error, created_at FROM enhance_jobs WHERE id = $1`
+	const q = `SELECT id, project_id, rough_spec, status, result, error, created_at, progress, progress_at FROM enhance_jobs WHERE id = $1`
 	var j EnhanceJob
-	err := s.pool.QueryRow(ctx, q, id).Scan(&j.ID, &j.ProjectID, &j.RoughSpec, &j.Status, &j.Result, &j.Error, &j.CreatedAt)
+	var progressAt *time.Time // progress_at is nullable (zero until the first progress ping)
+	err := s.pool.QueryRow(ctx, q, id).Scan(&j.ID, &j.ProjectID, &j.RoughSpec, &j.Status, &j.Result, &j.Error, &j.CreatedAt, &j.Progress, &progressAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return EnhanceJob{}, fmt.Errorf("get enhance job %q: %w", id, ErrNotFound)
 	}
 	if err != nil {
 		return EnhanceJob{}, fmt.Errorf("get enhance job %q: %w", id, err)
+	}
+	if progressAt != nil {
+		j.ProgressAt = *progressAt
 	}
 	return j, nil
 }
@@ -209,6 +242,17 @@ func (s *PostgresStore) CompleteEnhanceJob(ctx context.Context, id, result, errM
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("complete enhance job %q: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+// UpdateEnhanceProgress records the latest live-activity line for a RUNNING job. Best-effort:
+// the status='running' guard makes a ping on a missing/finished job a 0-row no-op (nil), so a
+// late update never errors or overwrites the completed result.
+func (s *PostgresStore) UpdateEnhanceProgress(ctx context.Context, id, detail string) error {
+	const q = `UPDATE enhance_jobs SET progress = $2, progress_at = now() WHERE id = $1 AND status = 'running'`
+	if _, err := s.pool.Exec(ctx, q, id, detail); err != nil {
+		return fmt.Errorf("update enhance progress %q: %w", id, err)
 	}
 	return nil
 }

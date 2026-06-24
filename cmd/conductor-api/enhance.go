@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/everva/conductor-platform/internal/statestore"
 )
@@ -28,6 +29,10 @@ type enhanceJobResponse struct {
 	Status string `json:"status"`
 	Result string `json:"result,omitempty"`
 	Error  string `json:"error,omitempty"`
+	// Progress is the latest live-activity line streamed from the agent (secret-free); ProgressAt
+	// is its RFC3339 timestamp so the editor can derive "idle for N s". Both omitted until set.
+	Progress   string `json:"progress,omitempty"`
+	ProgressAt string `json:"progress_at,omitempty"`
 }
 
 // agentEnhanceClaim is the body the agent gets from GET /agent/enhance/next (204 when none).
@@ -40,6 +45,11 @@ type agentEnhanceClaim struct {
 type agentEnhanceResult struct {
 	Result string `json:"result"`
 	Error  string `json:"error"`
+}
+
+// agentEnhanceProgress is the agent's POST body for a live-activity ping (one Turkish line).
+type agentEnhanceProgress struct {
+	Detail string `json:"detail"`
 }
 
 // newEnhanceID returns a short, collision-free job id.
@@ -104,7 +114,11 @@ func (s *apiServer) handleEnhanceGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "enhance job not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, enhanceJobResponse{ID: job.ID, Status: job.Status, Result: job.Result, Error: job.Error})
+	resp := enhanceJobResponse{ID: job.ID, Status: job.Status, Result: job.Result, Error: job.Error, Progress: job.Progress}
+	if !job.ProgressAt.IsZero() {
+		resp.ProgressAt = job.ProgressAt.UTC().Format(time.RFC3339Nano)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleAgentEnhanceNext: GET /projects/{id}/agent/enhance/next — claim the oldest pending
@@ -151,6 +165,36 @@ func (s *apiServer) handleAgentEnhanceResult(w http.ResponseWriter, r *http.Requ
 	}
 	if err := es.CompleteEnhanceJob(r.Context(), jobID, req.Result, req.Error); err != nil {
 		s.serverError(w, "enhance: complete job", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+// handleAgentEnhanceProgress: POST /projects/{id}/agent/enhance/{job}/progress — the agent
+// reports claude's latest REAL activity (read/search/think) for a RUNNING job so the editor can
+// show a live line. Best-effort: a late ping after completion is a no-op (the store guards on
+// status='running'); only a code-structure path/pattern crosses (no tokens).
+func (s *apiServer) handleAgentEnhanceProgress(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	jobID := r.PathValue("job")
+	es, ok := s.enhanceStore()
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "enhance store not configured")
+		return
+	}
+	var req agentEnhanceProgress
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	// Guard the (project, job) pairing so an agent can't write another project's job.
+	job, err := es.GetEnhanceJob(r.Context(), jobID)
+	if err != nil || job.ProjectID != id {
+		writeError(w, http.StatusNotFound, "enhance job not found")
+		return
+	}
+	if err := es.UpdateEnhanceProgress(r.Context(), jobID, req.Detail); err != nil {
+		s.serverError(w, "enhance: update progress", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})

@@ -54,6 +54,7 @@ func runConformanceSuite(t *testing.T, newStore storeFactory) {
 		{"AcquireLeaseConcurrentOneWinner", confAcquireConcurrent},
 		{"TaskDiffStoreRoundTrip", confTaskDiffRoundTrip},
 		{"CredentialStoreRoundTrip", confCredentialRoundTrip},
+		{"EnhanceProgressRoundTrip", confEnhanceProgressRoundTrip},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,6 +118,71 @@ func confTaskDiffRoundTrip(t *testing.T, s StateStore) {
 	// Empty id → ErrInvalid (guards a malformed write).
 	if err := tds.PutTaskDiff(ctx, TaskDiff{ProjectID: "", TaskID: "t1"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("PutTaskDiff(empty project) err = %v, want ErrInvalid", err)
+	}
+}
+
+// confEnhanceProgressRoundTrip proves the additive EnhanceStore live-progress seam against every
+// implementation (Memory + real Postgres via the conformance suite, which exercises migration
+// 00011): progress is recorded only while RUNNING, stamps progress_at, and a late ping after
+// completion is a no-op that never clobbers the result.
+func confEnhanceProgressRoundTrip(t *testing.T, s StateStore) {
+	t.Helper()
+	ctx := context.Background()
+	es, ok := s.(EnhanceStore)
+	if !ok {
+		t.Fatalf("%T does not implement EnhanceStore", s)
+	}
+
+	if err := es.CreateEnhanceJob(ctx, EnhanceJob{ID: "e1", ProjectID: "p1", RoughSpec: "servis şirketini kaldır"}); err != nil {
+		t.Fatalf("CreateEnhanceJob: %v", err)
+	}
+
+	// Progress on a PENDING (not yet claimed) job is a no-op — only running jobs stream.
+	if err := es.UpdateEnhanceProgress(ctx, "e1", "📖 Okunuyor: a.ts"); err != nil {
+		t.Fatalf("UpdateEnhanceProgress(pending): %v", err)
+	}
+	j, err := es.GetEnhanceJob(ctx, "e1")
+	if err != nil {
+		t.Fatalf("GetEnhanceJob: %v", err)
+	}
+	if j.Progress != "" || !j.ProgressAt.IsZero() {
+		t.Fatalf("pending job must have no progress, got %q at %v", j.Progress, j.ProgressAt)
+	}
+
+	// Claim → running, then a progress ping is recorded with a fresh progress_at.
+	if _, claimed, cerr := es.ClaimEnhanceJob(ctx, "p1"); cerr != nil || !claimed {
+		t.Fatalf("ClaimEnhanceJob: claimed=%v err=%v", claimed, cerr)
+	}
+	if err := es.UpdateEnhanceProgress(ctx, "e1", "🔎 Aranıyor: serviceCompany"); err != nil {
+		t.Fatalf("UpdateEnhanceProgress(running): %v", err)
+	}
+	j, err = es.GetEnhanceJob(ctx, "e1")
+	if err != nil {
+		t.Fatalf("GetEnhanceJob: %v", err)
+	}
+	if j.Progress != "🔎 Aranıyor: serviceCompany" {
+		t.Fatalf("progress not recorded: %q", j.Progress)
+	}
+	if j.ProgressAt.IsZero() {
+		t.Fatalf("progress_at must be stamped on a running progress update")
+	}
+
+	// Complete → done; a LATE progress ping after completion is a no-op (never clobbers result).
+	if err := es.CompleteEnhanceJob(ctx, "e1", "detaylı spec", ""); err != nil {
+		t.Fatalf("CompleteEnhanceJob: %v", err)
+	}
+	if err := es.UpdateEnhanceProgress(ctx, "e1", "📖 Okunuyor: late.ts"); err != nil {
+		t.Fatalf("UpdateEnhanceProgress(done): %v", err)
+	}
+	j, err = es.GetEnhanceJob(ctx, "e1")
+	if err != nil {
+		t.Fatalf("GetEnhanceJob: %v", err)
+	}
+	if j.Status != EnhanceDone || j.Result != "detaylı spec" {
+		t.Fatalf("completed job must keep its result, got status=%q result=%q", j.Status, j.Result)
+	}
+	if j.Progress == "📖 Okunuyor: late.ts" {
+		t.Fatalf("late progress after completion must be ignored, got %q", j.Progress)
 	}
 }
 

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -47,33 +48,79 @@ ROUGH REQUEST:
 // never killed mid-flight (the earlier 12m ceiling occasionally cut off a still-working run).
 const enhanceTimeout = 18 * time.Minute
 
-// runEnhanceClaude runs `claude -p --dangerously-skip-permissions` with cwd=dir (so claude's
-// file tools read the real code) over enhancePrompt+roughSpec, returning the produced Turkish
-// spec (stdout). It relies on the host's interactive claude login (env-inherited, sanitized to
-// strip CONDUCTOR_*/GH_TOKEN). --dangerously-skip-permissions lets it read/grep without prompts;
-// the prompt forbids writes and the checkout is a throwaway read-only worktree anyway.
-func runEnhanceClaude(ctx context.Context, dir, roughSpec string) (string, error) {
+// runEnhanceClaude runs `claude -p --output-format stream-json --verbose
+// --dangerously-skip-permissions` with cwd=dir (so claude's file tools read the real code) over
+// enhancePrompt+roughSpec. It line-scans the NDJSON event stream: each tool-use/think event is
+// mapped (parseEnhanceLine) to a Turkish activity line forwarded via onProgress (LIVE streaming,
+// real events only — no fabricated lines), and the terminal `result` event carries the final
+// spec (Faz-0: the spec is in result.result, NOT accumulated stdout). It relies on the host's
+// interactive claude login (env-inherited, sanitized to strip CONDUCTOR_*/GH_TOKEN);
+// --dangerously-skip-permissions lets it read/grep without prompts; the prompt forbids writes and
+// the checkout is a throwaway read-only worktree anyway. onProgress may be nil.
+func runEnhanceClaude(ctx context.Context, dir, roughSpec string, onProgress func(string)) (string, error) {
 	if _, err := exec.LookPath("claude"); err != nil {
 		return "", fmt.Errorf("agent enhance: claude CLI not found: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, enhanceTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "claude", "-p", "--dangerously-skip-permissions") //nolint:gosec // fixed subscription claude command; read-only enhance.
+	cmd := exec.CommandContext(ctx, "claude", "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions") //nolint:gosec // fixed subscription claude command; read-only enhance.
 	cmd.Dir = dir
 	cmd.Env = envsafe.Sanitize(os.Environ())
 	cmd.Stdin = bytes.NewReader([]byte(enhancePrompt + roughSpec))
-	var out, errb bytes.Buffer
-	cmd.Stdout = &out
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("agent enhance: stdout pipe: %w", err)
+	}
+	var errb bytes.Buffer
 	cmd.Stderr = &errb
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("agent enhance: start claude: %w", err)
+	}
+
+	var (
+		spec     string
+		gotFinal bool
+		failMsg  string
+	)
+	scanner := bufio.NewScanner(stdoutPipe)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024) // the result line holds the whole spec
+	for scanner.Scan() {
+		ev, ok := parseEnhanceLine(scanner.Bytes())
+		if !ok {
+			continue
+		}
+		if ev.final {
+			gotFinal = true
+			if ev.failed {
+				failMsg = ev.errMsg
+			} else {
+				spec = ev.spec
+			}
+			continue
+		}
+		if ev.progress != "" && onProgress != nil {
+			onProgress(ev.progress)
+		}
+	}
+	scanErr := scanner.Err()
+	waitErr := cmd.Wait()
+
+	if waitErr != nil {
 		msg := strings.TrimSpace(errb.String())
 		if msg == "" {
-			msg = err.Error()
+			msg = waitErr.Error()
 		}
 		return "", fmt.Errorf("agent enhance: claude run: %s", msg)
 	}
-	spec := strings.TrimSpace(out.String())
-	if spec == "" {
+	if scanErr != nil {
+		return "", fmt.Errorf("agent enhance: read stream: %w", scanErr)
+	}
+	if failMsg != "" {
+		return "", fmt.Errorf("agent enhance: claude error result: %s", failMsg)
+	}
+	spec = strings.TrimSpace(spec)
+	if !gotFinal || spec == "" {
 		return "", errors.New("agent enhance: claude produced no spec")
 	}
 	return spec, nil
@@ -83,13 +130,15 @@ func runEnhanceClaude(ctx context.Context, dir, roughSpec string) (string, error
 // satisfies it; tests inject a fake.
 type EnhanceGateway interface {
 	ClaimEnhance(ctx context.Context, projectID string) (agentclient.EnhanceClaim, bool, error)
+	ReportEnhanceProgress(ctx context.Context, projectID, jobID, detail string) error
 	CompleteEnhance(ctx context.Context, projectID, jobID, result, errMsg string) error
 }
 
-// Enhancer turns a rough request into a detailed Turkish spec by reading the project's code.
-// *RealExecutor satisfies it; tests inject a fake.
+// Enhancer turns a rough request into a detailed Turkish spec by reading the project's code,
+// emitting live activity lines via onProgress (may be nil) as it explores. *RealExecutor
+// satisfies it; tests inject a fake.
 type Enhancer interface {
-	Enhance(ctx context.Context, projectID, roughSpec string) (string, error)
+	Enhance(ctx context.Context, projectID, roughSpec string, onProgress func(detail string)) (string, error)
 }
 
 // EnhanceRunner polls the gateway for pending enhance jobs and runs them. It is independent of
@@ -100,6 +149,9 @@ type EnhanceRunner struct {
 	projectID string
 	log       *slog.Logger
 	poll      time.Duration
+	// throttle is the minimum interval between live-progress reports (leading-edge), so a burst
+	// of claude events becomes ~1 update/sec — live without hammering Postgres. Default 1s.
+	throttle time.Duration
 }
 
 // NewEnhanceRunner builds an EnhanceRunner. A zero poll defaults to 10s.
@@ -110,7 +162,28 @@ func NewEnhanceRunner(gw EnhanceGateway, ex Enhancer, projectID string, poll tim
 	if poll <= 0 {
 		poll = 10 * time.Second
 	}
-	return &EnhanceRunner{gw: gw, ex: ex, projectID: projectID, log: log, poll: poll}
+	return &EnhanceRunner{gw: gw, ex: ex, projectID: projectID, log: log, poll: poll, throttle: time.Second}
+}
+
+// progressReporter returns a throttled callback that forwards claude's live activity to the
+// gateway for jobID. Leading-edge throttle (≥ r.throttle between writes) keeps the line live
+// without hammering Postgres or fabricating fast updates; a transport error is logged and
+// swallowed — progress is best-effort and never fails the enhance.
+func (r *EnhanceRunner) progressReporter(ctx context.Context, jobID string) func(string) {
+	var last time.Time
+	return func(detail string) {
+		if detail == "" {
+			return
+		}
+		now := time.Now()
+		if !last.IsZero() && now.Sub(last) < r.throttle {
+			return
+		}
+		last = now
+		if err := r.gw.ReportEnhanceProgress(ctx, r.projectID, jobID, detail); err != nil {
+			r.log.Debug("agent enhance: progress report failed", "job", jobID, "err", err)
+		}
+	}
 }
 
 // RunOnce claims at most one enhance job and completes it. It returns (true, _) when it handled
@@ -126,7 +199,7 @@ func (r *EnhanceRunner) RunOnce(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	r.log.Info("agent enhance: running", "job", claim.ID)
-	spec, eerr := r.ex.Enhance(ctx, r.projectID, claim.RoughSpec)
+	spec, eerr := r.ex.Enhance(ctx, r.projectID, claim.RoughSpec, r.progressReporter(ctx, claim.ID))
 	if eerr != nil {
 		r.log.Warn("agent enhance: failed; reporting", "job", claim.ID, "err", eerr)
 		if cerr := r.gw.CompleteEnhance(ctx, r.projectID, claim.ID, "", eerr.Error()); cerr != nil {

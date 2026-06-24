@@ -148,8 +148,9 @@ func (s *apiServer) routes() http.Handler {
 	mux.Handle("POST /projects/{id}/agent/tasks/{task}/diff", s.requireAuth(http.HandlerFunc(s.handleAgentTaskDiff)))
 	mux.Handle("GET /projects/{id}/agent/tasks/{task}/decision", s.requireAuth(http.HandlerFunc(s.handleAgentDecision)))
 	mux.Handle("POST /projects/{id}/agent/tasks/{task}/merged", s.requireAuth(http.HandlerFunc(s.handleAgentMerged)))
-	// Intake enhance, agent side: claim the next pending enhance job + post the result.
+	// Intake enhance, agent side: claim the next pending enhance job, stream live progress, post the result.
 	mux.Handle("GET /projects/{id}/agent/enhance/next", s.requireAuth(http.HandlerFunc(s.handleAgentEnhanceNext)))
+	mux.Handle("POST /projects/{id}/agent/enhance/{job}/progress", s.requireAuth(http.HandlerFunc(s.handleAgentEnhanceProgress)))
 	mux.Handle("POST /projects/{id}/agent/enhance/{job}/result", s.requireAuth(http.HandlerFunc(s.handleAgentEnhanceResult)))
 	// Faz-S holdout store: the editor PUTs an intake-approved holdout body (S5), the agent's verify
 	// gate GETs it (S3). Authed; the body is repo-external (central Postgres) and never logged.

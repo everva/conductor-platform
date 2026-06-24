@@ -291,6 +291,15 @@ func (c *Client) ClaimEnhance(ctx context.Context, projectID string) (EnhanceCla
 	return out, true, nil
 }
 
+// ReportEnhanceProgress posts a live-activity line for a RUNNING enhance job (e.g. "📖 Okunuyor:
+// …"). Best-effort: the EnhanceRunner throttles these and ignores transport errors — progress
+// never fails the enhance. Secret-free: only a code-structure path/pattern crosses, never a token.
+func (c *Client) ReportEnhanceProgress(ctx context.Context, projectID, jobID, detail string) error {
+	_, err := c.do(ctx, http.MethodPost, "/projects/"+projectID+"/agent/enhance/"+jobID+"/progress",
+		map[string]string{"detail": detail}, nil)
+	return err
+}
+
 // CompleteEnhance writes back a finished enhance job: errMsg=="" → done with the spec; else
 // → failed. The spec/error cross the authed channel only (no tokens, never logged here).
 func (c *Client) CompleteEnhance(ctx context.Context, projectID, jobID, result, errMsg string) error {
