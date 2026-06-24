@@ -46,8 +46,11 @@ export interface TimelineEntry {
   kind: string;
   label: string;
   // summary is a one-line, payload-derived gloss for the entry ("3 files +66/−0",
-  // "pass", "42%", a log line) so the timeline reads as a replay log, not bare labels.
+  // "pass", "📖 Okunuyor: x.ts", a log line) so the timeline reads as a replay log, not bare labels.
   summary: string;
+  // count is how many consecutive same-phase progress pulses this entry collapses (≥2 → the row
+  // shows "×N"); undefined for a single, ungrouped entry. Grouping kills the repeated-pulse spam.
+  count?: number;
 }
 
 function str(v: unknown): string {
@@ -178,6 +181,13 @@ function summarize(e: Event): string {
     case "decision":
       return str(e.payload["result"]);
     case "progress": {
+      // The agent's live activity line (📖 Okunuyor / ✍️ Yazılıyor / 🔎 Aranıyor / 🤔 Düşünülüyor) —
+      // what the performer is doing RIGHT NOW (develop_progress.go reads it from the claude
+      // transcript). Falls back to a percent or "" when no rich detail rode along.
+      const detail = str(e.payload["detail"]);
+      if (detail) {
+        return detail;
+      }
       const pct = e.payload["pct"];
       return typeof pct === "number" ? `${pct}%` : "";
     }
@@ -192,17 +202,52 @@ function summarize(e: Event): string {
   }
 }
 
-// buildTimeline maps the task's events (ascending) to readable timeline entries,
-// each with a payload-derived summary for the replay log.
+// buildTimeline maps the task's events (ascending) to readable timeline entries, each with a
+// payload-derived summary for the replay log. A RUN of consecutive progress pulses in the same
+// phase is COLLAPSED into one entry (latest moment + activity + an ×N count) so the timeline reads
+// "Develop · progress  📖 Okunuyor: x.ts  ×12" instead of 12 identical rows — the director asked not
+// to be drowned in repeated pulses, while still seeing it is actively working. Every non-progress
+// event (started/diff/decision/log/merge/…) stays its own entry.
 export function buildTimeline(events: readonly Event[]): TimelineEntry[] {
-  return events.map((e) => ({
-    id: e.id,
-    ts: e.ts,
-    phase: e.phase,
-    kind: e.kind,
-    label: `${PHASE_LABEL[e.phase] ?? e.phase} · ${KIND_LABEL[e.kind] ?? e.kind}`,
-    summary: summarize(e),
-  }));
+  const out: TimelineEntry[] = [];
+  for (const e of events) {
+    const entry: TimelineEntry = {
+      id: e.id,
+      ts: e.ts,
+      phase: e.phase,
+      kind: e.kind,
+      label: `${PHASE_LABEL[e.phase] ?? e.phase} · ${KIND_LABEL[e.kind] ?? e.kind}`,
+      summary: summarize(e),
+    };
+    // The stable id stays the run's FIRST pulse (steady React key as the group grows); ts + summary
+    // advance to the newest so liveness + replay land on "now".
+    const prev = out[out.length - 1];
+    if (prev && prev.kind === "progress" && e.kind === "progress" && prev.phase === e.phase) {
+      prev.ts = entry.ts;
+      prev.summary = entry.summary;
+      prev.count = (prev.count ?? 1) + 1;
+      continue;
+    }
+    out.push(entry);
+  }
+  return out;
+}
+
+// SessionActivity is the newest live-activity pulse: WHAT the performer is doing + WHEN. It drives
+// the session's liveness signal so the director is never blind to whether the claude instance is
+// alive or has stalled.
+export interface SessionActivity {
+  ts: string;
+  detail: string; // "📖 Okunuyor: x.ts" — "" when the pulse carried no rich detail
+}
+
+// latestActivity returns the most recent progress (or started) pulse, or null before any activity.
+export function latestActivity(events: readonly Event[]): SessionActivity | null {
+  const ev = latest(events, (e) => e.kind === "progress" || e.kind === "started");
+  if (!ev) {
+    return null;
+  }
+  return { ts: ev.ts, detail: str(ev.payload["detail"]) };
 }
 
 /**

@@ -149,19 +149,29 @@ func (e *RealExecutor) setPhase(taskID, phase string) {
 	e.mu.Unlock()
 }
 
-// Progress reports the task's current phase + how many files the performer has changed so far
-// (git status count in the worktree). Implements agent.ProgressProbe so the runner emits a live
-// "Now" pulse during develop/verify. Safe to call concurrently with Run.
-func (e *RealExecutor) Progress(taskID string) (string, int) {
+// Progress reports the task's current phase, how many files the performer has changed so far (git
+// status count in the worktree), and a rich activity line (📖/✍️/🔎/🤔) read from the performer's
+// claude transcript — what it is doing right now. Implements agent.ProgressProbe so the runner emits
+// a live, non-repetitive pulse with a liveness signal during develop/verify. The transcript read is
+// best-effort + read-only — it never touches the develop subprocess or its verdict. Safe to call
+// concurrently with Run.
+func (e *RealExecutor) Progress(taskID string) (string, int, string) {
 	e.mu.Lock()
 	phase := e.phase[taskID]
 	ws, ok := e.ws[taskID]
 	e.mu.Unlock()
 	files := 0
+	detail := ""
 	if ok && ws.Path != "" {
 		files = countChangedFiles(ws.Path)
+		// Rich activity is develop-specific (read from the performer's claude transcript). During
+		// provisioning/verify there is no live performer, so leave detail empty and let the generic
+		// pulse carry the phase — never surface a STALE develop activity while the gate runs.
+		if phase == "developing" {
+			detail = latestDevelopActivity(ws.Path)
+		}
 	}
-	return phase, files
+	return phase, files, detail
 }
 
 // Enhance materializes a fresh read-only checkout of the project at its base branch and runs

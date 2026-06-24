@@ -33,7 +33,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { Badge, Button, Chip, StatusDot } from "../ui/index.ts";
 import type { BadgeTone } from "../ui/index.ts";
-import { buildTimeline, parseDiff, parseVerdict, stepReplay } from "./session.ts";
+import { buildTimeline, latestActivity, parseDiff, parseVerdict, stepReplay } from "./session.ts";
 import "./session.css";
 
 // SvEmpty — a designed empty/placeholder state for a session panel (a faint icon
@@ -161,6 +161,20 @@ export function SessionView({
   const diff = useMemo(() => parseDiff(events, replayTs ?? undefined), [events, replayTs]);
   const timeline = useMemo(() => buildTimeline(events), [events]);
 
+  // Liveness (step 7): the newest activity pulse + a clock that ages it while the task runs, so the
+  // header shows "active · 12s ago" (fresh) or "no activity for 2m" (stalled) — the director is never
+  // blind to whether the claude instance is alive. The tick runs ONLY while running (no idle churn).
+  const activity = useMemo(() => latestActivity(events), [events]);
+  const running = task.status === "running";
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) {
+      return;
+    }
+    const id = setInterval(() => setNow(Date.now()), 2000);
+    return () => clearInterval(id);
+  }, [running]);
+
   // N4 native time-travel: ←/→ step the Activity timeline (the SAME replay seam the timeline
   // clicks use). When the session is focused the webview/window receives these keys, so the
   // stepping works natively in the fork (webview-focused) and in the web app alike. Guarded so
@@ -184,6 +198,13 @@ export function SessionView({
 
   const held = isAwaitingApproval(task);
   const busy = controls?.isTaskBusy(task.project_id, task.id) ?? false;
+  // Liveness derivation (step 7): age the newest activity against the ticking clock. 45s is ~2× the
+  // agent's 20s pulse — no fresh pulse for that long while running means the performer stalled (or
+  // died), not merely working quietly, so it reads as a warning rather than a calm "active".
+  const activityAgeMs = activity ? Math.max(0, now - Date.parse(activity.ts)) : 0;
+  const activityStale = activityAgeMs >= 45_000;
+  const ageLabel =
+    activityAgeMs < 60_000 ? `${Math.floor(activityAgeMs / 1000)}s` : `${Math.floor(activityAgeMs / 60_000)}m`;
   const title = scenario?.title || task.id;
   // Q4.1: a finished task's empty verdict/diff panels shouldn't read as "still pending" — when
   // a done task has no such event (data absent), say "recorded" not "awaiting/emitted once…".
@@ -212,6 +233,22 @@ export function SessionView({
           </Badge>
         </div>
       </div>
+
+      {running && activity && (
+        <div
+          className={activityStale ? "sv-live sv-live-stale" : "sv-live"}
+          role="status"
+          aria-live="polite"
+        >
+          <StatusDot tone={activityStale ? "warn" : "success"} pulse={!activityStale} />
+          <span className="sv-live-detail">
+            {activity.detail || (activityStale ? "Waiting on the agent…" : "Working…")}
+          </span>
+          <span className="sv-live-age mono">
+            {activityStale ? `no activity for ${ageLabel}` : `active · ${ageLabel} ago`}
+          </span>
+        </div>
+      )}
 
       <div className="sv-grid">
         <div className="sv-col">
@@ -344,6 +381,11 @@ export function SessionView({
                         >
                           <span className="sv-tl-time mono">{shortTime(e.ts)}</span>
                           <span className="sv-tl-label">{e.label}</span>
+                          {e.count && e.count > 1 && (
+                            <span className="sv-tl-count" title={`${e.count} pulses`}>
+                              ×{e.count}
+                            </span>
+                          )}
                           {e.summary && (
                             <span className="sv-tl-summary mono">{e.summary}</span>
                           )}

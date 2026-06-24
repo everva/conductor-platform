@@ -268,6 +268,51 @@
   max-width: 12rem;
 }
 
+/* Step 7 — the ×N badge on a collapsed run of progress pulses (kills the repeated-pulse spam). */
+.sv-tl-count {
+  flex: none;
+  padding: 0.02rem var(--space-1);
+  border-radius: var(--radius-xs);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-3);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Step 7 — live activity + liveness pulse strip for a running session: the director is never blind
+   to whether the claude instance is alive (fresh pulse = success accent; stalled = warn accent). */
+.sv-live {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--success);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+}
+.sv-live-stale {
+  border-left-color: var(--warn);
+}
+.sv-live-detail {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sv-live-age {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--text-2xs);
+  color: var(--text-3);
+}
+.sv-live-stale .sv-live-age {
+  color: var(--warn);
+}
+
 /* Replay affordances: the "return to live" control, the as-of note, the panel tag. */
 .sv-replay-live {
   margin-left: auto;

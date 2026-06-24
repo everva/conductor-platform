@@ -74,12 +74,14 @@ type Executor interface {
 }
 
 // ProgressProbe is an OPTIONAL Executor capability: it reports the current phase
-// (provisioning|developing|verifying) and how many files the performer has changed so far, so
-// the runner can emit a live progress PULSE during the long, otherwise-silent develop/verify
-// phases — feeding the editor's "Now" view. RealExecutor implements it; an executor that
-// doesn't simply gets no pulse (RunOnce still works).
+// (provisioning|developing|verifying), how many files the performer has changed so far, and a
+// rich human-readable activity line (📖/✍️/🔎/🤔 — what the performer is doing right now), so the
+// runner can emit a live progress PULSE during the long, otherwise-silent develop/verify phases —
+// feeding the editor's session timeline + a liveness signal so the director is never blind. detail
+// is "" when nothing is surfaced (the pulse still fires). RealExecutor implements it; an executor
+// that doesn't simply gets no pulse (RunOnce still works).
 type ProgressProbe interface {
-	Progress(taskID string) (phase string, filesChanged int)
+	Progress(taskID string) (phase string, filesChanged int, detail string)
 }
 
 // progressInterval is how often the develop/verify heartbeat emits a progress event.
@@ -296,12 +298,16 @@ func (r *Runner) runWithProgress(ctx context.Context, task agentclient.TaskInfo,
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				phase, files := pp.Progress(task.ID)
-				r.report(ctx, task.ID, eventPhase(phase), "progress", map[string]any{
+				phase, files, detail := pp.Progress(task.ID)
+				payload := map[string]any{
 					"elapsed_seconds": int(time.Since(start).Seconds()),
 					"files_changed":   files,
 					"step":            phase, // granular step (provisioning|developing|verifying)
-				})
+				}
+				if detail != "" {
+					payload["detail"] = detail // rich activity line (📖/✍️/🔎/🤔) for the editor timeline
+				}
+				r.report(ctx, task.ID, eventPhase(phase), "progress", payload)
 			}
 		}
 	}()

@@ -248,7 +248,9 @@ func (p *progressExecutor) Run(ctx context.Context, t agentclient.TaskInfo, s ag
 	return p.fakeExecutor.Run(ctx, t, s)
 }
 
-func (p *progressExecutor) Progress(_ string) (string, int) { return "developing", 3 }
+func (p *progressExecutor) Progress(_ string) (string, int, string) {
+	return "developing", 3, "📖 Okunuyor: apps/web/x.ts"
+}
 
 // TestRunOnce_EmitsProgressPulse proves the runner emits a live progress pulse (kind=="progress"
 // with the executor's phase) DURING Run, feeding the editor's "Now" view.

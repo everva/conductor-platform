@@ -2,7 +2,7 @@
 // (B1 — per-gate checks, the trust differentiator), the bounded diff, and the
 // activity timeline — all derived from a task's event buffer.
 import { describe, expect, it } from "vitest";
-import { buildTimeline, parseDiff, parseVerdict, stepReplay } from "./session.ts";
+import { buildTimeline, latestActivity, parseDiff, parseVerdict, stepReplay } from "./session.ts";
 import type { Event } from "../api/types.ts";
 
 function ev(p: Partial<Event> & Pick<Event, "kind" | "phase">): Event {
@@ -175,5 +175,60 @@ describe("stepReplay (N4 arrow-key time-travel)", () => {
     expect(stepReplay(tl, "gone", "forward")).toBe("t3");
     expect(stepReplay([], null, "back")).toBe(null);
     expect(stepReplay([], "x", "forward")).toBe("x");
+  });
+});
+
+describe("buildTimeline — progress grouping (step 7: no repeated-pulse spam)", () => {
+  it("collapses consecutive same-phase progress pulses into one entry with ×N + the latest activity", () => {
+    const t = buildTimeline([
+      ev({ kind: "started", phase: "develop", ts: "2026-06-20T10:00:00Z" }),
+      ev({ kind: "progress", phase: "develop", ts: "2026-06-20T10:00:20Z", payload: { detail: "📖 Okunuyor: a.ts" } }),
+      ev({ kind: "progress", phase: "develop", ts: "2026-06-20T10:00:40Z", payload: { detail: "📖 Okunuyor: b.ts" } }),
+      ev({ kind: "progress", phase: "develop", ts: "2026-06-20T10:01:00Z", payload: { detail: "✍️ Yazılıyor: c.tsx" } }),
+      ev({ kind: "decision", phase: "review", ts: "2026-06-20T10:02:00Z", payload: { result: "pass" } }),
+    ]);
+    // started, [3 collapsed progress], decision — 3 rows, not 5.
+    expect(t).toHaveLength(3);
+    expect(t[0]!.label).toBe("Develop · started");
+    const grouped = t[1]!;
+    expect(grouped.kind).toBe("progress");
+    expect(grouped.count).toBe(3);
+    expect(grouped.summary).toBe("✍️ Yazılıyor: c.tsx"); // the LATEST activity
+    expect(grouped.ts).toBe("2026-06-20T10:01:00Z"); // advanced to the newest moment (liveness/replay land on "now")
+    expect(t[2]!.label).toBe("Review · verdict");
+  });
+
+  it("does NOT group progress across a phase change or a non-progress event", () => {
+    const t = buildTimeline([
+      ev({ kind: "progress", phase: "develop", ts: "t1", payload: { detail: "x" } }),
+      ev({ kind: "progress", phase: "verify", ts: "t2", payload: { detail: "y" } }), // phase changed
+      ev({ kind: "log", phase: "verify", ts: "t3", payload: { msg: "hello" } }),
+      ev({ kind: "progress", phase: "verify", ts: "t4", payload: { detail: "z" } }), // separated by the log
+    ]);
+    expect(t).toHaveLength(4);
+    expect(t.every((e) => e.count === undefined)).toBe(true);
+  });
+
+  it("a single progress entry surfaces the rich detail as its summary (no count)", () => {
+    const t = buildTimeline([ev({ kind: "progress", phase: "develop", payload: { detail: "🔎 Aranıyor: useFoo" } })]);
+    expect(t).toHaveLength(1);
+    expect(t[0]!.summary).toBe("🔎 Aranıyor: useFoo");
+    expect(t[0]!.count).toBeUndefined();
+  });
+});
+
+describe("latestActivity (step 7 liveness)", () => {
+  it("returns the newest progress pulse + its rich detail", () => {
+    const a = latestActivity([
+      ev({ kind: "started", phase: "develop", ts: "2026-06-20T10:00:00Z" }),
+      ev({ kind: "progress", phase: "develop", ts: "2026-06-20T10:00:20Z", payload: { detail: "📖 Okunuyor: a.ts" } }),
+      ev({ kind: "progress", phase: "develop", ts: "2026-06-20T10:00:40Z", payload: { detail: "✍️ Yazılıyor: b.tsx" } }),
+    ]);
+    expect(a).toEqual({ ts: "2026-06-20T10:00:40Z", detail: "✍️ Yazılıyor: b.tsx" });
+  });
+
+  it("falls back to a started pulse (no detail) and is null before any activity", () => {
+    expect(latestActivity([ev({ kind: "started", phase: "develop", ts: "t1" })])).toEqual({ ts: "t1", detail: "" });
+    expect(latestActivity([ev({ kind: "decision", phase: "review" })])).toBeNull();
   });
 });

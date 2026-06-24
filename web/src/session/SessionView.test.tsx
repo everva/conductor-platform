@@ -201,4 +201,34 @@ describe("SessionView", () => {
     expect(screen.getByText("← → to replay")).toBeInTheDocument();
     expect(screen.getByText(/MERGE-READY/)).toBeInTheDocument();
   });
+
+  it("surfaces live activity + a liveness pulse + a grouped ×N for a RUNNING task (step 7)", async () => {
+    const runningTask: Task = { ...TASK, id: "T-7", status: "running" };
+    const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+    const events: Event[] = [
+      ev({ id: "g1", ts: ago(60_000), kind: "started", phase: "develop" }),
+      ev({ id: "g2", ts: ago(40_000), kind: "progress", phase: "develop", payload: { detail: "📖 Okunuyor: use-collection-points.ts" } }),
+      ev({ id: "g3", ts: ago(20_000), kind: "progress", phase: "develop", payload: { detail: "📖 Okunuyor: employee-table.tsx" } }),
+      ev({ id: "g4", ts: ago(3_000), kind: "progress", phase: "develop", payload: { detail: "✍️ Yazılıyor: data-table/bulk-toolbar.tsx" } }),
+    ];
+    render(
+      <SessionView
+        task={runningTask}
+        token="t"
+        onBack={vi.fn()}
+        onUnauthorized={() => {}}
+        makeScenarioClient={() => ({ listScenarios: async () => [SCENARIO] })}
+        makeHistory={() => ({ listEvents: async () => events })}
+        eventTransport={noopTransport}
+      />,
+    );
+    // Liveness strip: a fresh pulse (3s) reads as active — the director is never blind.
+    expect(await screen.findByText(/active · \d+s ago/)).toBeInTheDocument();
+    // The newest activity detail is surfaced (in the liveness strip + the grouped timeline row).
+    expect(
+      screen.getAllByText("✍️ Yazılıyor: data-table/bulk-toolbar.tsx").length,
+    ).toBeGreaterThanOrEqual(1);
+    // The 3 consecutive develop progress pulses collapse to ONE row with ×3 — no repeated spam.
+    expect(screen.getByText("×3")).toBeInTheDocument();
+  });
 });
