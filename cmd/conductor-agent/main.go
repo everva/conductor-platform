@@ -141,6 +141,14 @@ func run() error {
 		"gateway", cfg.gateway, "project", cfg.project, "host", cfg.hostID,
 		"capabilities", cfg.capabilities, "repo", cfg.repo, "base", cfg.base, "push", !cfg.noPush)
 
+	// Honest signal (Rule#9): with no holdout runner, scenarios carrying a stored hidden holdout
+	// degrade to public-gates-only rather than hard-blocking. Warn ONCE so the operator knows the
+	// ADR-0018 anti-overfitting check is not being exercised on this host.
+	if len(cfg.holdoutCmd) == 0 {
+		logger.Warn("conductor-agent: no holdout runner configured (set CONDUCTOR_HOLDOUT_CMD / -holdout-cmd); " +
+			"scenarios with a stored hidden holdout will be SKIPPED — the deterministic public gates still gate")
+	}
+
 	// Intake enhance (agent-side, code-aware): a separate lightweight loop that claims pending
 	// enhance jobs, reads the real code via claude, and returns a detailed Turkish spec. It runs
 	// alongside the task loop so an enhance never blocks (or is blocked by) a leased task.

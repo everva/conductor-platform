@@ -178,6 +178,14 @@ func (v *Verifier) runHoldout(ctx context.Context, ws engine.Workspace, ref stri
 		return nil, nil
 	}
 
+	// No holdout RUNNER configured → skip the hidden holdout entirely (the deterministic public
+	// gates still gate, Rule#9). Without this, every scenario carrying an auto-generated holdout
+	// (Faz-S S4) would hard-block on a missing runner; instead we degrade to public-gates-only and
+	// warn ONCE at agent startup. When a runner IS configured, the holdout below is injected + run.
+	if len(v.cfg.HoldoutCmd) == 0 {
+		return nil, nil
+	}
+
 	holdout, ferr := v.store.Fetch(ctx, ref)
 	if ferr != nil {
 		return nil, fmt.Errorf("fetch holdout: %w", ferr)
@@ -229,9 +237,6 @@ func (v *Verifier) runHoldout(ctx context.Context, ws engine.Workspace, ref stri
 		}
 	}
 
-	if len(v.cfg.HoldoutCmd) == 0 {
-		return nil, errors.New("no holdout command configured")
-	}
 	cmd := exec.CommandContext(ctx, v.cfg.HoldoutCmd[0], v.cfg.HoldoutCmd[1:]...) //nolint:gosec // operator-supplied holdout runner.
 	cmd.Dir = vwt
 	cmd.Env = sanitizedEnv()
