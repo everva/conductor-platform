@@ -45,6 +45,7 @@ type config struct {
 	base         string
 	recipeDir    string
 	developCmd   []string
+	holdoutCmd   []string
 	timeout      time.Duration
 	interval     time.Duration
 	poll         time.Duration
@@ -63,6 +64,7 @@ func run() error {
 		base       = flag.String("base", "", "base branch conductor work merges onto (required), e.g. conductor/optiway")
 		recipeDir  = flag.String("recipe-dir", "", "directory containing .conductor/config.yaml (develop cmd + verify gates)")
 		developCmd = flag.String("develop-cmd", "", "override the performer argv (default from recipe, else 'claude -p')")
+		holdoutCmd = flag.String("holdout-cmd", firstEnv("CONDUCTOR_HOLDOUT_CMD"), "argv to run the injected hidden holdout in the verify-worktree, e.g. 'pnpm exec playwright test' (Faz-S; required only when a scenario has a stored holdout)")
 		timeout    = flag.Duration("timeout", 30*time.Minute, "per-develop subprocess timeout")
 		interval   = flag.Duration("interval", 10*time.Second, "idle poll interval when there is no work")
 		poll       = flag.Duration("poll", 15*time.Second, "held-task approval poll interval")
@@ -75,7 +77,7 @@ func run() error {
 		gateway: strings.TrimSpace(*gateway), project: strings.TrimSpace(*project),
 		hostID: strings.TrimSpace(*hostID), capabilities: splitCSV(*caps),
 		root: *root, repo: strings.TrimSpace(*repo), base: strings.TrimSpace(*base),
-		recipeDir: *recipeDir, developCmd: splitFields(*developCmd),
+		recipeDir: *recipeDir, developCmd: splitFields(*developCmd), holdoutCmd: splitFields(*holdoutCmd),
 		timeout: *timeout, interval: *interval, poll: *poll, noPush: *noPush, pushRemote: *pushRemote,
 	}
 	if cfg.gateway == "" || cfg.project == "" || cfg.repo == "" || cfg.base == "" {
@@ -120,6 +122,8 @@ func run() error {
 		// Faz-S S3: fetch the ADR-0018 hidden holdout from the gateway (GET /agent/holdout) so the
 		// verify gate actually injects it. A not-found ref degrades to public-gates-only (unchanged).
 		HoldoutStore: agent.NewGatewayHoldout(client.GetHoldout),
+		// Faz-S S3b: the argv that runs the injected holdout (e.g. pnpm exec playwright test).
+		HoldoutCmd: cfg.holdoutCmd,
 	})
 	if err != nil {
 		return err

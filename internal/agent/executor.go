@@ -48,6 +48,11 @@ type ExecutorConfig struct {
 	// noopHoldout (no holdout injected; public gates still run) so existing wiring is unchanged;
 	// cmd/conductor-agent wires NewGatewayHoldout over the gateway's GET /agent/holdout.
 	HoldoutStore verify.HoldoutStore
+	// HoldoutCmd is the argv that RUNS the injected holdout in the verify-worktree (Faz-S S3b),
+	// e.g. ["pnpm","exec","playwright","test"]. Required only when a scenario actually has a stored
+	// holdout body (empty/absent holdouts are skipped); empty here → a present holdout errors
+	// ("no holdout command configured"), which is the honest signal to configure it.
+	HoldoutCmd []string
 }
 
 // gatewayHoldout adapts a gateway holdout-fetch func to verify.HoldoutStore so the agent's verifier
@@ -129,7 +134,7 @@ func NewRealExecutor(cfg ExecutorConfig) (*RealExecutor, error) {
 	if holdouts == nil {
 		holdouts = noopHoldout{}
 	}
-	verf := verify.New(holdouts, verify.Config{})
+	verf := verify.New(holdouts, verify.Config{HoldoutCmd: cfg.HoldoutCmd})
 	merger := conductor.NewGitMerger(
 		func(projectID string) string { return cfg.RootDir + "/clones/" + projectID },
 		conductor.WithPush(conductor.PushConfig{Enabled: cfg.Push, Remote: cfg.PushRemote, GHToken: cfg.GHToken}),
