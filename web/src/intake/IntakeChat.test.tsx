@@ -418,11 +418,11 @@ describe("IntakeChat", () => {
     act(() => emit?.("📖 Okunuyor: a.ts"));
     expect(screen.getByTestId("enhance-status").textContent).toBe("📖 Okunuyor: a.ts");
 
-    // No new activity for the idle window → an honest "no activity for N s" counter, not a frozen line.
+    // No new activity for the idle window → keep the last line but append an honest elapsed counter.
     act(() => {
       vi.advanceTimersByTime(15_000);
     });
-    expect(screen.getByTestId("enhance-status").textContent).toMatch(/saniyedir yeni işlem yok/);
+    expect(screen.getByTestId("enhance-status").textContent).toMatch(/📖 Okunuyor: a\.ts · ⏳ 15 sn/);
 
     // New activity resets the live line (and the idle timer).
     act(() => emit?.("🔎 Aranıyor: serviceCompany"));

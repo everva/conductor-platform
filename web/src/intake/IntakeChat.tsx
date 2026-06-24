@@ -172,13 +172,15 @@ export function IntakeChat({
     return () => window.clearInterval(t);
   }, [enhancing]);
 
-  // enhanceStatusLabel renders the live status: the agent's latest real activity line, or — after
-  // ENHANCE_IDLE_MS with no new activity — an honest "no activity for N s" counter (never a fake
-  // line). Before the first event it shows the initial "examining code" message.
+  // enhanceStatusLabel renders the live status: the agent's latest real activity line, and — after
+  // ENHANCE_IDLE_SECONDS with no NEW activity (e.g. claude writing the final spec, a long single
+  // step with no tool events) — keeps that line but appends an honest elapsed counter, so a long
+  // gap reads as "still on this, N s in" rather than a frozen line OR a misleading "stuck". Never
+  // a fabricated line. Before the first event it shows the initial "examining code" message.
   function enhanceStatusLabel(): string {
     if (enhanceActivity === null) return "Kod inceleniyor…";
     const idleSec = Math.floor((Date.now() - enhanceAt.current) / 1000);
-    if (idleSec >= ENHANCE_IDLE_SECONDS) return `⏳ ${idleSec} saniyedir yeni işlem yok…`;
+    if (idleSec >= ENHANCE_IDLE_SECONDS) return `${enhanceActivity} · ⏳ ${idleSec} sn`;
     return enhanceActivity;
   }
 
