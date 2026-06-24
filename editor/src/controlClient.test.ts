@@ -215,6 +215,59 @@ describe("ControlClient.approve", () => {
   });
 });
 
+describe("ControlClient.intake (Faz-R native dispatch)", () => {
+  const YAML = 'id: "W-1"\ntitle: "x"\nlane: "backend"\ntier: "T2"\nacceptance:\n  - "a"\nhidden_holdout_ref: "store://h/W-1/h.go"\n';
+
+  it("POSTs the RAW yaml body (not JSON) with a yaml content-type + bearer header", async () => {
+    const fn = fetchMock(() => new Response(JSON.stringify({ created: ["W-1"], skipped: [] }), { status: 200 }));
+    const client = new ControlClient(BASE, tokenProvider(), fn);
+
+    const result = await client.intake("p1", YAML);
+
+    expect(result).toEqual({ ok: true, body: { created: ["W-1"], skipped: [] } });
+    const mock = fn as unknown as ReturnType<typeof vi.fn>;
+    const [url, init] = mock.mock.calls[0] as [string, RequestInit | undefined];
+    expect(url).toBe("http://gw.test/projects/p1/intake");
+    expect(init?.method).toBe("POST");
+    // The body is the raw YAML string verbatim — NOT JSON-wrapped.
+    expect(init?.body).toBe(YAML);
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers["Content-Type"]).toBe("application/yaml");
+    expect(authOf(init)).toBe(`Bearer ${SENTINEL}`);
+  });
+
+  it("maps a 400 → invalid and surfaces the gateway's secret-free {error} message as detail", async () => {
+    const fn = fetchMock(
+      () => new Response(JSON.stringify({ error: 'scenario "W-1" invalid: unknown tier "T9"' }), { status: 400 }),
+    );
+    const client = new ControlClient(BASE, tokenProvider(), fn);
+
+    const result = await client.intake("p1", YAML);
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "invalid",
+      status: 400,
+      detail: 'scenario "W-1" invalid: unknown tier "T9"',
+    });
+  });
+
+  it("maps 401 → unauthorized, no-token → not-connected, and a throw → unreachable", async () => {
+    const unauth = new ControlClient(BASE, tokenProvider(), fetchMock(() => new Response(null, { status: 401 })));
+    expect(await unauth.intake("p1", YAML)).toEqual({ ok: false, reason: "unauthorized", status: 401 });
+
+    const disconnected = new ControlClient(BASE, noTokenProvider(), fetchMock(() => new Response(null, { status: 200 })));
+    expect(await disconnected.intake("p1", YAML)).toEqual({ ok: false, reason: "not-connected", status: 0 });
+
+    const throws = new ControlClient(
+      BASE,
+      tokenProvider(),
+      vi.fn(() => Promise.reject(new Error("network"))) as unknown as typeof fetch,
+    );
+    expect(await throws.intake("p1", YAML)).toEqual({ ok: false, reason: "unreachable", status: 0 });
+  });
+});
+
 describe("token-leak guard", () => {
   it("never returns the bearer token in any ControlResult — it rides ONLY in the Authorization header", async () => {
     // Drive every method across success + each failure mapping, capturing the requests.

@@ -96,6 +96,12 @@
         "category": "Conductor"
       },
       {
+        "command": "conductor.dispatch",
+        "title": "Conductor: Dispatch Work",
+        "category": "Conductor",
+        "icon": "$(rocket)"
+      },
+      {
         "command": "conductor.refreshSessions",
         "title": "Conductor: Refresh Conductors",
         "category": "Conductor",
@@ -190,6 +196,11 @@
     "menus": {
       "view/title": [
         {
+          "command": "conductor.dispatch",
+          "when": "view == conductor.sessions && conductor.connected",
+          "group": "navigation@0"
+        },
+        {
           "command": "conductor.refreshSessions",
           "when": "view == conductor.sessions",
           "group": "navigation"
@@ -210,6 +221,11 @@
           "command": "conductor.openTaskDiff",
           "when": "view == conductor.sessions && viewItem =~ /conductorTask/",
           "group": "navigation@2"
+        },
+        {
+          "command": "conductor.dispatch",
+          "when": "view == conductor.sessions && viewItem == conductorProject",
+          "group": "0_create@1"
         },
         {
           "command": "conductor.approve",
@@ -286,6 +302,12 @@
         "command": "conductor.open",
         "key": "ctrl+alt+c",
         "mac": "cmd+alt+c"
+      },
+      {
+        "command": "conductor.dispatch",
+        "key": "ctrl+alt+n",
+        "mac": "cmd+alt+n",
+        "when": "conductor.connected"
       },
       {
         "command": "conductor.showDiff",

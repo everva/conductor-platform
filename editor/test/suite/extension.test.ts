@@ -14,6 +14,7 @@ const SHOW_DIFF_COMMAND = "conductor.showDiff";
 const OPEN_COMMAND = "conductor.open";
 const OPEN_SESSION_COMMAND = "conductor.openSession";
 const NEW_WORK_COMMAND = "conductor.newWork";
+const DISPATCH_COMMAND = "conductor.dispatch";
 const REFRESH_SESSIONS_COMMAND = "conductor.refreshSessions";
 const COMMAND_CENTER_TITLE = "Conductor";
 const INTAKE_TITLE = "New Work";
@@ -84,6 +85,12 @@ export async function smoke(): Promise<void> {
   assert.ok(
     allCommands.includes(OPEN_SESSION_COMMAND),
     `command ${OPEN_SESSION_COMMAND} should be registered`,
+  );
+  // Faz-R: the native Dispatch Work command must be registered. (A menu/keybinding references it,
+  // so a missing command-declaration would be a real packaging bug the mocked gate can't catch.)
+  assert.ok(
+    allCommands.includes(DISPATCH_COMMAND),
+    `command ${DISPATCH_COMMAND} should be registered`,
   );
 
   // 4C-1b — NATIVE DIFF RENDER proof in a REAL VS Code host. The activated extension

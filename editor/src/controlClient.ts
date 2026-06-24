@@ -38,8 +38,12 @@ export type ControlResult =
   | { ok: true; body: unknown }
   | {
       ok: false;
-      reason: "not-connected" | "conflict" | "unauthorized" | "unreachable";
+      reason: "not-connected" | "conflict" | "unauthorized" | "unreachable" | "invalid";
       status: number;
+      // OPTIONAL: present only on `invalid` (a 400) — the gateway's descriptive, secret-free
+      // validation message, so the dispatch flow can show WHY the YAML was rejected. Never a token
+      // (gateway validation errors carry scenario/shape reasons only).
+      detail?: string;
     };
 
 /** The minimal project shape the quick-pick needs: just the `id`. The gateway returns a
@@ -131,6 +135,62 @@ export class ControlClient {
     return this.#postTo(`/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/retry`);
   }
 
+  /**
+   * `POST {base}/projects/{id}/intake` (authed) — the native "Dispatch Work" path (Faz-R). The body
+   * is RAW scenario YAML (NOT JSON), exactly as the gateway's handleIntake reads it; on 200 the
+   * gateway returns {created,skipped}, on 400 a descriptive (secret-free) validation message. A 400
+   * here means the YAML was rejected (bad tier, repo-internal holdout, dangling dep, …) → surfaced
+   * as a distinct `invalid` reason so the caller can show the gateway's message instead of a generic
+   * error. The token rides ONLY in the Authorization header.
+   */
+  intake(projectId: string, yaml: string): Promise<ControlResult> {
+    return this.#postRaw(
+      `/projects/${encodeURIComponent(projectId)}/intake`,
+      yaml,
+      "application/yaml",
+    );
+  }
+
+  /**
+   * Performs an authed POST with a RAW (non-JSON) string body + an explicit Content-Type, mapping
+   * the outcome onto a ControlResult like {@link #postTo} but adding a 400 → "invalid" branch (the
+   * gateway's validation rejection, whose message the body carries). The token is placed ONLY in
+   * the Authorization header.
+   */
+  async #postRaw(path: string, rawBody: string, contentType: string): Promise<ControlResult> {
+    const token = await this.#tokens.getToken();
+    if (token === undefined || token === "") {
+      return { ok: false, reason: "not-connected", status: 0 };
+    }
+    const url = `${this.#baseUrl}${path}`;
+    let res: Response;
+    try {
+      res = await this.#fetch(url, {
+        method: "POST",
+        headers: { ...authHeader(token), "Content-Type": contentType },
+        body: rawBody,
+      });
+    } catch {
+      return { ok: false, reason: "unreachable", status: 0 };
+    }
+    if (res.ok) {
+      return { ok: true, body: await readJsonSafe(res) };
+    }
+    if (res.status === 401) {
+      return { ok: false, reason: "unauthorized", status: 401 };
+    }
+    if (res.status === 400) {
+      // Include `detail` only when the gateway gave one (exactOptionalPropertyTypes forbids an
+      // explicit `undefined` on the optional field).
+      const detail = await readErrorDetail(res);
+      return { ok: false, reason: "invalid", status: 400, ...(detail !== undefined ? { detail } : {}) };
+    }
+    if (res.status === 409) {
+      return { ok: false, reason: "conflict", status: 409 };
+    }
+    return { ok: false, reason: "unreachable", status: res.status };
+  }
+
   /** Project-scoped control POST → `/projects/{id}/{action}` (pause/resume/abort/approve). */
   #post(projectId: string, action: ControlAction, body?: unknown): Promise<ControlResult> {
     // Project ids come from the gateway's own listProjects, but encode anyway so the path
@@ -219,6 +279,20 @@ async function readJsonSafe(res: Response): Promise<unknown> {
   } catch {
     return undefined;
   }
+}
+
+/** Extracts the gateway's secret-free error message from a 400 body ({"error":"…"}), or undefined.
+ * The conductor-api writeError shape is `{error: string}`; validation messages there are descriptive
+ * and contain no secret/token (they name scenario/shape problems), so surfacing this is safe. */
+async function readErrorDetail(res: Response): Promise<string | undefined> {
+  const body = await readJsonSafe(res);
+  if (body !== null && typeof body === "object") {
+    const err = (body as { error?: unknown }).error;
+    if (typeof err === "string" && err !== "") {
+      return err;
+    }
+  }
+  return undefined;
 }
 
 /** Maps an unknown gateway-projects payload onto `{ id }[]`, tolerating the full project

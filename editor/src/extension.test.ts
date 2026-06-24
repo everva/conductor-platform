@@ -83,6 +83,8 @@ import {
   runConnect,
   runControl,
   runRetry,
+  runDispatch,
+  DISPATCH_COMMAND,
   runDisconnect,
   runShowDiff,
   runShowDiffForTask,
@@ -169,6 +171,7 @@ function makeControl(opts: {
   abort: ReturnType<typeof vi.fn>;
   approve: ReturnType<typeof vi.fn>;
   retry: ReturnType<typeof vi.fn>;
+  intake: ReturnType<typeof vi.fn>;
 } {
   const result: ControlResult = opts.result ?? { ok: true, body: {} };
   const listProjects = vi.fn(() =>
@@ -181,6 +184,7 @@ function makeControl(opts: {
     abort: vi.fn(() => Promise.resolve(result)),
     approve: vi.fn(() => Promise.resolve(result)),
     retry: vi.fn(() => Promise.resolve(result)),
+    intake: vi.fn(() => Promise.resolve(result)),
   };
 }
 
@@ -197,9 +201,9 @@ describe("registerConductor", () => {
 
     // connect + disconnect + login + logout + pause + resume + abort + approve + diff-provider +
     // show-diff + open (N0) + openSession (N3) + openTaskDiff (P3) + showEventJson + retryTask (A/B) +
-    // newWork (Q3a) + openTour = 17. (Q0.4: no sidebar webview view; the CC + Intake panels are built
-    // only when a fleetConfig is supplied — registerConductor here gets none, so no panel is pushed.)
-    expect(disposables).toHaveLength(17);
+    // newWork (Q3a) + dispatch (Faz-R) + openTour = 18. (Q0.4: no sidebar webview view; the CC + Intake
+    // panels are built only when a fleetConfig is supplied — registerConductor here gets none.)
+    expect(disposables).toHaveLength(18);
     expect(commands.registerCommand).toHaveBeenCalledWith(CONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(DISCONNECT_COMMAND, expect.any(Function));
     // L1: the editor-mediated claude login/logout commands.
@@ -222,6 +226,8 @@ describe("registerConductor", () => {
     expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_TASK_DIFF_COMMAND, expect.any(Function));
     // Q3a: the Intake "New Work" window command.
     expect(commands.registerCommand).toHaveBeenCalledWith(NEW_WORK_COMMAND, expect.any(Function));
+    // Faz-R: the native Dispatch Work command.
+    expect(commands.registerCommand).toHaveBeenCalledWith(DISPATCH_COMMAND, expect.any(Function));
     // Q0.4: NO sidebar webview view is registered any more (the cockpit lives only in the panel).
     expect(window.registerWebviewViewProvider).not.toHaveBeenCalled();
   });
@@ -713,6 +719,107 @@ describe("runRetry", () => {
     expect(control.retry).toHaveBeenCalledWith("optiway", "T-running");
     expect(window.showWarningMessage).toHaveBeenCalledWith("Only a blocked task can be retried.", {}, "OK");
     expect(commands.executeCommand).not.toHaveBeenCalled();
+  });
+});
+
+describe("runDispatch (Faz-R native dispatch)", () => {
+  // Drives the full prompt chain against the mock. showInputBox is called in order:
+  // title → acceptance → lane → id; showQuickPick once for the tier; showWarningMessage
+  // for the final confirm; showInformationMessage for the post-dispatch follow-up.
+  function primePrompts(over: { title?: string; acceptance?: string; lane?: string; id?: string; tier?: string } = {}) {
+    window.showInputBox
+      .mockResolvedValueOnce(over.title ?? "Add a /healthz endpoint")
+      .mockResolvedValueOnce(over.acceptance ?? "GET /healthz returns 200")
+      .mockResolvedValueOnce(over.lane ?? "backend")
+      .mockResolvedValueOnce(over.id ?? "W-HEALTHZ");
+    window.showQuickPick.mockResolvedValueOnce(over.tier ?? "T2 — standard change");
+  }
+
+  it("preselected project: prompts, confirms, POSTs the synthesized YAML, refreshes, offers the session", async () => {
+    primePrompts();
+    window.showWarningMessage.mockResolvedValueOnce("Dispatch");
+    window.showInformationMessage.mockResolvedValueOnce("Open Session");
+    const control = makeControl({ result: { ok: true, body: { created: ["W-HEALTHZ"], skipped: [] } } });
+
+    await runDispatch({ commands, window }, control, "web-shop");
+
+    // No project quick-pick when preselected.
+    expect(control.listProjects).not.toHaveBeenCalled();
+    // The intake POST got the project + a well-formed YAML carrying every field.
+    expect(control.intake).toHaveBeenCalledTimes(1);
+    const [project, yaml] = control.intake.mock.calls[0] as [string, string];
+    expect(project).toBe("web-shop");
+    expect(yaml).toContain('id: "W-HEALTHZ"');
+    expect(yaml).toContain('title: "Add a /healthz endpoint"');
+    expect(yaml).toContain('tier: "T2"');
+    expect(yaml).toContain('lane: "backend"');
+    expect(yaml).toContain('  - "GET /healthz returns 200"');
+    expect(yaml).toContain('hidden_holdout_ref: "store://holdouts/W-HEALTHZ/holdout_test.go"');
+    // Confirm modal, then success → refresh + jump to the created session.
+    expect(window.showWarningMessage).toHaveBeenCalledWith(expect.stringContaining("Dispatch"), { modal: true }, "Dispatch");
+    expect(commands.executeCommand).toHaveBeenCalledWith(REFRESH_SESSIONS_COMMAND);
+    expect(window.showInformationMessage).toHaveBeenCalledWith("Dispatched 1 task: W-HEALTHZ.", "Open Session");
+    expect(commands.executeCommand).toHaveBeenCalledWith(OPEN_SESSION_COMMAND, "web-shop", "W-HEALTHZ");
+  });
+
+  it("palette path lists projects then quick-picks one before prompting", async () => {
+    window.showQuickPick.mockResolvedValueOnce("p2"); // project pick FIRST (before tier)
+    primePrompts();
+    window.showWarningMessage.mockResolvedValueOnce("Dispatch");
+    window.showInformationMessage.mockResolvedValueOnce(undefined);
+    const control = makeControl({ projects: [{ id: "p1" }, { id: "p2" }], result: { ok: true, body: { created: ["W-HEALTHZ"], skipped: [] } } });
+
+    await runDispatch({ commands, window }, control);
+
+    expect(control.listProjects).toHaveBeenCalled();
+    expect(window.showQuickPick).toHaveBeenCalledWith(["p1", "p2"], expect.any(Object));
+    expect((control.intake.mock.calls[0] as [string, string])[0]).toBe("p2");
+  });
+
+  it("cancelling the title prompt is a quiet no-op (no intake)", async () => {
+    window.showInputBox.mockResolvedValueOnce(undefined); // title cancelled
+    const control = makeControl();
+
+    await runDispatch({ commands, window }, control, "web-shop");
+
+    expect(control.intake).not.toHaveBeenCalled();
+    expect(window.showWarningMessage).not.toHaveBeenCalled();
+  });
+
+  it("empty acceptance is rejected before any POST", async () => {
+    window.showInputBox
+      .mockResolvedValueOnce("A title")
+      .mockResolvedValueOnce("   "); // acceptance blank
+    const control = makeControl();
+
+    await runDispatch({ commands, window }, control, "web-shop");
+
+    expect(control.intake).not.toHaveBeenCalled();
+    expect(window.showErrorMessage).toHaveBeenCalledWith("At least one acceptance criterion is required.");
+  });
+
+  it("declining the final confirm does NOT POST", async () => {
+    primePrompts();
+    window.showWarningMessage.mockResolvedValueOnce(undefined); // confirm dismissed
+    const control = makeControl();
+
+    await runDispatch({ commands, window }, control, "web-shop");
+
+    expect(control.intake).not.toHaveBeenCalled();
+  });
+
+  it("a gateway 400 surfaces the validation detail and does NOT refresh", async () => {
+    primePrompts();
+    window.showWarningMessage.mockResolvedValueOnce("Dispatch");
+    const control = makeControl({
+      result: { ok: false, reason: "invalid", status: 400, detail: 'unknown tier "T9"' },
+    });
+
+    await runDispatch({ commands, window }, control, "web-shop");
+
+    expect(control.intake).toHaveBeenCalledTimes(1);
+    expect(window.showErrorMessage).toHaveBeenCalledWith('Rejected: unknown tier "T9"');
+    expect(commands.executeCommand).not.toHaveBeenCalledWith(REFRESH_SESSIONS_COMMAND);
   });
 });
 
@@ -1411,8 +1518,8 @@ describe("activate", () => {
     });
     // 33 (post-diagnostics) + Activity's three (view + provider + nowBar status item) = 36,
     // + the M2 auto-reconnect controller's dispose = 37, + the A/B Stream commands
-    // (showEventJson + retryTask) = 39, + the openTour command = 40.
-    expect(subscriptions).toHaveLength(40);
+    // (showEventJson + retryTask) = 39, + the openTour command = 40, + the Faz-R dispatch command = 41.
+    expect(subscriptions).toHaveLength(41);
   });
 
   it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {

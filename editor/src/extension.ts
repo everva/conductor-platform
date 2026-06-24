@@ -29,6 +29,16 @@ import { HostBridge, type WebviewLike } from "./bridge/hostBridge";
 import { isWebviewReady } from "./bridge/protocol";
 import { wsConnector } from "./bridge/wsConnector";
 import { ControlClient, ControlListError, type ControlAction } from "./controlClient";
+import {
+  TIER_CHOICES,
+  parseTier,
+  slugifyId,
+  defaultHoldoutRef,
+  parseAcceptance,
+  buildIntakeYaml,
+  dispatchOutcome,
+  type DispatchSpec,
+} from "./dispatch";
 import { InterventionNotifier, type Intervention } from "./notifier";
 import { DiffObserver, type TaskDiff } from "./diffObserver";
 import { reconstructDiffFiles } from "./diffReconstruct";
@@ -125,6 +135,11 @@ export const NEW_WORK_COMMAND = "conductor.newWork";
  * a blocked sessions-tree task node or a blocked decision row in the live Stream. */
 export const RETRY_TASK_COMMAND = "conductor.retryTask";
 
+/** Command id of the NATIVE "Dispatch Work" flow (Faz-R) — a webview-less command-palette path
+ * (QuickPick + InputBox) that synthesizes intake YAML and POSTs it to the gateway. The keyboard-
+ * first complement to the rich webview Intake (NEW_WORK_COMMAND). */
+export const DISPATCH_COMMAND = "conductor.dispatch";
+
 /** Command id that (re)opens the native Getting Started walkthrough — the "how to use Conductor
  * well" tour. Auto-opened once on first launch; re-runnable from the palette anytime. */
 export const OPEN_TOUR_COMMAND = "conductor.openTour";
@@ -199,12 +214,16 @@ export interface VscodeApi {
   readonly commands: {
     registerCommand(command: string, callback: (...args: unknown[]) => unknown): vscode.Disposable;
     // 4C-3: the intervention notification's "Open Conductor" action reveals the activity-bar
-    // container via the built-in `workbench.view.extension.conductor` command. Narrow
-    // signature (the handler passes only the command id) so the flow stays assertable.
-    executeCommand(command: string): Thenable<unknown>;
+    // container via the built-in `workbench.view.extension.conductor` command. Variadic args so
+    // Faz-R's dispatch can deep-link a created session (executeCommand(openSession, project, task));
+    // the real vscode.executeCommand is variadic too. The mock is a vi.fn (any args).
+    executeCommand(command: string, ...args: unknown[]): Thenable<unknown>;
   };
   readonly window: {
     showInformationMessage(message: string): Thenable<string | undefined>;
+    // Faz-R: the dispatch success toast offers an action item ("Open Session"); the rest form
+    // resolves the chosen item (the single-arg form above stays valid — same vi.fn mock).
+    showInformationMessage(message: string, ...items: string[]): Thenable<string | undefined>;
     showErrorMessage(message: string): Thenable<string | undefined>;
     showInputBox(options?: vscode.InputBoxOptions): Thenable<string | undefined>;
     // 4C-2: the control commands let the user pick a project and confirm destructive
@@ -1455,6 +1474,8 @@ export interface Control {
   abort(projectId: string): Promise<ControlResult>;
   approve(projectId: string, taskId?: string): Promise<ControlResult>;
   retry(projectId: string, taskId: string): Promise<ControlResult>;
+  // Faz-R native dispatch: POST raw scenario YAML to the gateway's intake endpoint.
+  intake(projectId: string, yaml: string): Promise<ControlResult>;
 }
 
 /** Re-exported from controlClient so callers/tests reference one shape. */
@@ -1625,6 +1646,176 @@ export async function runRetry(
 }
 
 /**
+ * NATIVE "Dispatch Work" flow (Faz-R): a webview-LESS, keyboard-first path to put new work into
+ * the ledger. Pick a project (preselected from the sessions-tree project menu, else a quick-pick),
+ * then a short prompt chain — title → acceptance → tier → lane — synthesizes a valid intake YAML
+ * (dispatch.ts) and POSTs it to the gateway's intake endpoint. On success it shows the created ids,
+ * refreshes the sessions tree, and offers to jump straight to the new session — the agentic-native
+ * loop's entry point, all from the command palette. Any prompt cancelled (Esc) is a quiet no-op.
+ *
+ * TOKEN-FREE here: the YAML + ids carry no token; the authed POST lives in the ControlClient's
+ * Authorization header. Exported so a unit test drives the whole chain against a mock api + control.
+ */
+export async function runDispatch(
+  api: VscodeApi,
+  control: Control,
+  preselectedProjectId?: string,
+): Promise<void> {
+  // 1) Project — preselected (tree context menu) or quick-pick (palette).
+  let project: string;
+  if (preselectedProjectId !== undefined && preselectedProjectId !== "") {
+    project = preselectedProjectId;
+  } else {
+    let projects: { id: string }[];
+    try {
+      projects = await control.listProjects();
+    } catch (err) {
+      if (err instanceof ControlListError && err.reason === "not-connected") {
+        await api.window.showErrorMessage("Connect to the gateway first.");
+      } else if (err instanceof ControlListError && err.reason === "unauthorized") {
+        await api.window.showErrorMessage("The gateway rejected the stored token. Reconnect.");
+      } else {
+        await api.window.showErrorMessage("Could not reach the gateway.");
+      }
+      return;
+    }
+    if (projects.length === 0) {
+      await api.window.showInformationMessage("No projects. Onboard one first.");
+      return;
+    }
+    const picked = await api.window.showQuickPick(
+      projects.map((p) => p.id),
+      { placeHolder: "Dispatch work to which project?" },
+    );
+    if (picked === undefined) {
+      return; // cancelled.
+    }
+    project = picked;
+  }
+
+  // 2) Title (required).
+  const title = (
+    await api.window.showInputBox({
+      title: `Dispatch work — ${project}`,
+      prompt: "What should the agent build? (one line)",
+      placeHolder: "e.g. Add a /healthz endpoint to the web server",
+      ignoreFocusOut: true,
+    })
+  )?.trim();
+  if (title === undefined || title === "") {
+    return; // cancelled / empty.
+  }
+
+  // 3) Acceptance (required, ≥1) — newline/';'-separated criteria.
+  const acceptance = parseAcceptance(
+    await api.window.showInputBox({
+      title: `Acceptance — ${project}`,
+      prompt: "How is 'done' proven? Separate multiple criteria with ';'",
+      placeHolder: "e.g. GET /healthz returns 200; response body is {\"ok\":true}",
+      ignoreFocusOut: true,
+    }),
+  );
+  if (acceptance.length === 0) {
+    await api.window.showErrorMessage("At least one acceptance criterion is required.");
+    return;
+  }
+
+  // 4) Tier (required, T1..T4) — risk → governance merge policy.
+  const tier = parseTier(
+    await api.window.showQuickPick(TIER_CHOICES, { placeHolder: "Risk tier (governs the merge gate)" }),
+  );
+  if (tier === undefined) {
+    return; // cancelled.
+  }
+
+  // 5) Lane (required) — the capability lane that routes the task to a matching host. Prefilled
+  // with a sensible default the user can edit (it is free-text vocabulary, not a fixed set).
+  const lane = (
+    await api.window.showInputBox({
+      title: `Lane — ${project}`,
+      prompt: "Capability lane (routes to a matching host)",
+      value: "backend",
+      ignoreFocusOut: true,
+    })
+  )?.trim();
+  if (lane === undefined || lane === "") {
+    return; // cancelled.
+  }
+
+  // 6) Id — derived from the title, shown for confirmation/edit (the user owns uniqueness).
+  const id = (
+    await api.window.showInputBox({
+      title: `Task id — ${project}`,
+      prompt: "Task id (must be unique in the project)",
+      value: slugifyId(title),
+      ignoreFocusOut: true,
+    })
+  )?.trim();
+  if (id === undefined || id === "") {
+    return; // cancelled.
+  }
+
+  const spec: DispatchSpec = {
+    id,
+    title,
+    lane,
+    tier,
+    acceptance,
+    holdoutRef: defaultHoldoutRef(id),
+  };
+  const yaml = buildIntakeYaml(spec);
+
+  // 7) Final confirm — show the synthesized spec so the dispatch is never a surprise.
+  const confirm = await api.window.showWarningMessage(
+    `Dispatch "${title}" (${id}, ${tier}/${lane}) to ${project}?`,
+    { modal: true },
+    "Dispatch",
+  );
+  if (confirm !== "Dispatch") {
+    return; // declined.
+  }
+
+  // 8) POST the intake YAML (authed, host-side).
+  const result = await control.intake(project, yaml);
+  if (result.ok) {
+    const outcome = dispatchOutcome(result.body);
+    void api.commands.executeCommand(REFRESH_SESSIONS_COMMAND);
+    const first = outcome.createdIds[0];
+    if (first !== undefined) {
+      const choice = await api.window.showInformationMessage(
+        outcome.message,
+        "Open Session",
+      );
+      if (choice === "Open Session") {
+        void api.commands.executeCommand(OPEN_SESSION_COMMAND, project, first);
+      }
+    } else {
+      await api.window.showInformationMessage(outcome.message);
+    }
+    return;
+  }
+  switch (result.reason) {
+    case "invalid":
+      await api.window.showErrorMessage(
+        result.detail ? `Rejected: ${result.detail}` : "The gateway rejected the work specification.",
+      );
+      return;
+    case "conflict":
+      await api.window.showWarningMessage("The gateway could not accept that work.", {}, "OK");
+      return;
+    case "unauthorized":
+      await api.window.showErrorMessage("The gateway rejected the stored token. Reconnect.");
+      return;
+    case "not-connected":
+      await api.window.showErrorMessage("Connect to the gateway first.");
+      return;
+    case "unreachable":
+      await api.window.showErrorMessage("Could not reach the gateway.");
+      return;
+  }
+}
+
+/**
  * Wires the extension's contributions onto the given (real or mocked) vscode API and
  * returns the created disposables. Kept separate from `activate` so unit tests can call
  * it with a mock + a manager and assert the registration + command behavior without a
@@ -1744,6 +1935,12 @@ export function registerConductor(
   const newWork = api.commands.registerCommand(NEW_WORK_COMMAND, () => {
     intakePanel?.open();
   });
+  // Faz-R: the NATIVE, webview-less dispatch path. From the palette (no arg → quick-pick project)
+  // or the sessions-tree project context menu (the clicked project is preselected). A short prompt
+  // chain synthesizes intake YAML and POSTs it host-side (token in the Authorization header only).
+  const dispatch = api.commands.registerCommand(DISPATCH_COMMAND, (arg?: unknown) => {
+    void runDispatch(api, control, projectIdFromArg(arg));
+  });
   // PO onboarding: (re)open the native Getting Started tour — "nasıl iyi kullanılacak" — from the
   // palette anytime. Auto-opened once on first launch (see activate). Delegates to the built-in
   // walkthrough surface, so no custom UI to maintain.
@@ -1767,6 +1964,7 @@ export function registerConductor(
     showEventJson,
     retryTask,
     newWork,
+    dispatch,
     openTour,
   ];
   // Dispose the editor-area panels (+ their bridges) on deactivate when they were built.
