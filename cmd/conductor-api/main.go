@@ -66,6 +66,10 @@ type config struct {
 	// (ADR-0049). Env-only (like the token) — sourced from a k8s secret. Empty = the
 	// credential endpoints are DISABLED (fail-closed); the gateway never stores plaintext.
 	credentialKey string
+	// distillModel pins the model the `claude -p` intake distiller runs on (Faz-R / k8s):
+	// `claude -p --model <distillModel>`. Defaults to claude-opus-4-8 (the user's choice). An
+	// operator can override via CONDUCTOR_DISTILL_MODEL; "" disables the flag (subscription default).
+	distillModel string
 }
 
 // parseConfig resolves flags (each falling back to an env var) and the
@@ -91,6 +95,8 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		token: os.Getenv("CONDUCTOR_API_TOKEN"),
 		// Credential master key (L3) — env-only secret, like the token.
 		credentialKey: os.Getenv("CONDUCTOR_CREDENTIAL_KEY"),
+		// Intake distiller model (Faz-R) — default claude-opus-4-8; override via env.
+		distillModel: envOr("CONDUCTOR_DISTILL_MODEL", "claude-opus-4-8"),
 	}, nil
 }
 
@@ -108,6 +114,35 @@ func buildSealer(base64Key string) (*credstore.Sealer, error) {
 		return nil, fmt.Errorf("CONDUCTOR_CREDENTIAL_KEY invalid: %w", err)
 	}
 	return credstore.New(key)
+}
+
+// claudeCredentialKind is the credential-store key for the subscription claude OAuth token — the
+// SAME kind the editor pushes (PUT /agent/credentials/{kind}) and the agent fetches. Faz-R's
+// distiller reuses it so the gateway-side `/distill` and the host agent share ONE credential.
+const claudeCredentialKind = "CLAUDE_CODE_OAUTH_TOKEN"
+
+// claudeTokenProvider returns a PER-CALL resolver for the distiller's subscription token (Faz-R,
+// Option 3): it fetches the SEALED claude credential and decrypts it via the sealer — the exact
+// path handleAgentGetCredential serves to the agent. It returns nil when the store has no
+// credential persistence OR no master key is configured; the distiller then inherits the env's own
+// subscription auth (local davinci dev), unchanged. The plaintext token is returned to the
+// distiller, which places it into ONLY the `claude -p` subprocess env (never os.Setenv).
+func claudeTokenProvider(store statestore.StateStore, sealer *credstore.Sealer) func(context.Context) (string, error) {
+	cs, ok := store.(statestore.CredentialStore)
+	if !ok || sealer == nil {
+		return nil
+	}
+	return func(ctx context.Context) (string, error) {
+		c, err := cs.GetCredential(ctx, claudeCredentialKind)
+		if err != nil {
+			return "", err
+		}
+		token, err := sealer.Open(c.Ciphertext, c.Nonce)
+		if err != nil {
+			return "", err
+		}
+		return string(token), nil
+	}
 }
 
 // run wires the service and serves until the context is cancelled (SIGINT/
@@ -162,6 +197,18 @@ func run(ctx context.Context, argv []string, logger *slog.Logger, stderr io.Writ
 		return 1
 	}
 
+	// Faz-R (k8s distiller): wire the `claude -p` distiller to the gateway's SEALED claude
+	// credential so `/distill` works in a pod with no ambient claude login. The provider is
+	// called PER /distill: it fetches + decrypts CLAUDE_CODE_OAUTH_TOKEN (the same credential the
+	// editor pushes / the agent fetches) and the distiller injects it into ONLY the subprocess env
+	// (Option 3 — never the gateway's long-lived env). When the store/sealer is absent (local
+	// davinci dev) the provider is nil → the distiller inherits the env's own subscription auth
+	// (frozen behavior). The model is pinned from config (default claude-opus-4-8).
+	distiller := intake.NewCommandDistillerWithClaude(intake.ClaudeDistillerConfig{
+		TokenProvider: claudeTokenProvider(store, sealer),
+		Model:         cfg.distillModel,
+	})
+
 	api := &apiServer{
 		store: store,
 		bus:   bus,
@@ -175,7 +222,7 @@ func run(ctx context.Context, argv []string, logger *slog.Logger, stderr io.Writ
 		// Production distiller: the real `claude -p` subscription path (no API key).
 		// It only DRAFTS proposed scenarios for human review at POST /distill; it
 		// persists nothing. Tests inject a stub via the apiServer field instead.
-		distiller: intake.NewCommandDistiller(),
+		distiller: distiller,
 		sealer:    sealer,
 	}
 
