@@ -344,4 +344,32 @@ describe("IntakeChat", () => {
       expect.stringContaining("id: NEW-1"),
     );
   });
+
+  it("Faz-S S5: an auto-generated holdout is shown for review and STORED on approve before intake", async () => {
+    const user = userEvent.setup({ delay: null });
+    const putHoldout = vi.fn(() => Promise.resolve({ locator: "pg://holdouts/A-1" }));
+    const client = fakeClient({
+      distill: vi.fn(
+        (): Promise<DistillResult> =>
+          Promise.resolve({ ...PROPOSAL, holdout: { "healthz.spec.ts": "import {test} from '@playwright/test'\n" } }),
+      ),
+      putHoldout,
+    });
+    render(<IntakeChat projects={[project()]} client={client} onUnauthorized={vi.fn()} />);
+
+    await user.type(screen.getByLabelText("Message"), "add /healthz");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    // The proposed holdout is rendered for the director to review.
+    const review = await screen.findByTestId("holdout-review");
+    expect(within(review).getByTestId("holdout-file")).toHaveTextContent("@playwright/test");
+
+    // Approve → the holdout is stored FIRST (keyed by the scenario's holdout id), then intake.
+    await user.click(screen.getByRole("button", { name: "Approve & add to ledger" }));
+    await user.click(screen.getByRole("button", { name: "Approve & add" }));
+    expect(putHoldout).toHaveBeenCalledWith("A-1", {
+      "healthz.spec.ts": "import {test} from '@playwright/test'\n",
+    });
+    expect(client.intake).toHaveBeenCalled();
+  });
 });

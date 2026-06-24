@@ -25,6 +25,7 @@
 import { useRef, useState } from "react";
 import { ArrowRight } from "lucide-react";
 import { ApiError, DistillNoScenariosError } from "../api/client.ts";
+import { holdoutIdFromRef } from "./holdoutRef.ts";
 import type { DistillResult, IntakeResult, Project, Question } from "../api/types.ts";
 import { ConfirmDialog } from "../fleet/ConfirmDialog.tsx";
 import type { PendingConfirm } from "../fleet/useFleetControls.ts";
@@ -49,6 +50,10 @@ export interface IntakeClient {
     onProgress?: (lines: number) => void,
   ): Promise<DistillResult>;
   intake(projectId: string, yaml: string): Promise<IntakeResult>;
+  // putHoldout stores the (reviewed) auto-generated hidden-holdout body before intake (Faz-S S5),
+  // so the agent's gate can run it. OPTIONAL: absent on a fake/older client → the approve flow
+  // simply skips the holdout PUT (the scenario still intakes).
+  putHoldout?(id: string, files: Record<string, string>): Promise<{ locator: string }>;
 }
 
 export interface IntakeChatProps {
@@ -265,6 +270,15 @@ export function IntakeChat({
     setApproving(true);
     setYamlError(null);
     try {
+      // Faz-S S5: if the distiller auto-generated a holdout AND the proposal's first scenario
+      // points at a holdouts ref, STORE the reviewed holdout body first so the gate can run it.
+      // Best-effort but reported: a holdout store failure is surfaced (the director chose it).
+      const holdout = proposal?.holdout;
+      const ref = proposal?.scenarios?.[0]?.hidden_holdout_ref ?? "";
+      const holdoutId = holdoutIdFromRef(ref);
+      if (holdout && Object.keys(holdout).length > 0 && holdoutId !== "" && client.putHoldout) {
+        await client.putHoldout(holdoutId, holdout);
+      }
       // POST the EDITED yaml verbatim — the human-reviewed source of truth.
       const res = await client.intake(projectId, editedYaml);
       setResult(res);
@@ -458,6 +472,30 @@ export function IntakeChat({
                     ) : (
                       proposal.scenarios.map((s) => <ScenarioCard key={s.id} scenario={s} />)
                     )}
+                  </div>
+                </div>
+              )}
+
+              {/* Faz-S S5: the auto-generated hidden holdout — the test that will PROVE the work.
+                  Review it before approving; on approve it is stored so the gate runs it. */}
+              {proposal?.holdout && Object.keys(proposal.holdout).length > 0 && (
+                <div className="fleet-panel" data-testid="holdout-review">
+                  <div className="fleet-panel-head">
+                    <h2>Auto-generated holdout test — review before approving</h2>
+                    <span className="muted intake-proposal-note">
+                      The hidden test the gate runs to prove this work. It is stored on approve;
+                      you (the director) are the check on it.
+                    </span>
+                  </div>
+                  <div className="fleet-panel-body">
+                    {Object.entries(proposal.holdout).map(([path, content]) => (
+                      <div key={path} className="intake-holdout-file">
+                        <span className="intake-label mono">{path}</span>
+                        <pre className="intake-textarea mono" data-testid="holdout-file">
+                          {content}
+                        </pre>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}

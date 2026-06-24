@@ -103,6 +103,10 @@ export interface Question {
 export interface DistillResult {
   scenarios: Scenario[];
   yaml: string;
+  // holdout is the OPTIONAL auto-generated hidden-holdout test (Faz-S S4): path -> file content,
+  // for the director to REVIEW before approving. Present only when the distiller emitted one. On
+  // approve the editor PUTs it to /holdouts/{id} so the gate can run it (S5).
+  holdout?: Record<string, string>;
   // questions is the ADDITIVE clarifying turn (ADR-0047): when present, the distiller
   // asked for more detail instead of proposing scenarios (scenarios is then empty and
   // yaml is ""). Absent on a scenarios result, so legacy consumers are unaffected.

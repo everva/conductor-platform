@@ -173,6 +173,18 @@ export class FetchTransport implements HttpTransport {
   }
 }
 
+// utf8ToBase64 encodes a string as base64 over its UTF-8 bytes (the gateway's holdout PUT expects
+// base64 file contents). Chunked so a large file can't overflow the String.fromCharCode call.
+function utf8ToBase64(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
 export class ApiClient {
   private readonly transport: HttpTransport;
 
@@ -330,6 +342,21 @@ export class ApiClient {
       `/projects/${encodeURIComponent(projectId)}/intake`,
       yaml,
       "text/plain; charset=utf-8",
+    );
+  }
+
+  // putHoldout stores an (approved, reviewed) hidden-holdout body so the agent's gate can run it
+  // (Faz-S S5). File contents are UTF-8 → base64 so arbitrary bytes survive the JSON round-trip.
+  // Returns the stored locator (what a scenario's hidden_holdout_ref should point at).
+  putHoldout(id: string, files: Record<string, string>): Promise<{ locator: string }> {
+    const encoded: Record<string, string> = {};
+    for (const [path, content] of Object.entries(files)) {
+      encoded[path] = utf8ToBase64(content);
+    }
+    return this.request<{ locator: string }>(
+      "PUT",
+      `/holdouts/${encodeURIComponent(id)}`,
+      { files: encoded },
     );
   }
 
