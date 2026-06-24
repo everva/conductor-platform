@@ -41,10 +41,11 @@ STRICT OUTPUT RULES:
 ROUGH REQUEST:
 `
 
-// enhanceTimeout bounds a single enhance run (code exploration + write). Generous: exploring a
-// large monorepo + composing the spec can take several minutes; the prompt asks claude to be
-// focused so it normally finishes well under this ceiling.
-const enhanceTimeout = 12 * time.Minute
+// enhanceTimeout bounds a single enhance run (code exploration + write). Generous: the
+// completeness pass (grep every touched identifier across a large monorepo + compose) can take
+// 10-15 min on a thorough run, so the ceiling is high enough that a genuinely-working enhance is
+// never killed mid-flight (the earlier 12m ceiling occasionally cut off a still-working run).
+const enhanceTimeout = 18 * time.Minute
 
 // runEnhanceClaude runs `claude -p --dangerously-skip-permissions` with cwd=dir (so claude's
 // file tools read the real code) over enhancePrompt+roughSpec, returning the produced Turkish
