@@ -307,6 +307,22 @@ describe("IntakeChat", () => {
     await vi.waitFor(() => expect(onUnauthorized).toHaveBeenCalledTimes(1));
   });
 
+  it("a 5xx from distill (claude unavailable) points the director at the claude-free Write-spec path", async () => {
+    const user = userEvent.setup({ delay: null });
+    const client = fakeClient({
+      distill: vi.fn(() => Promise.reject(new ApiError(502, "no claude reachable"))),
+    });
+    render(<IntakeChat projects={[project()]} client={client} onUnauthorized={vi.fn()} />);
+
+    await user.type(screen.getByLabelText("Message"), "build the thing");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    // The error reply names the failure AND the escape hatch — never a dead end.
+    expect(await screen.findByText(/Distill failed \(502\).*distiller is unavailable/i)).toBeInTheDocument();
+    // And the claude-free button is right there to act on it.
+    expect(screen.getByRole("button", { name: "Write spec directly" })).toBeInTheDocument();
+  });
+
   it("Write spec directly opens the YAML editor (no distill) and dispatches the authored spec", async () => {
     const user = userEvent.setup({ delay: null });
     const client = fakeClient();

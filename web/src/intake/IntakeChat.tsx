@@ -195,9 +195,18 @@ export function IntakeChat({
       } else if (err instanceof ApiError && err.status === 401) {
         onUnauthorized();
       } else if (err instanceof ApiError) {
-        addMsg("assistant", `Distill failed (${err.status}): ${err.message}`, "error");
+        // A 5xx means the distiller itself is unavailable (e.g. no claude reachable). The
+        // claude-FREE "Write spec directly" path still works, so point the director at it
+        // instead of leaving them stuck — the exact escape hatch for a claude-less deployment.
+        const hint =
+          err.status >= 500 ? ' The distiller is unavailable — use "Write spec directly" below to author the spec yourself.' : "";
+        addMsg("assistant", `Distill failed (${err.status}): ${err.message}.${hint}`, "error");
       } else {
-        addMsg("assistant", "Could not reach the gateway.", "error");
+        addMsg(
+          "assistant",
+          'Could not reach the distiller. Use "Write spec directly" below to author the spec yourself.',
+          "error",
+        );
       }
     } finally {
       // Spinner is ALWAYS cleared — never a stuck spinner.
