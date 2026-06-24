@@ -127,6 +127,10 @@ func (s *apiServer) routes() http.Handler {
 	// for human review. It persists NOTHING; approval flows through POST /intake.
 	mux.Handle("POST /projects/{id}/distill", s.requireAuth(http.HandlerFunc(s.handleDistill)))
 	mux.Handle("POST /projects/{id}/distill/stream", s.requireAuth(http.HandlerFunc(s.handleDistillStream)))
+	// Intake ENHANCE (agent-side, code-aware): POST records a rough request, an agent runs
+	// claude over the real code and writes back a detailed Turkish spec; GET polls the result.
+	mux.Handle("POST /projects/{id}/enhance", s.requireAuth(http.HandlerFunc(s.handleEnhance)))
+	mux.Handle("GET /projects/{id}/enhance/{job}", s.requireAuth(http.HandlerFunc(s.handleEnhanceGet)))
 	mux.Handle("POST /projects/{id}/pause", s.requireAuth(http.HandlerFunc(s.handlePause)))
 	mux.Handle("POST /projects/{id}/resume", s.requireAuth(http.HandlerFunc(s.handleResume)))
 	mux.Handle("POST /projects/{id}/abort", s.requireAuth(http.HandlerFunc(s.handleAbort)))
@@ -144,6 +148,9 @@ func (s *apiServer) routes() http.Handler {
 	mux.Handle("POST /projects/{id}/agent/tasks/{task}/diff", s.requireAuth(http.HandlerFunc(s.handleAgentTaskDiff)))
 	mux.Handle("GET /projects/{id}/agent/tasks/{task}/decision", s.requireAuth(http.HandlerFunc(s.handleAgentDecision)))
 	mux.Handle("POST /projects/{id}/agent/tasks/{task}/merged", s.requireAuth(http.HandlerFunc(s.handleAgentMerged)))
+	// Intake enhance, agent side: claim the next pending enhance job + post the result.
+	mux.Handle("GET /projects/{id}/agent/enhance/next", s.requireAuth(http.HandlerFunc(s.handleAgentEnhanceNext)))
+	mux.Handle("POST /projects/{id}/agent/enhance/{job}/result", s.requireAuth(http.HandlerFunc(s.handleAgentEnhanceResult)))
 	// Faz-S holdout store: the editor PUTs an intake-approved holdout body (S5), the agent's verify
 	// gate GETs it (S3). Authed; the body is repo-external (central Postgres) and never logged.
 	mux.Handle("PUT /holdouts/{id}", s.requireAuth(http.HandlerFunc(s.handlePutHoldout)))

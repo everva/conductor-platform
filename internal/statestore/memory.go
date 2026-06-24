@@ -39,6 +39,7 @@ type MemoryStore struct {
 	hosts     map[string]Host       // keyed by Host.ID (ADR-0024 registry)
 	taskDiffs map[string]TaskDiff   // keyed by taskDiffKey(projectID, taskID) (P2b, ADR-0041)
 	creds     map[string]Credential // keyed by Credential.Kind (L3, ADR-0049)
+	enhance   map[string]EnhanceJob // keyed by EnhanceJob.ID (intake enhance, agent-side)
 }
 
 // NewMemoryStore returns an empty, ready-to-use in-memory StateStore.
@@ -51,6 +52,7 @@ func NewMemoryStore() *MemoryStore {
 		hosts:     make(map[string]Host),
 		taskDiffs: make(map[string]TaskDiff),
 		creds:     make(map[string]Credential),
+		enhance:   make(map[string]EnhanceJob),
 	}
 }
 

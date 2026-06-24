@@ -164,6 +164,20 @@ func (e *RealExecutor) Progress(taskID string) (string, int) {
 	return phase, files
 }
 
+// Enhance materializes a fresh read-only checkout of the project at its base branch and runs
+// claude there to turn a rough request into a detailed Turkish spec grounded in the real code
+// (intake enhance, agent-side). It mutates nothing in the repo and never pushes — the worktree
+// is a throwaway code view, removed when done. Satisfies the Enhancer seam.
+func (e *RealExecutor) Enhance(ctx context.Context, projectID, roughSpec string) (string, error) {
+	project := statestore.Project{ID: projectID, Repo: e.cfg.Repo, BaseBranch: e.cfg.BaseBranch}
+	dir, cleanup, err := e.prov.ReadOnlyCheckout(ctx, project)
+	if err != nil {
+		return "", fmt.Errorf("agent enhance: checkout: %w", err)
+	}
+	defer cleanup()
+	return runEnhanceClaude(ctx, dir, roughSpec)
+}
+
 // countChangedFiles returns the number of changed (staged/unstaged/untracked) files in a git
 // worktree via `git status --porcelain`. Best-effort: any error → 0.
 func countChangedFiles(dir string) int {

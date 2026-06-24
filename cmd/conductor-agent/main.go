@@ -141,6 +141,16 @@ func run() error {
 		"gateway", cfg.gateway, "project", cfg.project, "host", cfg.hostID,
 		"capabilities", cfg.capabilities, "repo", cfg.repo, "base", cfg.base, "push", !cfg.noPush)
 
+	// Intake enhance (agent-side, code-aware): a separate lightweight loop that claims pending
+	// enhance jobs, reads the real code via claude, and returns a detailed Turkish spec. It runs
+	// alongside the task loop so an enhance never blocks (or is blocked by) a leased task.
+	enhancer := agent.NewEnhanceRunner(client, exec, cfg.project, cfg.poll, logger)
+	go func() {
+		if err := enhancer.Loop(ctx, cfg.interval); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Warn("conductor-agent: enhance loop exited", "err", err)
+		}
+	}()
+
 	if err := runner.Loop(ctx, cfg.interval); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}

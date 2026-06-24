@@ -271,6 +271,30 @@ export class ApiClient {
     });
   }
 
+  // enhance expands a rough request into a detailed Turkish spec by having an AGENT read the
+  // project's REAL code (code-aware). It POSTs the rough text to create a job, then polls the
+  // job until the agent writes back the spec (done) or fails. The rough text + produced spec
+  // cross the authed channel only. Polls are cheap; the agent's claude read can take minutes.
+  async enhance(projectId: string, roughSpec: string): Promise<string> {
+    const created = await this.request<{ id: string; status: string }>(
+      "POST",
+      `/projects/${encodeURIComponent(projectId)}/enhance`,
+      { rough_spec: roughSpec },
+    );
+    const jobId = created.id;
+    const deadline = Date.now() + 8 * 60_000; // generous: code exploration + write
+    for (;;) {
+      const job = await this.request<{ status: string; result?: string; error?: string }>(
+        "GET",
+        `/projects/${encodeURIComponent(projectId)}/enhance/${encodeURIComponent(jobId)}`,
+      );
+      if (job.status === "done") return job.result ?? "";
+      if (job.status === "failed") throw new Error(job.error || "enhance failed");
+      if (Date.now() > deadline) throw new Error("enhance timed out — no agent picked it up");
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+  }
+
   // distillStream is the STREAMING variant of distill (Q3c.4): it POSTs the same
   // conversation to /distill/stream and surfaces live progress (the model-output line
   // COUNT, never content) via onProgress while the model works, resolving with the

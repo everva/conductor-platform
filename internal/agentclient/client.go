@@ -270,6 +270,35 @@ func (c *Client) StoreTaskDiff(ctx context.Context, projectID, taskID string, bo
 	return err
 }
 
+// EnhanceClaim is a claimed intake-enhance job: the director's rough request to expand into a
+// detailed Turkish spec by reading the project's code.
+type EnhanceClaim struct {
+	ID        string `json:"id"`
+	RoughSpec string `json:"rough_spec"`
+}
+
+// ClaimEnhance claims the oldest pending enhance job for the project (→ running). ok=false (no
+// error) when there is nothing pending (the gateway returns 204).
+func (c *Client) ClaimEnhance(ctx context.Context, projectID string) (EnhanceClaim, bool, error) {
+	var out EnhanceClaim
+	status, err := c.do(ctx, http.MethodGet, "/projects/"+projectID+"/agent/enhance/next", nil, &out)
+	if err != nil {
+		return EnhanceClaim{}, false, err
+	}
+	if status == http.StatusNoContent {
+		return EnhanceClaim{}, false, nil
+	}
+	return out, true, nil
+}
+
+// CompleteEnhance writes back a finished enhance job: errMsg=="" → done with the spec; else
+// → failed. The spec/error cross the authed channel only (no tokens, never logged here).
+func (c *Client) CompleteEnhance(ctx context.Context, projectID, jobID, result, errMsg string) error {
+	_, err := c.do(ctx, http.MethodPost, "/projects/"+projectID+"/agent/enhance/"+jobID+"/result",
+		map[string]string{"result": result, "error": errMsg}, nil)
+	return err
+}
+
 // GetHoldout fetches a holdout body by ref from the gateway (Faz-S S3) so the agent's verify gate
 // can inject the ADR-0018 hidden holdout. found=false (no error) means the gateway has no holdout
 // for that ref (404) — the gate then runs WITHOUT a holdout (public gates still apply) rather than

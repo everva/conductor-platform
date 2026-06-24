@@ -115,6 +115,38 @@ func (p *Provisioner) EnsureClone(ctx context.Context, project statestore.Projec
 	return p.fetchBase(ctx, clone, project.BaseBranch)
 }
 
+// ClonePath exposes the per-project clone directory (read-only tooling, e.g. intake enhance).
+func (p *Provisioner) ClonePath(projectID string) string { return p.clonePath(projectID) }
+
+// ReadOnlyCheckout ensures the clone, then materializes a FRESH detached worktree at the base
+// branch tip for read-only exploration (intake enhance reads the real code there). It creates NO
+// task branch and never pushes — purely a code view. The returned cleanup removes the worktree.
+// Reuses a single slot per project (removed+recreated) so repeated enhances don't accumulate.
+func (p *Provisioner) ReadOnlyCheckout(ctx context.Context, project statestore.Project) (dir string, cleanup func(), err error) {
+	noop := func() {}
+	if err := p.EnsureClone(ctx, project); err != nil {
+		return "", noop, err
+	}
+	clone := p.clonePath(project.ID)
+	dir = filepath.Join(p.cfg.RootDir, "enhance", project.ID)
+	// Clear any stale slot first (best-effort), then add a fresh detached worktree at the base tip.
+	_ = runGit(ctx, clone, p.gitEnv(), "worktree", "remove", "--force", dir)
+	_ = os.RemoveAll(dir)
+	_ = runGit(ctx, clone, p.gitEnv(), "worktree", "prune")
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return "", noop, fmt.Errorf("provisioner: prepare enhance dir: %w", err)
+	}
+	if err := runGit(ctx, clone, p.gitEnv(), "worktree", "add", "--detach", "--force", dir, "refs/remotes/origin/"+project.BaseBranch); err != nil {
+		return "", noop, fmt.Errorf("provisioner: enhance worktree: %w", err)
+	}
+	cleanup = func() {
+		c := context.WithoutCancel(ctx)
+		_ = runGit(c, clone, p.gitEnv(), "worktree", "remove", "--force", dir)
+		_ = os.RemoveAll(dir)
+	}
+	return dir, cleanup, nil
+}
+
 // configureAuth installs a gh-token credential helper on the clone so HTTPS
 // pushes are writable (ADR-0017). It NEVER installs an ssh deploy-key. With no
 // token configured it is a no-op (e.g. local-only test repos).

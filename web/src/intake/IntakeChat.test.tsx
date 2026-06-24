@@ -372,4 +372,26 @@ describe("IntakeChat", () => {
     });
     expect(client.intake).toHaveBeenCalled();
   });
+
+  it("Enhance reads the code (agent) and replaces the draft with the detailed Turkish spec", async () => {
+    const user = userEvent.setup({ delay: null });
+    const enhanced = "## Servis Şirketi kaldırma\n- schema.prisma: ServiceCompany silinir\n- ...";
+    const enhance = vi.fn(() => Promise.resolve(enhanced));
+    const client = fakeClient({ enhance });
+    render(<IntakeChat projects={[project()]} client={client} onUnauthorized={vi.fn()} />);
+
+    await user.type(screen.getByLabelText("Message"), "servis şirketini kaldır");
+    await user.click(screen.getByRole("button", { name: /Geliştir/ }));
+
+    // The agent's enhanced Turkish spec replaces the composer draft for review.
+    const msg = (await screen.findByLabelText("Message")) as HTMLTextAreaElement;
+    expect(msg.value).toBe(enhanced);
+    expect(enhance).toHaveBeenCalledWith("proj-x", "servis şirketini kaldır");
+  });
+
+  it("hides the Enhance button when the client has no enhance capability", () => {
+    const client = fakeClient(); // no enhance
+    render(<IntakeChat projects={[project()]} client={client} onUnauthorized={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /Geliştir/ })).not.toBeInTheDocument();
+  });
 });

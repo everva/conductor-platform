@@ -54,6 +54,11 @@ export interface IntakeClient {
   // so the agent's gate can run it. OPTIONAL: absent on a fake/older client → the approve flow
   // simply skips the holdout PUT (the scenario still intakes).
   putHoldout?(id: string, files: Record<string, string>): Promise<{ locator: string }>;
+  // enhance expands a rough request into a detailed Turkish spec by reading the project's REAL
+  // code on an agent (code-aware). It creates a job + polls until done; the resolved string is
+  // the enhanced spec the director then reviews/edits before distilling. OPTIONAL: absent on a
+  // fake/older client → the Enhance button is hidden.
+  enhance?(projectId: string, roughSpec: string): Promise<string>;
 }
 
 export interface IntakeChatProps {
@@ -110,6 +115,9 @@ export function IntakeChat({
   // distilled yaml, then freely edited by the human. We POST it verbatim.
   const [editedYaml, setEditedYaml] = useState<string>("");
   const [distilling, setDistilling] = useState<boolean>(false);
+  // enhancing is true while an agent reads the project code and expands the rough draft into a
+  // detailed Turkish spec (code-aware enhance); it can take a couple of minutes.
+  const [enhancing, setEnhancing] = useState<boolean>(false);
   // progressLines is the live model-output line count during a streaming distill
   // (Q3c.4); null when not streaming (or before the first progress event).
   const [progressLines, setProgressLines] = useState<number | null>(null);
@@ -135,6 +143,29 @@ export function IntakeChat({
       ...prev,
       { id: nextMsgId.current++, role, text, ...(tone ? { tone } : {}) },
     ]);
+  }
+
+  // runEnhance sends the rough draft to an agent that READS the project's real code and returns a
+  // detailed Turkish spec, which replaces the draft for the director to review/edit before sending.
+  // Code-aware: the grounding (real file/model names) comes from the agent, not a guess.
+  async function runEnhance() {
+    if (!client.enhance || projectId === "" || draft.trim() === "" || enhancing || distilling) return;
+    const rough = draft.trim();
+    setEnhancing(true);
+    addMsg("assistant", "Talebin kodu incelenerek detaylandırılıyor… (birkaç dakika sürebilir)");
+    try {
+      const enhanced = await client.enhance(projectId, rough);
+      setDraft(enhanced);
+      addMsg("assistant", "Detaylı Türkçe spec hazır — aşağıda gözden geçir, gerekirse düzenle ve Gönder.");
+    } catch (err) {
+      if (err instanceof Error && (err as { status?: number }).status === 401) {
+        onUnauthorized?.();
+        return;
+      }
+      addMsg("assistant", `Enhance başarısız: ${err instanceof Error ? err.message : String(err)}`, "error");
+    } finally {
+      setEnhancing(false);
+    }
   }
 
   // writeSpecDirectly opens the YAML editor with a starter template (or keeps the
@@ -394,6 +425,17 @@ export function IntakeChat({
                 >
                   {distilling ? "Sending…" : "Send"}
                 </button>
+                {typeof client.enhance === "function" && (
+                  <button
+                    type="button"
+                    className="fleet-btn"
+                    title="Kodu inceleyip talebini detaylı Türkçe spec'e çevirir"
+                    disabled={!canPickProject || draft.trim() === "" || distilling || enhancing}
+                    onClick={runEnhance}
+                  >
+                    {enhancing ? "Geliştiriliyor…" : "✨ Geliştir (Türkçe)"}
+                  </button>
+                )}
                 <span className="intake-or">or</span>
                 <button
                   type="button"
@@ -408,6 +450,11 @@ export function IntakeChat({
                     {progressLines !== null
                       ? `Distilling… (${progressLines} ${progressLines === 1 ? "line" : "lines"})`
                       : "Distilling…"}
+                  </span>
+                )}
+                {enhancing && (
+                  <span className="intake-spinner" role="status" aria-live="polite">
+                    Kod inceleniyor…
                   </span>
                 )}
               </div>
