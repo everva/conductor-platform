@@ -24,7 +24,8 @@ ExecStart=/home/davinci/conductor-agent/conductor-agent \
   -base ${CONDUCTOR_BASE} \
   -recipe-dir ${CONDUCTOR_RECIPE_DIR} \
   -capabilities ${CONDUCTOR_CAPABILITIES} \
-  -root ${CONDUCTOR_ROOT}
+  -root ${CONDUCTOR_ROOT} \
+  -timeout 6h
 Restart=always
 RestartSec=5
 # The performer subprocess can be heavy (claude + the repo build); give it room.
