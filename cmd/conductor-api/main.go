@@ -42,8 +42,10 @@ import (
 
 	"github.com/everva/conductor-platform/internal/credstore"
 	"github.com/everva/conductor-platform/internal/events"
+	"github.com/everva/conductor-platform/internal/holdout"
 	"github.com/everva/conductor-platform/internal/intake"
 	"github.com/everva/conductor-platform/internal/statestore"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // shutdownTimeout bounds the graceful drain on SIGINT/SIGTERM so a stuck
@@ -209,6 +211,25 @@ func run(ctx context.Context, argv []string, logger *slog.Logger, stderr io.Writ
 		Model:         cfg.distillModel,
 	})
 
+	// Faz-S holdout store: a pg:// store over its OWN pool from the same DSN (the statestore does not
+	// expose its pool). Enables PUT /holdouts + GET /agent/holdout. No DSN (memory dev) → nil → both
+	// endpoints 501. The pool is closed on exit.
+	var holdouts holdoutStore
+	if cfg.dsn != "" {
+		hpool, herr := pgxpool.New(ctx, cfg.dsn)
+		if herr != nil {
+			_, _ = fmt.Fprintf(stderr, "conductor-api: holdout pool: %v\n", herr)
+			return 1
+		}
+		defer hpool.Close()
+		hs, herr := holdout.NewPG(hpool)
+		if herr != nil {
+			_, _ = fmt.Fprintf(stderr, "conductor-api: holdout store: %v\n", herr)
+			return 1
+		}
+		holdouts = hs
+	}
+
 	api := &apiServer{
 		store: store,
 		bus:   bus,
@@ -224,6 +245,7 @@ func run(ctx context.Context, argv []string, logger *slog.Logger, stderr io.Writ
 		// persists nothing. Tests inject a stub via the apiServer field instead.
 		distiller: distiller,
 		sealer:    sealer,
+		holdouts:  holdouts,
 	}
 
 	// Log ONLY the addr and the backend NAME — never the DSN or the token. Also log WHETHER the

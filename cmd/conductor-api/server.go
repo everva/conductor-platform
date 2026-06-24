@@ -24,6 +24,7 @@ import (
 	"github.com/everva/conductor-platform/internal/events"
 	"github.com/everva/conductor-platform/internal/intake"
 	"github.com/everva/conductor-platform/internal/statestore"
+	"github.com/everva/conductor-platform/internal/verify"
 )
 
 // readinessTimeout bounds the store read the /readyz probe performs so a hung
@@ -73,6 +74,21 @@ type apiServer struct {
 	// master key (CONDUCTOR_CREDENTIAL_KEY) is configured, in which case the credential
 	// endpoints fail CLOSED (503) rather than ever storing/serving plaintext.
 	sealer *credstore.Sealer
+	// holdouts is the OPTIONAL holdout read+write seam (Faz-S): PUT /holdouts/{id} stores an
+	// intake-approved holdout body, GET /agent/holdout serves it to the agent's verify gate. main
+	// wires a *holdout.PGStore from the DSN (the central pg:// store); nil when no DSN → both
+	// endpoints return 501. The holdout BODY is never logged (ADR-0018); it is repo-external by
+	// construction (the central Postgres).
+	holdouts holdoutStore
+}
+
+// holdoutStore is the narrow read+write seam the holdout endpoints drive (Faz-S). It mirrors the
+// concrete *holdout.PGStore (Store from S1 + the frozen Fetch); declared here so the gateway tests
+// inject a fake without a pgxpool. Store persists a body and returns its pg:// locator; Fetch
+// resolves a locator to the injectable files.
+type holdoutStore interface {
+	Store(ctx context.Context, id string, files map[string][]byte) (string, error)
+	Fetch(ctx context.Context, ref string) (verify.Holdout, error)
 }
 
 // now returns the current time via the injected clock, defaulting to time.Now so
@@ -127,6 +143,10 @@ func (s *apiServer) routes() http.Handler {
 	mux.Handle("POST /projects/{id}/agent/tasks/{task}/result", s.requireAuth(http.HandlerFunc(s.handleAgentResult)))
 	mux.Handle("GET /projects/{id}/agent/tasks/{task}/decision", s.requireAuth(http.HandlerFunc(s.handleAgentDecision)))
 	mux.Handle("POST /projects/{id}/agent/tasks/{task}/merged", s.requireAuth(http.HandlerFunc(s.handleAgentMerged)))
+	// Faz-S holdout store: the editor PUTs an intake-approved holdout body (S5), the agent's verify
+	// gate GETs it (S3). Authed; the body is repo-external (central Postgres) and never logged.
+	mux.Handle("PUT /holdouts/{id}", s.requireAuth(http.HandlerFunc(s.handlePutHoldout)))
+	mux.Handle("GET /agent/holdout", s.requireAuth(http.HandlerFunc(s.handleGetHoldout)))
 
 	// L3 (ADR-0049): the gateway-distributed encrypted credential store. The editor uploads the
 	// director's portable claude OAuth token once (PUT), each agent fetches the decrypted token
