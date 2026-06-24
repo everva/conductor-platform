@@ -9,9 +9,12 @@
 #     gateway Deployment overrides `command` to run it (Faz-3, ADR-0025). It is a
 #     SEPARATE service (read+control over the shared store/bus); the daemon image
 #     is unchanged — same image, different entrypoint per Deployment.
-# Stage 2 (runtime) is a small alpine that carries ONLY what the daemon needs at
-# runtime: `git` (the provisioner shells out to clone + worktree) and
-# `ca-certificates` (HTTPS to the git remote / API). It runs as a NON-ROOT user.
+# Stage 2 (runtime) is a debian node-slim base carrying what the services need at
+# runtime: `git` (the provisioner shells out to clone + worktree), `ca-certificates`
+# (HTTPS to the git remote / API), and the `claude` CLI (the gateway's intake distiller
+# shells out to it for POST /distill — Faz-R, ADR-0053; subscription auth at runtime,
+# never baked in). It runs as a NON-ROOT user. (Was alpine; moved to glibc node-slim so
+# the npm-distributed claude CLI runs on its most-compatible base.)
 #
 # NO SECRET IS BAKED IN. The image is configured entirely by env at runtime:
 #   CONDUCTOR_DSN          Postgres connection string (empty = in-memory dev store)
@@ -56,16 +59,27 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go build -trimpath -ldflags='-s -w' -o /out/conductor-api ./cmd/conductor-api
 
 # ---- runtime ----------------------------------------------------------------
-FROM alpine:3.21
+# node:22-slim (debian bookworm + Node 22, GLIBC). The gateway's intake distiller (Faz-R,
+# ADR-0053) shells out to the `claude` CLI — an npm package — for POST /distill; glibc is the most
+# compatible base for it. The SAME image still runs the daemon (different entrypoint); Node/claude
+# are inert for the daemon. Subscription auth (CLAUDE_CODE_OAUTH_TOKEN) is supplied at RUNTIME (the
+# gateway injects it per /distill from its sealed credential store) — NEVER baked into the image.
+FROM node:22-slim AS runtime
 
 # git: the provisioner clones + cuts worktrees by shelling out to git.
 # ca-certificates: TLS trust for HTTPS git remotes / APIs.
-# tini: a tiny init so the daemon (PID 1) reaps children and forwards SIGTERM.
-RUN apk add --no-cache git ca-certificates tini && \
-    # Non-root runtime user + a writable workspace it owns (CONDUCTOR_ROOT default).
-    addgroup -g 65532 -S conductor && \
-    adduser  -u 65532 -S conductor -G conductor -h /home/conductor && \
-    mkdir -p /workspace && chown -R conductor:conductor /workspace
+# tini: a tiny init so the entrypoint (PID 1) reaps children and forwards SIGTERM.
+# @anthropic-ai/claude-code: the `claude` CLI the gateway distiller invokes (Faz-R).
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git ca-certificates tini && \
+    npm install -g @anthropic-ai/claude-code && \
+    npm cache clean --force && \
+    rm -rf /var/lib/apt/lists/* && \
+    # Non-root runtime user + a writable HOME (claude writes config/cache there) + workspace.
+    groupadd -g 65532 conductor && \
+    useradd -u 65532 -g conductor -M -s /usr/sbin/nologin -d /home/conductor conductor && \
+    mkdir -p /home/conductor /workspace && \
+    chown -R conductor:conductor /home/conductor /workspace
 
 COPY --from=builder /out/conductor     /usr/local/bin/conductor
 COPY --from=builder /out/conductorctl  /usr/local/bin/conductorctl
@@ -74,16 +88,19 @@ COPY --from=builder /out/conductor-api /usr/local/bin/conductor-api
 USER conductor
 WORKDIR /workspace
 
-# Default workspace root so the daemon clones under the writable volume/dir.
-ENV CONDUCTOR_ROOT=/workspace
+# Default workspace root so the daemon clones under the writable volume/dir. HOME is explicit so
+# the `claude` CLI (gateway distiller) has a writable config/cache dir.
+ENV CONDUCTOR_ROOT=/workspace \
+    HOME=/home/conductor
 
 # Optional health/observability HTTP server (P4-2): /healthz /readyz /status.
 # It is DISABLED unless CONDUCTOR_HTTP_ADDR is set (e.g. :8080), so the image's
 # default behavior is unchanged. We document the port; compose enables + probes it.
 EXPOSE 8080
 
-# tini as PID 1 -> signal-correct graceful shutdown (the daemon traps SIGTERM).
-ENTRYPOINT ["/sbin/tini", "--", "conductor"]
+# tini as PID 1 -> signal-correct graceful shutdown (the daemon traps SIGTERM). On debian tini
+# installs to /usr/bin/tini (alpine used /sbin/tini).
+ENTRYPOINT ["/usr/bin/tini", "--", "conductor"]
 
 # No project is baked in; the operator MUST supply -project / CONDUCTOR_PROJECT.
 # -h prints usage if run with no config, which is a safe, non-erroring default
