@@ -1539,8 +1539,9 @@ describe("activate", () => {
     });
     // 33 (post-diagnostics) + Activity's three (view + provider + nowBar status item) = 36,
     // + the M2 auto-reconnect controller's dispose = 37, + the A/B Stream commands
-    // (showEventJson + retryTask) = 39, + the openTour command = 40, + the Faz-R dispatch command = 41.
-    expect(subscriptions).toHaveLength(41);
+    // (showEventJson + retryTask) = 39, + the openTour command = 40, + the Faz-R dispatch command = 41,
+    // + the live-polling backbone's clearInterval dispose = 42.
+    expect(subscriptions).toHaveLength(42);
   });
 
   it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {

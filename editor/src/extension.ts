@@ -2384,6 +2384,30 @@ export function activate(context: vscode.ExtensionContext): void {
   };
   updateNowBar();
 
+  // ── Live polling backbone (robustness) ────────────────────────────────────────────────────
+  // The native surfaces are driven by WS push, but a WS can drop SILENTLY (no onClose to kick the
+  // reconnect) and some state changes (e.g. a task removed out-of-band) emit no event at all — so
+  // a purely event-driven tree goes stale until a manual Refresh / window reload. To make the UI
+  // genuinely self-healing we POLL the gateway on a steady cadence WHILE CONNECTED and refresh
+  // every native surface; WS push stays on top as a latency bonus. The reads are cheap authed JSON
+  // GETs (and no-op without a token). This is what guarantees "everything flows correctly" with no
+  // manual refresh — the UI converges to the gateway's truth within a few seconds.
+  const LIVE_POLL_MS = 5000;
+  let livePollTick = 0;
+  const livePoll = setInterval(() => {
+    if (manager.state !== "connected") {
+      return; // nothing to poll when the link is down; reconnect drives the next "connected".
+    }
+    livePollTick++;
+    sessionsProvider.refresh(); // tree converges (deleted tasks vanish, new/changed appear)
+    updateFleetBar();
+    updateReviewBadge();
+    if (livePollTick % 3 === 0) {
+      diagnosticsProvider.refresh(); // ~15s: re-probe /healthz, /readyz, token + claude login
+    }
+  }, LIVE_POLL_MS);
+  context.subscriptions.push({ dispose: () => clearInterval(livePoll) });
+
   // Push the intervention + diff status-bar items + dispose-wrappers that stop the host WS
   // subscriptions on deactivate (so the host sockets are torn down with the extension), plus the
   // N2 sessions tree (view + refresh command + the provider's change emitter).
