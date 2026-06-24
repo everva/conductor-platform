@@ -431,6 +431,30 @@ describe("IntakeChat", () => {
     expect(enhance).toHaveBeenCalledWith("proj-x", "x", expect.any(Function));
   });
 
+  it("non-streaming distill shows a LIVE elapsed counter, not a frozen spinner (fork bridge)", async () => {
+    vi.useFakeTimers();
+    // A client WITHOUT distillStream → send() takes the plain (non-streaming) distill path, exactly
+    // like the fork postMessage bridge. The distill stays pending so we can assert the live spinner
+    // during the ~60s claude run (the real bug: a frozen "Distilling…" read as hung → no dispatch).
+    const distill = vi.fn(() => new Promise<DistillResult>(() => {}));
+    const client = fakeClient({ distill });
+    render(<IntakeChat projects={[project()]} client={client} onUnauthorized={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText("Message"), {
+      target: { value: "servis şirketini kaldır" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await act(async () => {}); // let runDistill set distilling + the elapsed start
+
+    // Starts at 0s…
+    expect(screen.getByTestId("distill-status").textContent).toMatch(/Distilling… 0s/);
+    // …and TICKS as time passes — proof it never looks hung during the long distill.
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.getByTestId("distill-status").textContent).toMatch(/Distilling… 5s/);
+  });
+
   it("hides the Enhance button when the client has no enhance capability", () => {
     const client = fakeClient(); // no enhance
     render(<IntakeChat projects={[project()]} client={client} onUnauthorized={vi.fn()} />);

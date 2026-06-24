@@ -131,11 +131,16 @@ export function IntakeChat({
   // enhanceActivity is the agent's latest LIVE activity line (📖 Okunuyor / 🔎 Aranıyor / 🤔
   // Düşünülüyor) streamed from claude's real tool-use; null before the first event. enhanceAt
   // (a ref, no re-render) is the client time we last saw activity, so idle = now - enhanceAt uses
-  // only the local clock (skew-free). setEnhanceTick fires once a second while enhancing to
-  // re-render the idle counter; its value is unused (the re-render itself recomputes the label).
+  // only the local clock (skew-free). setBusyTick (below) fires once a second while enhancing OR
+  // distilling to re-render the elapsed labels; its value is unused (the re-render recomputes them).
   const [enhanceActivity, setEnhanceActivity] = useState<string | null>(null);
   const enhanceAt = useRef<number>(0);
-  const [, setEnhanceTick] = useState<number>(0);
+  // distillAt: when the current distill started. A distill takes ~60s (claude analysing the spec);
+  // when the transport can't stream progress (the fork postMessage bridge → non-streaming distill),
+  // a frozen "Distilling…" reads as HUNG. We show a live elapsed counter instead. setBusyTick
+  // re-renders the elapsed labels (enhance idle + distill) once a second while either is running.
+  const distillAt = useRef<number>(0);
+  const [, setBusyTick] = useState<number>(0);
   // progressLines is the live model-output line count during a streaming distill
   // (Q3c.4); null when not streaming (or before the first progress event).
   const [progressLines, setProgressLines] = useState<number | null>(null);
@@ -167,10 +172,10 @@ export function IntakeChat({
   // when no new activity arrives. The interval is the ONLY thing the tick drives; it stops the
   // moment the enhance finishes.
   useEffect(() => {
-    if (!enhancing) return;
-    const t = window.setInterval(() => setEnhanceTick((n) => n + 1), 1000);
+    if (!enhancing && !distilling) return;
+    const t = window.setInterval(() => setBusyTick((n) => n + 1), 1000);
     return () => window.clearInterval(t);
-  }, [enhancing]);
+  }, [enhancing, distilling]);
 
   // enhanceStatusLabel renders the live status: the agent's latest real activity line, and — after
   // ENHANCE_IDLE_SECONDS with no NEW activity (e.g. claude writing the final spec, a long single
@@ -229,6 +234,7 @@ export function IntakeChat({
   // the never-fabricate guidance as a clarifying reply; other failures → an error reply.
   async function runDistill(conversation: string) {
     setDistilling(true);
+    distillAt.current = Date.now();
     setResult(null);
     setYamlError(null);
     setProgressLines(null);
@@ -492,10 +498,15 @@ export function IntakeChat({
                   Write spec directly
                 </button>
                 {distilling && (
-                  <span className="intake-spinner" role="status" aria-live="polite">
+                  <span
+                    className="intake-spinner"
+                    role="status"
+                    aria-live="polite"
+                    data-testid="distill-status"
+                  >
                     {progressLines !== null
                       ? `Distilling… (${progressLines} ${progressLines === 1 ? "line" : "lines"})`
-                      : "Distilling…"}
+                      : `Distilling… ${Math.max(0, Math.floor((Date.now() - distillAt.current) / 1000))}s`}
                   </span>
                 )}
                 {enhancing && (
