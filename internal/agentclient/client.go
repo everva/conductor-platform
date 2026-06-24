@@ -8,11 +8,13 @@ package agentclient
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -239,6 +241,34 @@ func (c *Client) GetCredential(ctx context.Context, kind string) (token string, 
 func (c *Client) DeleteCredential(ctx context.Context, kind string) error {
 	_, err := c.do(ctx, http.MethodDelete, "/agent/credentials/"+kind, nil, nil)
 	return err
+}
+
+// GetHoldout fetches a holdout body by ref from the gateway (Faz-S S3) so the agent's verify gate
+// can inject the ADR-0018 hidden holdout. found=false (no error) means the gateway has no holdout
+// for that ref (404) — the gate then runs WITHOUT a holdout (public gates still apply) rather than
+// failing the run. File contents arrive base64 (so binary fixtures survive JSON) and are decoded
+// here. The holdout body lives only in memory and is never logged.
+func (c *Client) GetHoldout(ctx context.Context, ref string) (name string, files map[string][]byte, found bool, err error) {
+	var out struct {
+		Name  string            `json:"name"`
+		Files map[string]string `json:"files"`
+	}
+	if _, derr := c.do(ctx, http.MethodGet, "/agent/holdout?ref="+url.QueryEscape(ref), nil, &out); derr != nil {
+		var e *Error
+		if errors.As(derr, &e) && e.Status == http.StatusNotFound {
+			return "", nil, false, nil // no holdout for this ref — gate runs without it
+		}
+		return "", nil, false, derr
+	}
+	files = make(map[string][]byte, len(out.Files))
+	for path, b64 := range out.Files {
+		content, decErr := base64.StdEncoding.DecodeString(b64)
+		if decErr != nil {
+			return "", nil, false, fmt.Errorf("agentclient: holdout file %q is not base64: %w", path, decErr)
+		}
+		files[path] = content
+	}
+	return out.Name, files, true, nil
 }
 
 // do performs one request: body (if non-nil) is JSON-encoded; on a 2xx, out (if

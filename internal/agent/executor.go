@@ -44,6 +44,37 @@ type ExecutorConfig struct {
 	Push bool
 	// PushRemote is the git remote to push to (default "origin").
 	PushRemote string
+	// HoldoutStore serves the ADR-0018 hidden holdout the verify gate injects (Faz-S S3). nil →
+	// noopHoldout (no holdout injected; public gates still run) so existing wiring is unchanged;
+	// cmd/conductor-agent wires NewGatewayHoldout over the gateway's GET /agent/holdout.
+	HoldoutStore verify.HoldoutStore
+}
+
+// gatewayHoldout adapts a gateway holdout-fetch func to verify.HoldoutStore so the agent's verifier
+// injects the hidden holdout the gateway serves (Faz-S S3). An empty ref or a not-found holdout
+// yields an empty holdout (the deterministic public gates still run); the body is never logged.
+type gatewayHoldout struct {
+	fetch func(ctx context.Context, ref string) (name string, files map[string][]byte, found bool, err error)
+}
+
+func (g gatewayHoldout) Fetch(ctx context.Context, ref string) (verify.Holdout, error) {
+	if strings.TrimSpace(ref) == "" {
+		return verify.Holdout{}, nil
+	}
+	name, files, found, err := g.fetch(ctx, ref)
+	if err != nil {
+		return verify.Holdout{}, err
+	}
+	if !found {
+		return verify.Holdout{}, nil
+	}
+	return verify.Holdout{Name: name, Files: files}, nil
+}
+
+// NewGatewayHoldout builds a verify.HoldoutStore backed by a gateway fetch func (cmd/conductor-agent
+// passes client.GetHoldout). Wired into ExecutorConfig.HoldoutStore.
+func NewGatewayHoldout(fetch func(ctx context.Context, ref string) (string, map[string][]byte, bool, error)) verify.HoldoutStore {
+	return gatewayHoldout{fetch: fetch}
 }
 
 // noopHoldout is a HoldoutStore that injects nothing — used until the gateway serves
@@ -92,7 +123,13 @@ func NewRealExecutor(cfg ExecutorConfig) (*RealExecutor, error) {
 		return nil, fmt.Errorf("agent executor: provisioner: %w", err)
 	}
 	eng := engine.NewCommandEngine(engine.RecipeConfig{DevelopCmd: cfg.DevelopCmd, Timeout: cfg.Timeout})
-	verf := verify.New(noopHoldout{}, verify.Config{})
+	// Faz-S S3: inject the gateway-backed holdout store when configured; else the no-op (no holdout
+	// injected — the deterministic public gates still run). Keeps existing callers unchanged.
+	holdouts := cfg.HoldoutStore
+	if holdouts == nil {
+		holdouts = noopHoldout{}
+	}
+	verf := verify.New(holdouts, verify.Config{})
 	merger := conductor.NewGitMerger(
 		func(projectID string) string { return cfg.RootDir + "/clones/" + projectID },
 		conductor.WithPush(conductor.PushConfig{Enabled: cfg.Push, Remote: cfg.PushRemote, GHToken: cfg.GHToken}),
@@ -183,7 +220,9 @@ func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, s
 	}
 
 	e.setPhase(task.ID, "verifying")
-	review, checks, err := e.verf.Verify(ctx, verdict, ws, e.cfg.Gates, "")
+	// Faz-S S3: verify against the scenario's hidden holdout (ADR-0018). The HoldoutStore (gateway-
+	// backed in prod) fetches it; an empty ref / absent holdout → public gates only (unchanged).
+	review, checks, err := e.verf.Verify(ctx, verdict, ws, e.cfg.Gates, scenario.HoldoutRef)
 	if err != nil {
 		return RunOutcome{}, fmt.Errorf("verify: %w", err)
 	}

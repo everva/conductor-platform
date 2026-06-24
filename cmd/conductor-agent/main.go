@@ -117,6 +117,9 @@ func run() error {
 		Gates:      gates,
 		Push:       !cfg.noPush,
 		PushRemote: cfg.pushRemote,
+		// Faz-S S3: fetch the ADR-0018 hidden holdout from the gateway (GET /agent/holdout) so the
+		// verify gate actually injects it. A not-found ref degrades to public-gates-only (unchanged).
+		HoldoutStore: agent.NewGatewayHoldout(client.GetHoldout),
 	})
 	if err != nil {
 		return err

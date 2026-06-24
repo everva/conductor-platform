@@ -45,6 +45,53 @@ func TestLease_Task(t *testing.T) {
 	}
 }
 
+func TestGetHoldout(t *testing.T) {
+	// 200 → decoded files + name; the ref rides in the query string, auth in the header.
+	var gotPath, gotAuth string
+	c, _ := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path + "?" + r.URL.RawQuery
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		// "body\n" base64 = "Ym9keQo=".
+		_, _ = w.Write([]byte(`{"name":"S-1","files":{"t.ts":"Ym9keQo="}}`))
+	})
+	name, files, found, err := c.GetHoldout(context.Background(), "pg://holdouts/S-1")
+	if err != nil || !found {
+		t.Fatalf("GetHoldout: found=%v err=%v", found, err)
+	}
+	if name != "S-1" || string(files["t.ts"]) != "body\n" {
+		t.Fatalf("decoded wrong: name=%q files=%v", name, files)
+	}
+	if gotAuth != "Bearer "+testToken {
+		t.Fatalf("auth = %q", gotAuth)
+	}
+	if !strings.Contains(gotPath, "/agent/holdout?ref=pg") {
+		t.Fatalf("path = %q (ref must be query-escaped)", gotPath)
+	}
+}
+
+func TestGetHoldout_NotFoundDegrades(t *testing.T) {
+	// 404 → found=false, no error (the gate runs without a holdout).
+	c, _ := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"holdout not found"}`))
+	})
+	_, _, found, err := c.GetHoldout(context.Background(), "pg://holdouts/NOPE")
+	if err != nil || found {
+		t.Fatalf("404 must degrade to found=false,no-error: found=%v err=%v", found, err)
+	}
+}
+
+func TestGetHoldout_BadBase64Errors(t *testing.T) {
+	c, _ := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"X","files":{"a":"!!notb64!!"}}`))
+	})
+	if _, _, _, err := c.GetHoldout(context.Background(), "pg://holdouts/X"); err == nil {
+		t.Fatalf("bad base64 must error")
+	}
+}
+
 func TestLease_NoWork204(t *testing.T) {
 	c, _ := newServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	_, ok, err := c.Lease(context.Background(), "p", "davinci", nil)
