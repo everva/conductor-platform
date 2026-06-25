@@ -338,7 +338,7 @@ func aheadOfBase(wsPath, base string) bool {
 // Merge squash-merges the verified branch. For an APPROVED held task it re-attaches
 // the branch if needed, merges the current base in (drift guard), and re-verifies
 // before merging — mirroring the daemon's mergeApproved (never merge stale work).
-func (e *RealExecutor) Merge(ctx context.Context, taskInfo agentclient.TaskInfo, branch string, approved bool) (string, error) {
+func (e *RealExecutor) Merge(ctx context.Context, taskInfo agentclient.TaskInfo, branch string, approved bool) (MergeResult, error) {
 	project := e.project(taskInfo.ProjectID)
 	task := stateTask(taskInfo)
 
@@ -349,7 +349,7 @@ func (e *RealExecutor) Merge(ctx context.Context, taskInfo agentclient.TaskInfo,
 		// Worktree gone (e.g. a fresh agent run after a restart): re-attach the branch.
 		w, err := e.prov.WorkspaceForBranch(ctx, project, task, branch)
 		if err != nil {
-			return "", fmt.Errorf("re-attach branch %q: %w", branch, err)
+			return MergeResult{}, fmt.Errorf("re-attach branch %q: %w", branch, err)
 		}
 		ws = w
 		e.mu.Lock()
@@ -362,24 +362,39 @@ func (e *RealExecutor) Merge(ctx context.Context, taskInfo agentclient.TaskInfo,
 		// cheap gate. If the base drifted enough to conflict or break the gate, refuse.
 		if err := e.prov.MergeBaseIntoWorktree(ctx, project, ws); err != nil {
 			if e.prov.IsBaseMergeConflict(err) {
-				return "", fmt.Errorf("approved merge refused: base drifted into a conflict")
+				return MergeResult{}, fmt.Errorf("approved merge refused: base drifted into a conflict")
 			}
-			return "", fmt.Errorf("merge base into held branch: %w", err)
+			return MergeResult{}, fmt.Errorf("merge base into held branch: %w", err)
 		}
 		review, _, err := e.verf.Verify(ctx, engine.Verdict{}, ws, e.cfg.Gates, "")
 		if err != nil {
-			return "", fmt.Errorf("re-verify after approval: %w", err)
+			return MergeResult{}, fmt.Errorf("re-verify after approval: %w", err)
 		}
 		if review.Result != "pass" {
-			return "", fmt.Errorf("approved merge refused: re-verify failed (base drift broke the gate)")
+			return MergeResult{}, fmt.Errorf("approved merge refused: re-verify failed (base drift broke the gate)")
+		}
+	}
+
+	// P2b: capture the full-file diff from the verified worktree (branch tip, base merged in for
+	// approved tasks) BEFORE the squash-merge collapses it, so the runner persists a TaskDiff on
+	// EVERY merge path — closing the once-per-Run early-emit gaps. Best-effort: a diff failure never
+	// fails the merge (observability only; mirrors buildOutcome).
+	res := MergeResult{Branch: ws.Branch}
+	differ := conductor.NewGitDiffer()
+	if summary, derr := differ.Diff(ctx, project, ws); derr == nil {
+		res.Base = summary.Base
+		if full, truncated, ferr := differ.FullPatch(ctx, project, ws); ferr == nil {
+			res.Patch = full
+			res.Truncated = truncated
 		}
 	}
 
 	sha, err := e.merger.SquashMerge(ctx, project, task, ws)
 	if err != nil {
-		return "", fmt.Errorf("squash-merge: %w", err)
+		return MergeResult{}, fmt.Errorf("squash-merge: %w", err)
 	}
-	return sha, nil
+	res.SHA = sha
+	return res, nil
 }
 
 // Cleanup removes the task's worktree (best-effort).

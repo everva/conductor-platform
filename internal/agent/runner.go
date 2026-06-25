@@ -59,6 +59,19 @@ type RunOutcome struct {
 	FullTruncated bool
 }
 
+// MergeResult is the outcome of Executor.Merge: the squash-merge SHA plus the full-file diff
+// computed from the verified, base-merged worktree at the branch tip. The runner persists this as a
+// TaskDiff on EVERY merge path (auto + approved-held) so GET .../tasks/{task}/diff always serves a
+// full-file native diff — not only when the once-per-Run early emit (RunOnce) happened to capture it
+// (that misses the held→approved→merge and re-verify paths — exactly the big multi-file tasks).
+type MergeResult struct {
+	SHA       string
+	Base      string
+	Branch    string
+	Patch     string
+	Truncated bool
+}
+
 // Executor runs the local, git-and-LLM-native half of a task. The real adapter wires
 // the provisioner + engine + verify + merger; tests inject a fake.
 type Executor interface {
@@ -68,7 +81,7 @@ type Executor interface {
 	// Merge squash-merges the verified branch and returns the merge SHA. When approved
 	// is true (a held task the director approved) it re-verifies against the current
 	// base first (drift guard) before merging.
-	Merge(ctx context.Context, task agentclient.TaskInfo, branch string, approved bool) (string, error)
+	Merge(ctx context.Context, task agentclient.TaskInfo, branch string, approved bool) (MergeResult, error)
 	// Cleanup removes the task's worktree (best-effort).
 	Cleanup(ctx context.Context, task agentclient.TaskInfo)
 }
@@ -217,11 +230,19 @@ func (r *Runner) RunOnce(ctx context.Context) (Outcome, error) {
 
 // merge squash-merges the verified branch and reports it merged → task done.
 func (r *Runner) merge(ctx context.Context, task agentclient.TaskInfo, branch string, approved bool) (Outcome, error) {
-	sha, err := r.ex.Merge(ctx, task, branch, approved)
+	res, err := r.ex.Merge(ctx, task, branch, approved)
 	if err != nil {
 		return "", fmt.Errorf("agent: merge %q: %w", task.ID, err)
 	}
-	if err := r.gw.Merged(ctx, r.cfg.ProjectID, task.ID, sha); err != nil {
+	// P2b: persist the full diff from the verified worktree on EVERY merge path (auto + approved-held)
+	// so GET .../diff always serves a full-file native diff. The once-per-Run early emit misses the
+	// held→approved→merge and re-verify paths — exactly the big multi-file tasks. Best-effort.
+	if res.Patch != "" {
+		_ = r.gw.StoreTaskDiff(context.WithoutCancel(ctx), r.cfg.ProjectID, task.ID, agentclient.TaskDiffBody{
+			Base: res.Base, Branch: res.Branch, Patch: res.Patch, Truncated: res.Truncated,
+		})
+	}
+	if err := r.gw.Merged(ctx, r.cfg.ProjectID, task.ID, res.SHA); err != nil {
 		return "", fmt.Errorf("agent: report merged %q: %w", task.ID, err)
 	}
 	return OutcomeMerged, nil
