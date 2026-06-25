@@ -16,6 +16,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -240,6 +241,11 @@ func (s *apiServer) handleDistill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Guarantee the approved scenario actually lands: rename any ID that collides with
+	// existing project work so intake never silently skips it (no-op for a clarifying
+	// turn, which carries no scenarios).
+	outcome.Scenarios = s.uniquifyScenarioIDs(ctx, id, outcome.Scenarios)
+
 	// A clarifying turn returns questions (ADDITIVE field, empty scenarios); a
 	// scenarios proposal returns {scenarios, yaml} UNCHANGED (questions omitempty).
 	dto, err := distillResultDTOFromOutcome(outcome)
@@ -265,6 +271,55 @@ func distillErrorResponse(err error) (int, string) {
 	default:
 		return http.StatusBadGateway, "distiller failed"
 	}
+}
+
+// uniquifyScenarioIDs rewrites distilled scenario IDs so each is unique against the
+// project's EXISTING scenario/task IDs and within the batch. The distiller mints
+// generic IDs (e.g. "A-1") that collide with earlier work; intake then SILENTLY skips a
+// colliding scenario, so the director's approved job never reaches the board. Renaming a
+// collision to "<id>-2", "<id>-3", ... guarantees every approved scenario lands. The
+// derived "pg://holdouts/<id>" holdout ref is kept in sync; an explicit non-derived ref
+// is untouched, and a blank ID is left to upstream validation. (The director distiller
+// is single-scenario, so intra-batch deps are not remapped.)
+func (s *apiServer) uniquifyScenarioIDs(ctx context.Context, projectID string, scenarios []intake.Scenario) []intake.Scenario {
+	if len(scenarios) == 0 {
+		return scenarios
+	}
+	taken := make(map[string]struct{})
+	if tasks, err := s.store.ListTasks(ctx, projectID); err == nil {
+		for _, t := range tasks {
+			taken[t.ID] = struct{}{}
+		}
+	}
+	if scs, err := s.store.ListScenarios(ctx, projectID); err == nil {
+		for _, sc := range scs {
+			taken[sc.ID] = struct{}{}
+		}
+	}
+	for i := range scenarios {
+		oldID := strings.TrimSpace(scenarios[i].ID)
+		if oldID == "" {
+			continue
+		}
+		newID := oldID
+		if _, dup := taken[newID]; dup {
+			for n := 2; ; n++ {
+				cand := fmt.Sprintf("%s-%d", oldID, n)
+				if _, t := taken[cand]; !t {
+					newID = cand
+					break
+				}
+			}
+		}
+		taken[newID] = struct{}{}
+		if newID != oldID {
+			scenarios[i].ID = newID
+			if scenarios[i].HoldoutRef == "pg://holdouts/"+oldID {
+				scenarios[i].HoldoutRef = "pg://holdouts/" + newID
+			}
+		}
+	}
+	return scenarios
 }
 
 // distillResultDTOFromOutcome builds the wire DTO for a successful distill outcome: a
@@ -384,6 +439,7 @@ func (s *apiServer) handleDistillStream(w http.ResponseWriter, r *http.Request) 
 		sendEvent("error", map[string]any{"status": status, "error": msg})
 		return
 	}
+	outcome.Scenarios = s.uniquifyScenarioIDs(ctx, id, outcome.Scenarios)
 	dto, err := distillResultDTOFromOutcome(outcome)
 	if err != nil {
 		sendEvent("error", map[string]any{"status": http.StatusInternalServerError, "error": "could not render result"})
