@@ -135,6 +135,7 @@ func ParseHoldout(stdout []byte) (map[string]string, bool) {
 	if !ok {
 		return nil, false
 	}
+	block = stripCodeFence(block)
 	var hb holdoutBlock
 	if err := yaml.Unmarshal([]byte(block), &hb); err != nil || len(hb.Files) == 0 {
 		return nil, false
@@ -267,6 +268,7 @@ func ParseQuestions(stdout []byte) ([]Question, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: no %s..%s block in output", ErrNoQuestions, questionsFenceStart, questionsFenceEnd)
 	}
+	block = stripCodeFence(block)
 	var parsed questionBlock
 	if err := yaml.Unmarshal([]byte(block), &parsed); err != nil {
 		return nil, fmt.Errorf("%w: decode block: %v", ErrMalformedQuestions, err)

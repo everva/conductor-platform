@@ -210,6 +210,7 @@ func ParseScenarios(stdout []byte) ([]Scenario, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: no %s..%s block in output", ErrNoScenarios, scenariosFenceStart, scenariosFenceEnd)
 	}
+	block = stripCodeFence(block)
 
 	var parsed scenarioBlock
 	if err := yaml.Unmarshal([]byte(block), &parsed); err != nil {
@@ -253,4 +254,26 @@ func extractFenced(out, startFence, endFence string) (string, bool) {
 		return "", false
 	}
 	return block, true
+}
+
+// stripCodeFence removes a single wrapping markdown code fence from a block — a very
+// common LLM habit when emitting JSON (```json ... ``` or ``` ... ```). It strips ONLY
+// when the trimmed block both opens with a ``` line and closes with a ``` line;
+// otherwise it returns s unchanged, so a well-formed YAML or JSON block is never
+// altered. This makes the (now JSON) scenario/question/holdout blocks robust to a
+// model that wraps its JSON in a fence despite the prompt asking it not to.
+func stripCodeFence(s string) string {
+	t := strings.TrimSpace(s)
+	if !strings.HasPrefix(t, "```") {
+		return s
+	}
+	nl := strings.IndexByte(t, '\n')
+	if nl < 0 {
+		return s // a lone ``` with no body: nothing to strip, let it fail loudly
+	}
+	body := strings.TrimRight(t[nl+1:], " \t\r\n")
+	if !strings.HasSuffix(body, "```") {
+		return s // opened a fence but never closed it: leave as-is to surface the error
+	}
+	return strings.TrimSpace(body[:len(body)-len("```")])
 }

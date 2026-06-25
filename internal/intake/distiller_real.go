@@ -52,22 +52,14 @@ const clarifyPrompt = `You are the conductor-platform intake distiller (ADR-0005
 operating in CLARIFYING mode. Read the conversation below and do EXACTLY ONE of the following.
 
 (A) If the conversation gives you enough to specify one or more concrete, verifiable scenarios,
-    emit your final answer as a single YAML block wrapped EXACTLY in these fences:
+    emit your final answer as a single JSON object wrapped EXACTLY in these fences:
     ` + scenariosFenceStart + `
-    scenarios:
-      - id: <stable id, e.g. A-1>
-        title: <one-line summary>
-        lane: <capability lane>
-        tier: <one of T1,T2,T3,T4>
-        deps: [<dependency ids>]
-        acceptance:
-          - <machine-verifiable acceptance criterion>
-        hidden_holdout_ref: "pg://holdouts/<id>"   # repo-EXTERNAL only
+    {"scenarios":[{"id":"<stable id, e.g. A-1>","title":"<one-line summary>","lane":"<capability lane>","tier":"<one of T1,T2,T3,T4>","deps":[],"acceptance":["<machine-verifiable acceptance criterion>"],"hidden_holdout_ref":"pg://holdouts/<id>"}]}
     ` + scenariosFenceEnd + `
 
     THEN, when scenario 1's acceptance can be proven by an automated test, ALSO emit the hidden
     holdout test for it as a SECOND block (optional but preferred). It is the repo-EXTERNAL test the
-    gate runs to prove the work — keep it self-contained and runnable:
+    gate runs to prove the work — keep it self-contained and runnable. This block is a YAML literal (so the file body needs no escaping):
     ` + holdoutFenceStart + `
     files:
       "<relative/path/to/test_file>": |
@@ -75,18 +67,17 @@ operating in CLARIFYING mode. Read the conversation below and do EXACTLY ONE of 
     ` + holdoutFenceEnd + `
 
 (B) If the conversation is ambiguous or underspecified, DO NOT GUESS. Ask the director up to four
-    specific multiple-choice clarifying questions, wrapped EXACTLY in these fences:
+    specific multiple-choice clarifying questions, as a single JSON object wrapped EXACTLY in these fences:
     ` + questionsFenceStart + `
-    questions:
-      - question: <the specific question to resolve the ambiguity>
-        header: <short chip label, 12 chars max>
-        multi_select: false
-        options:
-          - label: <a short choice, 1-5 words>
-            description: <what choosing this means>
-          - label: <another short choice>
-            description: <what choosing this means>
+    {"questions":[{"question":"<the specific question to resolve the ambiguity>","header":"<short chip label, 12 chars max>","multi_select":false,"options":[{"label":"<a short choice, 1-5 words>","description":"<what choosing this means>"},{"label":"<another short choice>","description":"<what choosing this means>"}]}]}
     ` + questionsFenceEnd + `
+
+FORMAT (STRICT, this is where model output usually breaks):
+- The content inside the ` + scenariosFenceStart + ` / ` + questionsFenceStart + ` fences MUST be a single
+  valid JSON object (RFC 8259). Do NOT use YAML there, and do NOT wrap it in markdown code fences.
+- Every string MUST be a valid JSON string with internal double-quotes escaped as \". Free text,
+  including Turkish with apostrophes ('), colons (:) or quotes, is safe ONLY inside a correct JSON string.
+- The ` + holdoutFenceStart + ` block (when used) is the ONE exception: it stays a YAML literal as shown.
 
 Rules (STRICT):
 - Emit EITHER one ` + scenariosFenceStart + ` block OR one ` + questionsFenceStart + ` block — never both, never neither.
