@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -51,6 +52,7 @@ type config struct {
 	poll         time.Duration
 	noPush       bool
 	pushRemote   string
+	review       bool
 }
 
 func run() error {
@@ -70,6 +72,7 @@ func run() error {
 		poll       = flag.Duration("poll", 15*time.Second, "held-task approval poll interval")
 		noPush     = flag.Bool("no-push", false, "do NOT push the merged base to the remote (local-only)")
 		pushRemote = flag.String("push-remote", "origin", "git remote to push the merged base to")
+		review     = flag.Bool("review", envBool("CONDUCTOR_REVIEW", true), "run the STRICT third-eye LLM review that GATES the auto-merge after the deterministic gate passes (env CONDUCTOR_REVIEW)")
 	)
 	flag.Parse()
 
@@ -79,6 +82,7 @@ func run() error {
 		root: *root, repo: strings.TrimSpace(*repo), base: strings.TrimSpace(*base),
 		recipeDir: *recipeDir, developCmd: splitFields(*developCmd), holdoutCmd: splitFields(*holdoutCmd),
 		timeout: *timeout, interval: *interval, poll: *poll, noPush: *noPush, pushRemote: *pushRemote,
+		review: *review,
 	}
 	if cfg.gateway == "" || cfg.project == "" || cfg.repo == "" || cfg.base == "" {
 		return errors.New("-gateway, -project, -repo and -base are required")
@@ -124,6 +128,8 @@ func run() error {
 		HoldoutStore: agent.NewGatewayHoldout(client.GetHoldout),
 		// Faz-S S3b: the argv that runs the injected holdout (e.g. pnpm exec playwright test).
 		HoldoutCmd: cfg.holdoutCmd,
+		// STRICT third-eye review GATES the auto-merge after the deterministic gate (default on).
+		ReviewEnabled: cfg.review,
 	})
 	if err != nil {
 		return err
@@ -288,4 +294,19 @@ func firstEnv(keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// envBool resolves a bool flag default from an env var (so CONDUCTOR_REVIEW can disable the
+// third-eye review host-wide), falling back to def when the var is unset or unparseable. An
+// explicit -flag on the command line still overrides this default.
+func envBool(key string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return def
+	}
+	return b
 }

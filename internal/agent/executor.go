@@ -54,6 +54,12 @@ type ExecutorConfig struct {
 	// holdout body (empty/absent holdouts are skipped); empty here → a present holdout errors
 	// ("no holdout command configured"), which is the honest signal to configure it.
 	HoldoutCmd []string
+	// ReviewEnabled turns on the STRICT third-eye LLM review that GATES the auto-merge: after the
+	// deterministic gate passes, a SEPARATE fresh-eyes claude adversarially reviews the diff vs the
+	// acceptance; changes-requested → re-develop/re-verify/re-review (cap MaxReviewRounds); only a
+	// CLEAN review yields pass. Default true (cmd/conductor-agent -review). When false the executor
+	// behaves EXACTLY as before (the deterministic gate alone decides — no behavior change).
+	ReviewEnabled bool
 }
 
 // gatewayHoldout adapts a gateway holdout-fetch func to verify.HoldoutStore so the agent's verifier
@@ -92,21 +98,47 @@ func (noopHoldout) Fetch(_ context.Context, _ string) (verify.Holdout, error) {
 	return verify.Holdout{}, nil
 }
 
+// developer is the slice of *engine.CommandEngine the review loop needs (re-develop against the
+// reviewer's findings). A fake satisfies it in tests; *engine.CommandEngine satisfies it in prod.
+type developer interface {
+	Develop(ctx context.Context, task statestore.Task, ws engine.Workspace) (engine.Verdict, error)
+}
+
+// gateVerifier is the slice of *verify.Verifier the review loop needs (re-run the DETERMINISTIC
+// gate after a re-develop — the gate still rules, Rule#9). A fake satisfies it in tests.
+type gateVerifier interface {
+	Verify(ctx context.Context, verdict engine.Verdict, ws engine.Workspace, gates []verify.Gate, holdoutRef string) (engine.ReviewResult, []engine.Check, error)
+}
+
+// reviewFunc is the injectable third-eye reviewer (production: runReviewClaude). The seam lets the
+// reviewLoop test script changes-requested→pass without spawning `claude -p`, mirroring the
+// engine's runnerFunc seam.
+type reviewFunc func(ctx context.Context, wsPath string, acceptance []string, fullPatch string, onProgress func(string)) (engine.ReviewResult, error)
+
+// patchFunc is the injectable full-file diff used as the reviewer's input (production: the
+// GitDiffer). The seam lets the reviewLoop test drive the per-round diff (incl. the no-op guard)
+// without a real git repo.
+type patchFunc func(ctx context.Context, project statestore.Project, ws engine.Workspace) string
+
 // RealExecutor wires the proven execution packages (provisioner + engine + verify +
 // merger) behind the Executor seam. It runs one task at a time and holds that task's
 // worktree between Run and Merge.
 type RealExecutor struct {
 	prov   *provisioner.Provisioner
-	eng    *engine.CommandEngine
-	verf   *verify.Verifier
+	eng    developer
+	verf   gateVerifier
 	merger *conductor.GitMerger
 	cfg    ExecutorConfig
+	// review is the third-eye reviewer (default runReviewClaude); injectable for tests.
+	review reviewFunc
+	// patch computes the reviewer's full-file diff input (default the GitDiffer); injectable.
+	patch patchFunc
 
 	// mu guards ws + phase against the runner's concurrent ProgressProbe heartbeat.
 	mu sync.Mutex
 	// ws holds the live worktree per in-flight task (single task at a time; map for safety).
 	ws map[string]engine.Workspace
-	// phase is the current phase per in-flight task (provisioning|developing|verifying),
+	// phase is the current phase per in-flight task (provisioning|developing|verifying|reviewing),
 	// read by Progress for the "Now" pulse.
 	phase map[string]string
 }
@@ -140,7 +172,16 @@ func NewRealExecutor(cfg ExecutorConfig) (*RealExecutor, error) {
 		func(projectID string) string { return cfg.RootDir + "/clones/" + projectID },
 		conductor.WithPush(conductor.PushConfig{Enabled: cfg.Push, Remote: cfg.PushRemote, GHToken: cfg.GHToken}),
 	)
-	return &RealExecutor{prov: prov, eng: eng, verf: verf, merger: merger, cfg: cfg, ws: map[string]engine.Workspace{}, phase: map[string]string{}}, nil
+	re := &RealExecutor{prov: prov, eng: eng, verf: verf, merger: merger, cfg: cfg, review: runReviewClaude, ws: map[string]engine.Workspace{}, phase: map[string]string{}}
+	// Default the reviewer's diff input to the real GitDiffer (best-effort: a diff error → "").
+	re.patch = func(ctx context.Context, project statestore.Project, ws engine.Workspace) string {
+		full, _, derr := conductor.NewGitDiffer().FullPatch(ctx, project, ws)
+		if derr != nil {
+			return ""
+		}
+		return full
+	}
+	return re, nil
 }
 
 // setPhase records the current phase for a task (guarded; read by Progress).
@@ -249,6 +290,11 @@ func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, s
 				return RunOutcome{}, fmt.Errorf("re-verify preserved branch: %w", verr)
 			}
 			if review.Result == "pass" {
+				// The DETERMINISTIC gate passed; the STRICT third-eye review now GATES the merge
+				// (changes-requested → re-develop/re-verify/re-review → only a clean review passes).
+				if e.cfg.ReviewEnabled {
+					review = e.reviewLoop(ctx, project, task, ws, scenario, review)
+				}
 				return e.buildOutcome(ctx, project, ws, review, checks), nil
 			}
 			// The preserved commit fails the gate → it genuinely needs changes; discard + develop fresh.
@@ -298,7 +344,90 @@ func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, s
 	if err != nil {
 		return RunOutcome{}, fmt.Errorf("verify: %w", err)
 	}
+	if review.Result == "pass" && e.cfg.ReviewEnabled {
+		// The DETERMINISTIC gate passed (sole MERGE authority, Rule#9); the STRICT third-eye review
+		// now GATES the auto-merge. Only a CLEAN review keeps Result=="pass"; otherwise the loop
+		// re-develops against the findings, re-verifies (the gate STILL rules), and re-reviews, and
+		// if still unresolved returns changes-requested (a held task for the director).
+		review = e.reviewLoop(ctx, project, task, ws, scenario, review)
+	}
 	return e.buildOutcome(ctx, project, ws, review, checks), nil
+}
+
+// reviewLoop runs the STRICT third-eye review AFTER the deterministic gate has already passed, and
+// GATES the auto-merge on it. It is only called when review.Result=="pass" and ReviewEnabled.
+//
+// CONTRACT (the only path that keeps a pass is a CLEAN review):
+//   - Compute the full-file diff (best-effort; on error the reviewer judges an empty patch).
+//   - First review: pass → return the ORIGINAL gate pass (merge proceeds).
+//   - Otherwise loop up to MaxReviewRounds: write the findings to .conductor/REVIEW.md, re-develop
+//     against them, re-run the DETERMINISTIC gate (it STILL rules — a re-develop that breaks the
+//     gate returns that gate's changes-requested), guard against a NO-OP re-develop (identical diff
+//     → unresolved), then re-review. A clean re-review → return the gate pass.
+//   - Exhausted without a clean review → changes-requested ("needs user"): a held task, never a
+//     fabricated pass.
+//
+// FAIL-CLOSED throughout: runReviewClaude already maps any reviewer infra failure to
+// changes-requested, so an unreachable reviewer holds for the director rather than auto-passing.
+func (e *RealExecutor) reviewLoop(ctx context.Context, project statestore.Project, task statestore.Task, ws engine.Workspace, scenario agentclient.ScenarioInfo, review engine.ReviewResult) engine.ReviewResult {
+	e.setPhase(task.ID, "reviewing")
+
+	// fullPatch is the whole-file branch-vs-base diff the reviewer judges. Best-effort: a diff
+	// failure → "" (the reviewer is told an empty patch is itself suspicious).
+	fullPatch := e.patch(ctx, project, ws)
+
+	rr, _ := e.review(ctx, ws.Path, scenario.Acceptance, fullPatch, nil)
+	if rr.Result == "pass" {
+		return review // clean on the first read → keep the deterministic gate's pass
+	}
+
+	for round := 0; round < MaxReviewRounds; round++ {
+		// Hand the findings to the developer as .conductor/REVIEW.md feedback, then re-develop.
+		if err := writeReviewFeedback(ws.Path, rr); err != nil {
+			return engine.ReviewResult{Result: "changes-requested", Summary: "write review feedback failed: " + err.Error(), Findings: rr.Findings}
+		}
+		e.setPhase(task.ID, "developing")
+		// Re-develop against the findings. Verdict-robustness mirrors Run: a re-develop that COMMITTED
+		// but emitted a malformed/absent verdict still proceeds (the gate below is the authority,
+		// Rule#9); a re-develop that produced NO commit is a real failure → changes-requested.
+		if _, err := e.eng.Develop(ctx, task, ws); err != nil {
+			if !((errors.Is(err, engine.ErrMalformedVerdict) || errors.Is(err, engine.ErrNoVerdict)) && aheadOfBase(ws.Path, project.BaseBranch)) {
+				return engine.ReviewResult{Result: "changes-requested", Summary: "re-develop after review failed: " + err.Error()}
+			}
+		}
+
+		// The DETERMINISTIC gate STILL rules (Rule#9): a re-develop that breaks the gate is rejected
+		// with the gate's own changes-requested, regardless of what the reviewer would say.
+		e.setPhase(task.ID, "verifying")
+		gate, _, gerr := e.verf.Verify(ctx, engine.Verdict{}, ws, e.cfg.Gates, scenario.HoldoutRef)
+		if gerr != nil {
+			return engine.ReviewResult{Result: "changes-requested", Summary: "re-verify after review failed: " + gerr.Error()}
+		}
+		if gate.Result != "pass" {
+			return gate // the deterministic gate now fails → it decides
+		}
+
+		// No-op guard: if the re-develop produced NO change, the reviewer's concern is unresolved and
+		// re-reviewing the identical diff would loop — hold for the director instead.
+		newPatch := e.patch(ctx, project, ws)
+		if newPatch == fullPatch {
+			return engine.ReviewResult{Result: "changes-requested", Summary: "reviewer unresolved — developer made no change", Findings: rr.Findings}
+		}
+		fullPatch = newPatch
+
+		e.setPhase(task.ID, "reviewing")
+		rr, _ = e.review(ctx, ws.Path, scenario.Acceptance, fullPatch, nil)
+		if rr.Result == "pass" {
+			return review // a clean re-review → the change may merge
+		}
+	}
+
+	// Exhausted the cap without a clean review: hold for the director (never an auto-pass).
+	return engine.ReviewResult{
+		Result:   "changes-requested",
+		Summary:  fmt.Sprintf("third-eye review unresolved after %d rounds — needs user", MaxReviewRounds),
+		Findings: rr.Findings,
+	}
 }
 
 // buildOutcome assembles the RunOutcome (result + branch + checks) and best-effort attaches the
@@ -435,6 +564,12 @@ func writeTaskBrief(wsPath string, task agentclient.TaskInfo, scenario agentclie
 	for _, a := range scenario.Acceptance {
 		fmt.Fprintf(&b, "- %s\n", a)
 	}
+	// The STRICT third-eye reviewer (review.go) writes its findings to .conductor/REVIEW.md when it
+	// requests changes; on a re-develop that file is present. Point the performer at it explicitly so
+	// the correction loop actually addresses the review (the change cannot merge until a clean review).
+	b.WriteString("\n## Reviewer feedback — READ FIRST if present\n")
+	b.WriteString("If `.conductor/REVIEW.md` exists, a STRICT third-eye reviewer REQUESTED CHANGES on your previous attempt. ")
+	b.WriteString("Read it FIRST and fix EVERY finding before anything else — the change CANNOT merge until a clean review passes.\n")
 	return os.WriteFile(filepath.Join(dir, "TASK.md"), []byte(b.String()), 0o644)
 }
 

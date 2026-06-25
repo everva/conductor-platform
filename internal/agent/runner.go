@@ -110,6 +110,8 @@ func eventPhase(step string) string {
 		return "plan"
 	case "verifying":
 		return "verify"
+	case "reviewing":
+		return "review"
 	default:
 		return "develop"
 	}
