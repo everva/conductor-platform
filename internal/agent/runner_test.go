@@ -98,7 +98,7 @@ func (f *fakeExecutor) Run(_ context.Context, _ agentclient.TaskInfo, _ agentcli
 	f.runs++
 	return f.out, f.runErr
 }
-func (f *fakeExecutor) Merge(_ context.Context, _ agentclient.TaskInfo, _ string, approved bool) (MergeResult, error) {
+func (f *fakeExecutor) Merge(_ context.Context, _ agentclient.TaskInfo, _ agentclient.ScenarioInfo, _ string, approved bool) (MergeResult, error) {
 	f.merges++
 	f.mergeApproved = approved
 	return MergeResult{SHA: f.mergeSHA, Base: f.mergeBase, Branch: "b", Patch: f.mergePatch}, f.mergeErr

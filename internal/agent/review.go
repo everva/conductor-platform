@@ -197,3 +197,41 @@ func writeReviewFeedback(wsPath string, r engine.ReviewResult) error {
 	}
 	return os.WriteFile(filepath.Join(dir, "REVIEW.md"), []byte(b.String()), 0o644)
 }
+
+// MaxGateRounds caps the re-develop → re-verify self-correction loop after the DETERMINISTIC gate
+// (build/lint/parity) first rejects the change. The AGENT fixes the gate failure itself; if the
+// gate is still failing after the cap, it holds for the director (needs user) rather than looping
+// forever. Mirrors MaxReviewRounds.
+const MaxGateRounds = 2
+
+// writeGateFeedback writes the DETERMINISTIC gate's failure into the worktree as .conductor/GATE.md
+// so the re-develop performer reads exactly which build/lint/parity errors it MUST fix — and a
+// STRONG directive to re-run the project's own checks and get to zero before finishing. It mirrors
+// writeReviewFeedback (the feedback lives in the worktree, not the gateway). The develop prompt
+// already points claude at .conductor/; this file makes the failing-gate feedback explicit.
+func writeGateFeedback(wsPath string, r engine.ReviewResult) error {
+	dir := filepath.Join(wsPath, ".conductor")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	var b strings.Builder
+	b.WriteString("# The deterministic GATE FAILED — fix it before anything else\n\n")
+	b.WriteString("The build/lint/parity gate rejected your previous attempt. You MUST re-run the project's checks ")
+	b.WriteString("YOURSELF and FIX EVERY error, then verify they are clean:\n")
+	b.WriteString("- Run the full build: `pnpm build` (turbo, all packages) — it must exit 0.\n")
+	b.WriteString("- The gate diff-lints your changed .ts/.tsx files; **packages/shared is lint-strict (--max-warnings 0)** ")
+	b.WriteString("and requires **explicit function return types** and **forbids unsafe returns** and non-null assertions. ")
+	b.WriteString("Run eslint on your changed files and get to ZERO problems.\n")
+	b.WriteString("- Do not finish until `pnpm build` is clean AND your changed files have zero lint errors.\n\n")
+	b.WriteString("## Gate findings\n")
+	if len(r.Findings) == 0 {
+		b.WriteString("- (no specific findings were enumerated — re-run the build/lint yourself and fix every error)\n")
+	}
+	for _, f := range r.Findings {
+		fmt.Fprintf(&b, "- %s\n", f)
+	}
+	if strings.TrimSpace(r.Summary) != "" {
+		fmt.Fprintf(&b, "\n## Gate summary\n%s\n", r.Summary)
+	}
+	return os.WriteFile(filepath.Join(dir, "GATE.md"), []byte(b.String()), 0o644)
+}

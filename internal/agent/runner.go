@@ -81,7 +81,7 @@ type Executor interface {
 	// Merge squash-merges the verified branch and returns the merge SHA. When approved
 	// is true (a held task the director approved) it re-verifies against the current
 	// base first (drift guard) before merging.
-	Merge(ctx context.Context, task agentclient.TaskInfo, branch string, approved bool) (MergeResult, error)
+	Merge(ctx context.Context, task agentclient.TaskInfo, scenario agentclient.ScenarioInfo, branch string, approved bool) (MergeResult, error)
 	// Cleanup removes the task's worktree (best-effort).
 	Cleanup(ctx context.Context, task agentclient.TaskInfo)
 }
@@ -222,17 +222,17 @@ func (r *Runner) RunOnce(ctx context.Context) (Outcome, error) {
 	case "blocked":
 		return OutcomeBlocked, nil
 	case "merge":
-		return r.merge(ctx, task, out.Branch, false)
+		return r.merge(ctx, task, scenario, out.Branch, false)
 	case "hold":
-		return r.awaitAndMaybeMerge(ctx, task, out.Branch)
+		return r.awaitAndMaybeMerge(ctx, task, scenario, out.Branch)
 	default:
 		return "", fmt.Errorf("agent: unknown decision %q", decision)
 	}
 }
 
 // merge squash-merges the verified branch and reports it merged → task done.
-func (r *Runner) merge(ctx context.Context, task agentclient.TaskInfo, branch string, approved bool) (Outcome, error) {
-	res, err := r.ex.Merge(ctx, task, branch, approved)
+func (r *Runner) merge(ctx context.Context, task agentclient.TaskInfo, scenario agentclient.ScenarioInfo, branch string, approved bool) (Outcome, error) {
+	res, err := r.ex.Merge(ctx, task, scenario, branch, approved)
 	if err != nil {
 		return "", fmt.Errorf("agent: merge %q: %w", task.ID, err)
 	}
@@ -253,7 +253,7 @@ func (r *Runner) merge(ctx context.Context, task agentclient.TaskInfo, branch st
 // awaitAndMaybeMerge polls the held task's decision until the director approves (then
 // re-verify-and-merge) or aborts. It returns OutcomeHeld if ctx is cancelled while
 // still pending (the task stays held for the next agent run — nothing is lost).
-func (r *Runner) awaitAndMaybeMerge(ctx context.Context, task agentclient.TaskInfo, branch string) (Outcome, error) {
+func (r *Runner) awaitAndMaybeMerge(ctx context.Context, task agentclient.TaskInfo, scenario agentclient.ScenarioInfo, branch string) (Outcome, error) {
 	for {
 		state, err := r.gw.Decision(ctx, r.cfg.ProjectID, task.ID)
 		if err != nil {
@@ -261,7 +261,7 @@ func (r *Runner) awaitAndMaybeMerge(ctx context.Context, task agentclient.TaskIn
 		}
 		switch state {
 		case "approved":
-			return r.merge(ctx, task, branch, true)
+			return r.merge(ctx, task, scenario, branch, true)
 		case "aborted":
 			return OutcomeAborted, nil
 		}

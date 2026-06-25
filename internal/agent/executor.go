@@ -311,10 +311,25 @@ func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, s
 		}
 	}
 
+	review, checks, ws, err := e.freshDevelopReview(ctx, project, taskInfo, scenario)
+	if err != nil {
+		return RunOutcome{}, err
+	}
+	return e.buildOutcome(ctx, project, ws, review, checks), nil
+}
+
+// freshDevelopReview provisions a FRESH worktree off the CURRENT base, develops the task (performer),
+// runs the deterministic gate (with the gate-correction loop), then the strict third-eye review. It
+// is the shared from-scratch core: Run uses it for the initial development, and Merge uses it to
+// RE-DEVELOP when an approved task's base drifted into a merge conflict (re-implementing on the
+// current base, conflict-free). Returns the final review + per-gate checks + the live worktree.
+func (e *RealExecutor) freshDevelopReview(ctx context.Context, project statestore.Project, taskInfo agentclient.TaskInfo, scenario agentclient.ScenarioInfo) (engine.ReviewResult, []engine.Check, engine.Workspace, error) {
+	task := stateTask(taskInfo)
+
 	e.setPhase(task.ID, "provisioning")
 	ws, err := e.prov.Workspace(ctx, project, task)
 	if err != nil {
-		return RunOutcome{}, fmt.Errorf("provision workspace: %w", err)
+		return engine.ReviewResult{}, nil, engine.Workspace{}, fmt.Errorf("provision workspace: %w", err)
 	}
 	e.mu.Lock()
 	e.ws[task.ID] = ws
@@ -325,7 +340,7 @@ func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, s
 	// claude at it). Best-effort: a write failure shouldn't sink the run (claude still has the
 	// stdin contract); log via the returned error only if it's a hard FS error.
 	if err := writeTaskBrief(ws.Path, taskInfo, scenario); err != nil {
-		return RunOutcome{}, fmt.Errorf("write task brief: %w", err)
+		return engine.ReviewResult{}, nil, engine.Workspace{}, fmt.Errorf("write task brief: %w", err)
 	}
 
 	e.setPhase(task.ID, "developing")
@@ -337,7 +352,7 @@ func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, s
 		if (errors.Is(derr, engine.ErrMalformedVerdict) || errors.Is(derr, engine.ErrNoVerdict)) && aheadOfBase(ws.Path, project.BaseBranch) {
 			verdict = engine.Verdict{}
 		} else {
-			return RunOutcome{}, fmt.Errorf("develop: %w", derr)
+			return engine.ReviewResult{}, nil, engine.Workspace{}, fmt.Errorf("develop: %w", derr)
 		}
 	}
 
@@ -346,7 +361,7 @@ func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, s
 	// backed in prod) fetches it; an empty ref / absent holdout → public gates only (unchanged).
 	review, checks, err := e.verf.Verify(ctx, verdict, ws, e.cfg.Gates, scenario.HoldoutRef)
 	if err != nil {
-		return RunOutcome{}, fmt.Errorf("verify: %w", err)
+		return engine.ReviewResult{}, nil, engine.Workspace{}, fmt.Errorf("verify: %w", err)
 	}
 	if review.Result == "changes-requested" && e.cfg.ReviewEnabled {
 		// The DETERMINISTIC gate REJECTED the change (build/lint/parity). Instead of immediately
@@ -362,7 +377,7 @@ func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, s
 		// if still unresolved returns changes-requested (a held task for the director).
 		review = e.reviewLoop(ctx, project, task, ws, scenario, review)
 	}
-	return e.buildOutcome(ctx, project, ws, review, checks), nil
+	return review, checks, ws, nil
 }
 
 // reviewLoop runs the STRICT third-eye review AFTER the deterministic gate has already passed, and
@@ -550,7 +565,7 @@ func aheadOfBase(wsPath, base string) bool {
 // Merge squash-merges the verified branch. For an APPROVED held task it re-attaches
 // the branch if needed, merges the current base in (drift guard), and re-verifies
 // before merging — mirroring the daemon's mergeApproved (never merge stale work).
-func (e *RealExecutor) Merge(ctx context.Context, taskInfo agentclient.TaskInfo, branch string, approved bool) (MergeResult, error) {
+func (e *RealExecutor) Merge(ctx context.Context, taskInfo agentclient.TaskInfo, scenario agentclient.ScenarioInfo, branch string, approved bool) (MergeResult, error) {
 	project := e.project(taskInfo.ProjectID)
 	task := stateTask(taskInfo)
 
@@ -570,20 +585,40 @@ func (e *RealExecutor) Merge(ctx context.Context, taskInfo agentclient.TaskInfo,
 	}
 
 	if approved {
-		// Drift guard: merge the current base into the held branch, then re-run the
-		// cheap gate. If the base drifted enough to conflict or break the gate, refuse.
+		// Drift guard: merge the current base into the held branch, then re-run the cheap gate.
 		if err := e.prov.MergeBaseIntoWorktree(ctx, project, ws); err != nil {
 			if e.prov.IsBaseMergeConflict(err) {
-				return MergeResult{}, fmt.Errorf("approved merge refused: base drifted into a conflict")
+				// The base drifted into a conflict while the task was held (a concurrent merge touched the
+				// same lines). Rather than refuse and STICK the approved task forever, RE-DEVELOP it fresh
+				// against the CURRENT base — the performer re-implements on the new develop, conflict-free
+				// — then re-run the deterministic gate + strict third-eye review. The gate+review STILL
+				// gate the merge (Rule#9): a bad re-develop holds (changes-requested), only a clean one
+				// proceeds, so no unreviewed code can merge. The freshly-built branch sits ON the current
+				// base, so the squash-merge below is conflict-free.
+				_ = e.prov.Cleanup(ctx, ws)
+				e.mu.Lock()
+				delete(e.ws, task.ID)
+				e.mu.Unlock()
+				rr, _, freshWs, ferr := e.freshDevelopReview(ctx, project, taskInfo, scenario)
+				if ferr != nil {
+					return MergeResult{}, fmt.Errorf("re-develop after base drift: %w", ferr)
+				}
+				if rr.Result != "pass" {
+					return MergeResult{}, fmt.Errorf("approved merge refused: base drifted, re-develop did not pass gate/review")
+				}
+				ws = freshWs
+			} else {
+				return MergeResult{}, fmt.Errorf("merge base into held branch: %w", err)
 			}
-			return MergeResult{}, fmt.Errorf("merge base into held branch: %w", err)
-		}
-		review, _, err := e.verf.Verify(ctx, engine.Verdict{}, ws, e.cfg.Gates, "")
-		if err != nil {
-			return MergeResult{}, fmt.Errorf("re-verify after approval: %w", err)
-		}
-		if review.Result != "pass" {
-			return MergeResult{}, fmt.Errorf("approved merge refused: re-verify failed (base drift broke the gate)")
+		} else {
+			// Base merged cleanly → re-run the cheap gate to confirm the drift didn't break it.
+			review, _, verr := e.verf.Verify(ctx, engine.Verdict{}, ws, e.cfg.Gates, "")
+			if verr != nil {
+				return MergeResult{}, fmt.Errorf("re-verify after approval: %w", verr)
+			}
+			if review.Result != "pass" {
+				return MergeResult{}, fmt.Errorf("approved merge refused: re-verify failed (base drift broke the gate)")
+			}
 		}
 	}
 
