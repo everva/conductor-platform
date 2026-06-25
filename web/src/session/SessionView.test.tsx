@@ -228,7 +228,8 @@ describe("SessionView", () => {
     expect(
       screen.getAllByText("✍️ Yazılıyor: data-table/bulk-toolbar.tsx").length,
     ).toBeGreaterThanOrEqual(1);
-    // The 3 consecutive develop progress pulses collapse to ONE row with ×3 — no repeated spam.
+    // The whole same-phase develop run collapses to ONE row with ×3 — its right-side detail
+    // updated in place to the newest activity; no repeated-pulse spam.
     expect(screen.getByText("×3")).toBeInTheDocument();
   });
 });

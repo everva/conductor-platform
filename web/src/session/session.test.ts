@@ -179,7 +179,7 @@ describe("stepReplay (N4 arrow-key time-travel)", () => {
 });
 
 describe("buildTimeline — progress grouping (step 7: no repeated-pulse spam)", () => {
-  it("collapses consecutive same-phase progress pulses into one entry with ×N + the latest activity", () => {
+  it("collapses a whole same-phase progress RUN into ONE row (×N) whose detail updates to the latest", () => {
     const t = buildTimeline([
       ev({ kind: "started", phase: "develop", ts: "2026-06-20T10:00:00Z" }),
       ev({ kind: "progress", phase: "develop", ts: "2026-06-20T10:00:20Z", payload: { detail: "📖 Okunuyor: a.ts" } }),
@@ -187,13 +187,13 @@ describe("buildTimeline — progress grouping (step 7: no repeated-pulse spam)",
       ev({ kind: "progress", phase: "develop", ts: "2026-06-20T10:01:00Z", payload: { detail: "✍️ Yazılıyor: c.tsx" } }),
       ev({ kind: "decision", phase: "review", ts: "2026-06-20T10:02:00Z", payload: { result: "pass" } }),
     ]);
-    // started, [3 collapsed progress], decision — 3 rows, not 5.
+    // started, [3 same-phase progress → ONE collapsed row], decision — 3 rows, not 5.
     expect(t).toHaveLength(3);
     expect(t[0]!.label).toBe("Develop · started");
     const grouped = t[1]!;
     expect(grouped.kind).toBe("progress");
     expect(grouped.count).toBe(3);
-    expect(grouped.summary).toBe("✍️ Yazılıyor: c.tsx"); // the LATEST activity
+    expect(grouped.summary).toBe("✍️ Yazılıyor: c.tsx"); // right-side detail updated IN PLACE to the latest
     expect(grouped.ts).toBe("2026-06-20T10:01:00Z"); // advanced to the newest moment (liveness/replay land on "now")
     expect(t[2]!.label).toBe("Review · verdict");
   });

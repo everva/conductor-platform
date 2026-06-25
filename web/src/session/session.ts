@@ -203,11 +203,12 @@ function summarize(e: Event): string {
 }
 
 // buildTimeline maps the task's events (ascending) to readable timeline entries, each with a
-// payload-derived summary for the replay log. A RUN of consecutive progress pulses in the same
-// phase is COLLAPSED into one entry (latest moment + activity + an ×N count) so the timeline reads
-// "Develop · progress  📖 Okunuyor: x.ts  ×12" instead of 12 identical rows — the director asked not
-// to be drowned in repeated pulses, while still seeing it is actively working. Every non-progress
-// event (started/diff/decision/log/merge/…) stays its own entry.
+// payload-derived summary for the replay log. A RUN of consecutive progress pulses in the SAME PHASE
+// is COLLAPSED into ONE entry whose right-side summary UPDATES IN PLACE to the latest activity (+ an
+// ×N count) — so while the phase is "Develop" the director sees a SINGLE "Develop · progress" row with
+// the live detail (📖 Okunuyor / ✍️ Yazılıyor / ⚙️ Çalıştırılıyor) changing on the right, NOT a new
+// row per pulse. Only a PHASE CHANGE (develop→verify→review→develop…) starts a fresh row. Every
+// non-progress event (started/diff/decision/log/merge/…) stays its own entry.
 export function buildTimeline(events: readonly Event[]): TimelineEntry[] {
   const out: TimelineEntry[] = [];
   for (const e of events) {
@@ -220,7 +221,8 @@ export function buildTimeline(events: readonly Event[]): TimelineEntry[] {
       summary: summarize(e),
     };
     // The stable id stays the run's FIRST pulse (steady React key as the group grows); ts + summary
-    // advance to the newest so liveness + replay land on "now".
+    // advance to the newest so the row's right-side detail updates IN PLACE and liveness/replay land
+    // on "now". The whole same-phase run is ONE row — only a phase change breaks it.
     const prev = out[out.length - 1];
     if (prev && prev.kind === "progress" && e.kind === "progress" && prev.phase === e.phase) {
       prev.ts = entry.ts;
