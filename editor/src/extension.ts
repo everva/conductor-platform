@@ -22,6 +22,7 @@
 // no electron, no display. The webview HTML is the pure `webviewHtml`.
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
+import { statSync } from "node:fs";
 import { deriveWsUrl, makeGatewayProbe, normalizeBaseUrl, GATEWAY_TOKEN_KEY } from "./gateway";
 import { ConnectionManager, type ConnectionState, CLAUDE_OAUTH_TOKEN_KEY } from "./connection";
 import { CredentialClient, type CredentialResult } from "./credentialClient";
@@ -368,6 +369,18 @@ export function webviewHtml(opts: WebviewHtmlOptions): string {
 </html>`;
 }
 
+// withVersion appends a cache-busting `?v=<mtime>` to a webview resource URL. The webview serves
+// dist/webview/main.js from a STABLE asWebviewUri, so Electron caches it by URL and a window reload
+// after a rebuild/inject keeps serving the STALE bundle. Keying the query on the file's mtime forces
+// a fresh fetch the instant the bundle changes (and only then). Best-effort: a stat failure → no query.
+function withVersion(url: string, fsPath: string): string {
+  try {
+    return `${url}?v=${Math.floor(statSync(fsPath).mtimeMs)}`;
+  } catch {
+    return url;
+  }
+}
+
 /**
  * Builds a HostBridge over a resolved webview. Injectable so the CommandCenterPanel tests
  * can pass a fake (no real `ws`/fetch) and the production path uses the real wsConnector.
@@ -476,8 +489,10 @@ export class CommandCenterPanel implements vscode.Disposable {
     this.#panel = panel;
 
     const webview = panel.webview;
-    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "main.js")).toString();
-    const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "main.css")).toString();
+    const mainPath = vscode.Uri.joinPath(distRoot, "main.js");
+    const stylePath = vscode.Uri.joinPath(distRoot, "main.css");
+    const scriptUri = withVersion(webview.asWebviewUri(mainPath).toString(), mainPath.fsPath);
+    const styleUri = withVersion(webview.asWebviewUri(stylePath).toString(), stylePath.fsPath);
     webview.html = webviewHtml({
       cspSource: webview.cspSource,
       nonce: makeNonce(),
@@ -709,8 +724,10 @@ export class IntakePanel implements vscode.Disposable {
     this.#panel = panel;
 
     const webview = panel.webview;
-    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "main.js")).toString();
-    const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "main.css")).toString();
+    const mainPath = vscode.Uri.joinPath(distRoot, "main.js");
+    const stylePath = vscode.Uri.joinPath(distRoot, "main.css");
+    const scriptUri = withVersion(webview.asWebviewUri(mainPath).toString(), mainPath.fsPath);
+    const styleUri = withVersion(webview.asWebviewUri(stylePath).toString(), stylePath.fsPath);
     // surface:"intake" → the SAME bundle mounts IntakeChat instead of the cockpit (webview/main.tsx).
     webview.html = webviewHtml({
       cspSource: webview.cspSource,
