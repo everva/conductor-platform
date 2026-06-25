@@ -1,6 +1,7 @@
 package intake
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -90,6 +91,32 @@ func TestParseOutcome_JSONQuestionsAndScenarios(t *testing.T) {
 	}
 	if len(oc2.Scenarios) != 1 || len(oc2.Questions) != 0 {
 		t.Fatalf("want scenarios outcome, got %+v", oc2)
+	}
+}
+
+func TestParseScenarios_DefaultsMissingHoldoutRef(t *testing.T) {
+	// The director flow must not dead-end when the LLM omits hidden_holdout_ref after a
+	// clarifying round: ParseScenarios derives the pg://holdouts/<id> convention default.
+	out := scenariosFenceStart + "\n" +
+		`{"scenarios":[{"id":"A-1","title":"ServiceCompany kaldir","lane":"general","tier":"T2",` +
+		`"deps":[],"acceptance":["migration up/down 'yesil'"]}]}` + "\n" + scenariosFenceEnd
+	sc, err := ParseScenarios([]byte(out))
+	if err != nil {
+		t.Fatalf("ParseScenarios(no ref) error = %v, want defaulted success", err)
+	}
+	if len(sc) != 1 || sc[0].HoldoutRef != "pg://holdouts/A-1" {
+		t.Fatalf("holdout ref not defaulted to pg://holdouts/A-1: %+v", sc)
+	}
+}
+
+func TestParseScenarios_PresentButInvalidRefStillRejected(t *testing.T) {
+	// Defaulting only fills an EMPTY ref; a present-but-repo-relative ref is still rejected
+	// (ADR-0018: the holdout must be repo-external).
+	out := scenariosFenceStart + "\n" +
+		`{"scenarios":[{"id":"A-1","title":"x","lane":"web","tier":"T2",` +
+		`"deps":[],"acceptance":["ok"],"hidden_holdout_ref":"internal/x/holdout_test.go"}]}` + "\n" + scenariosFenceEnd
+	if _, err := ParseScenarios([]byte(out)); err == nil || !errors.Is(err, ErrMalformedScenarios) {
+		t.Fatalf("want ErrMalformedScenarios for repo-relative ref, got %v", err)
 	}
 }
 

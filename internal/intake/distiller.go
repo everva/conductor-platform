@@ -220,6 +220,17 @@ func ParseScenarios(stdout []byte) ([]Scenario, error) {
 		return nil, fmt.Errorf("%w: block has an empty scenarios list", ErrNoScenarios)
 	}
 	for i := range parsed.Scenarios {
+		// Robustness (director flow): the LLM occasionally omits hidden_holdout_ref even
+		// though the prompt requires it, which would reject an otherwise-complete scenario
+		// and dead-end the director after they answered the clarifying questions. The
+		// auto-holdout (Faz-S S4) for a scenario is conventionally addressed
+		// "pg://holdouts/<id>", so DERIVE that default from the id rather than failing.
+		// Only an EMPTY ref is filled (a present-but-invalid ref still fails validation),
+		// and only when the id is non-empty (else the ref would be malformed). This is the
+		// distiller-output path only — file intake uses LoadYAML, which stays strict.
+		if strings.TrimSpace(parsed.Scenarios[i].HoldoutRef) == "" && strings.TrimSpace(parsed.Scenarios[i].ID) != "" {
+			parsed.Scenarios[i].HoldoutRef = "pg://holdouts/" + strings.TrimSpace(parsed.Scenarios[i].ID)
+		}
 		if err := parsed.Scenarios[i].Validate(); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrMalformedScenarios, err)
 		}
