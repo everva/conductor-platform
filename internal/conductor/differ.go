@@ -208,6 +208,31 @@ func (d *GitDiffer) FullPatch(ctx context.Context, project statestore.Project, w
 	return patch, truncated, nil
 }
 
+// ReviewPatch produces a NORMAL unified diff (default hunk context) of base...HEAD for the third-eye
+// reviewer. Unlike FullPatch (--unified=1000000, which embeds each changed file's WHOLE content for
+// the editor's native render), this emits only the changed hunks. That distinction matters: a change
+// touching a few LARGE generated files (i18n JSON, lockfiles) makes FullPatch balloon past
+// maxFullPatchBytes, and the byte cap then TRUNCATES the later-sorting files — so a real source edit
+// (e.g. packages/shared/.../employee.ts, which sorts after apps/.../messages/*.json) drops out of the
+// reviewer's view entirely and the reviewer wrongly reports it "missing from the diff". A normal diff
+// of the same change is dramatically smaller (observed ~35KB vs ~2.4MiB) and keeps EVERY changed file
+// visible. Same three-dot range and byte cap as FullPatch.
+func (d *GitDiffer) ReviewPatch(ctx context.Context, project statestore.Project, ws engine.Workspace) (string, bool, error) {
+	base := project.BaseBranch
+	if base == "" {
+		return "", false, fmt.Errorf("git differ: project %q has no base branch", project.ID)
+	}
+	if _, err := gitOut(ctx, ws.Path, "rev-parse", "--verify", "--quiet", base); err != nil {
+		return "", false, fmt.Errorf("git differ: resolve base %q in %q: %w", base, ws.Path, err)
+	}
+	out, err := gitOut(ctx, ws.Path, "diff", base+"...HEAD")
+	if err != nil {
+		return "", false, fmt.Errorf("git differ: review patch %q...HEAD: %w", base, err)
+	}
+	patch, truncated := capPatch(out, d.maxFullPatchBytes)
+	return patch, truncated, nil
+}
+
 // changedFiles builds the per-file change list for the range by merging numstat
 // (additions/deletions + path; binary files show "-"/"-" -> 0/0) with name-status
 // (the status letter), keyed by path. It caps the list to maxFiles, reporting

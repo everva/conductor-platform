@@ -174,12 +174,16 @@ func NewRealExecutor(cfg ExecutorConfig) (*RealExecutor, error) {
 	)
 	re := &RealExecutor{prov: prov, eng: eng, verf: verf, merger: merger, cfg: cfg, review: runReviewClaude, ws: map[string]engine.Workspace{}, phase: map[string]string{}}
 	// Default the reviewer's diff input to the real GitDiffer (best-effort: a diff error → "").
+	// NORMAL diff (ReviewPatch), NOT the editor's whole-file FullPatch: the latter embeds each
+	// changed file in full, so a few large generated files (i18n JSON) blow past the byte cap and
+	// truncate later-sorting SOURCE files out of the reviewer's view (the reviewer then false-flags a
+	// present change as "missing from the diff" and blocks a correct task).
 	re.patch = func(ctx context.Context, project statestore.Project, ws engine.Workspace) string {
-		full, _, derr := conductor.NewGitDiffer().FullPatch(ctx, project, ws)
+		patch, _, derr := conductor.NewGitDiffer().ReviewPatch(ctx, project, ws)
 		if derr != nil {
 			return ""
 		}
-		return full
+		return patch
 	}
 	return re, nil
 }
@@ -344,6 +348,13 @@ func (e *RealExecutor) Run(ctx context.Context, taskInfo agentclient.TaskInfo, s
 	if err != nil {
 		return RunOutcome{}, fmt.Errorf("verify: %w", err)
 	}
+	if review.Result == "changes-requested" && e.cfg.ReviewEnabled {
+		// The DETERMINISTIC gate REJECTED the change (build/lint/parity). Instead of immediately
+		// blocking, the AGENT re-develops to FIX the gate failure itself (cap MaxGateRounds). A
+		// now-passing gate flows into the third-eye review below; a still-failing gate stays
+		// changes-requested (a held task for the director).
+		review = e.gateCorrectLoop(ctx, project, task, ws, scenario, review)
+	}
 	if review.Result == "pass" && e.cfg.ReviewEnabled {
 		// The DETERMINISTIC gate passed (sole MERGE authority, Rule#9); the STRICT third-eye review
 		// now GATES the auto-merge. Only a CLEAN review keeps Result=="pass"; otherwise the loop
@@ -427,6 +438,78 @@ func (e *RealExecutor) reviewLoop(ctx context.Context, project statestore.Projec
 		Result:   "changes-requested",
 		Summary:  fmt.Sprintf("third-eye review unresolved after %d rounds — needs user", MaxReviewRounds),
 		Findings: rr.Findings,
+	}
+}
+
+// gateCorrectLoop runs the DETERMINISTIC-gate self-correction BEFORE the third-eye review: when the
+// FIRST gate (build/lint/parity) returns changes-requested, the AGENT re-develops to FIX the gate
+// failure itself instead of immediately blocking. It mirrors reviewLoop exactly — only the feedback
+// (the gate's findings, written to .conductor/GATE.md) and the loop authority (the gate, not a
+// reviewer) differ. It is only called when the first verify returned changes-requested and
+// ReviewEnabled.
+//
+// CONTRACT (the only path that yields a pass is a now-clean gate):
+//   - Loop up to MaxGateRounds: write the gate's findings to .conductor/GATE.md, re-develop against
+//     them, re-run the DETERMINISTIC gate. A gate pass → return it (Run then flows into reviewLoop).
+//   - Re-develop verdict-robustness mirrors Run: a re-develop that COMMITTED but emitted a
+//     malformed/absent verdict still proceeds (the gate below is the authority, Rule#9); a
+//     re-develop that produced NO commit is a real failure → changes-requested.
+//   - No-progress guard: compute the FullPatch each round; an IDENTICAL patch means the re-develop
+//     changed nothing → break early (changes-requested, "made no change"), never loop on the same
+//     diff.
+//   - Exhausted without a clean gate → changes-requested ("needs user"): a held task for the
+//     director, never a fabricated pass.
+//
+// The DETERMINISTIC gate remains the sole MERGE authority throughout (Rule#9): this loop never
+// fabricates a pass; it only gives the developer bounded chances to fix what the gate flagged.
+func (e *RealExecutor) gateCorrectLoop(ctx context.Context, project statestore.Project, task statestore.Task, ws engine.Workspace, scenario agentclient.ScenarioInfo, review engine.ReviewResult) engine.ReviewResult {
+	// lastPatch tracks the prior round's full-file diff for the no-progress guard. Seed it with the
+	// rejected attempt's diff so a re-develop that changes NOTHING is caught on the first round.
+	lastPatch := e.patch(ctx, project, ws)
+	lastFindings := review.Findings
+
+	for round := 0; round < MaxGateRounds; round++ {
+		// Hand the gate's findings to the developer as .conductor/GATE.md feedback, then re-develop.
+		if err := writeGateFeedback(ws.Path, review); err != nil {
+			return engine.ReviewResult{Result: "changes-requested", Summary: "write gate feedback failed: " + err.Error(), Findings: review.Findings}
+		}
+		e.setPhase(task.ID, "developing")
+		// Re-develop to fix the gate failure. Verdict-robustness mirrors Run: a re-develop that
+		// COMMITTED but emitted a malformed/absent verdict still proceeds (the gate below is the
+		// authority, Rule#9); a re-develop that produced NO commit is a real failure → changes-requested.
+		if _, derr := e.eng.Develop(ctx, task, ws); derr != nil {
+			if !((errors.Is(derr, engine.ErrMalformedVerdict) || errors.Is(derr, engine.ErrNoVerdict)) && aheadOfBase(ws.Path, project.BaseBranch)) {
+				return engine.ReviewResult{Result: "changes-requested", Summary: "re-develop after gate failure failed: " + derr.Error()}
+			}
+		}
+
+		// Re-run the DETERMINISTIC gate (it STILL rules, Rule#9). A pass → return it so Run flows into
+		// the reviewLoop; a verify ERROR is surfaced as changes-requested with the cause.
+		e.setPhase(task.ID, "verifying")
+		gate, _, gerr := e.verf.Verify(ctx, engine.Verdict{}, ws, e.cfg.Gates, scenario.HoldoutRef)
+		if gerr != nil {
+			return engine.ReviewResult{Result: "changes-requested", Summary: "re-verify after gate failure failed: " + gerr.Error()}
+		}
+		if gate.Result == "pass" {
+			return gate // the gate now passes → Run proceeds to the third-eye review
+		}
+		review = gate
+		lastFindings = gate.Findings
+
+		// No-progress guard: if the re-develop produced NO change, the gate failure is unresolved and
+		// re-verifying the identical diff would loop — hold for the director instead.
+		newPatch := e.patch(ctx, project, ws)
+		if newPatch == lastPatch {
+			return engine.ReviewResult{Result: "changes-requested", Summary: "gate unresolved — developer made no change", Findings: lastFindings}
+		}
+		lastPatch = newPatch
+	}
+
+	// Exhausted the cap without a clean gate: hold for the director (never an auto-pass).
+	return engine.ReviewResult{
+		Result:   "changes-requested",
+		Summary:  fmt.Sprintf("gate failure unresolved after %d self-correction rounds — needs user", MaxGateRounds),
+		Findings: lastFindings,
 	}
 }
 
@@ -570,6 +653,10 @@ func writeTaskBrief(wsPath string, task agentclient.TaskInfo, scenario agentclie
 	b.WriteString("\n## Reviewer feedback — READ FIRST if present\n")
 	b.WriteString("If `.conductor/REVIEW.md` exists, a STRICT third-eye reviewer REQUESTED CHANGES on your previous attempt. ")
 	b.WriteString("Read it FIRST and fix EVERY finding before anything else — the change CANNOT merge until a clean review passes.\n")
+	// The DETERMINISTIC gate (build/lint/parity) writes its failure to .conductor/GATE.md when it
+	// rejects an attempt; on a self-correction re-develop that file is present. Point the performer at
+	// it explicitly so the re-develop actually fixes the build/lint errors the gate flagged.
+	b.WriteString("If `.conductor/GATE.md` exists, the deterministic gate FAILED on a previous attempt — read it and fix EVERY issue first.\n")
 	return os.WriteFile(filepath.Join(dir, "TASK.md"), []byte(b.String()), 0o644)
 }
 

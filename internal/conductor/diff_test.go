@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/everva/conductor-platform/internal/engine"
@@ -507,4 +508,68 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b)
+}
+
+// TestGitDiffer_ReviewPatch_KeepsLateSourceWhereFullPatchTruncates reproduces the exact bug that
+// false-blocked a correct task: the reviewer was fed FullPatch (--unified=1000000, whole-file
+// context), so a LARGE generated file with a TINY change (its whole content embedded) blew past the
+// byte cap and the cap TRUNCATED the later-sorting source file out — the reviewer then reported a
+// present change as "missing from the diff". ReviewPatch (normal hunk diff) stays compact and keeps
+// EVERY changed file visible. The big file (a-big.json) sorts before the source file (z-source.ts),
+// mirroring apps/.../messages/*.json sorting before packages/shared/.../employee.ts.
+func TestGitDiffer_ReviewPatch_KeepsLateSourceWhereFullPatchTruncates(t *testing.T) {
+	ctx := context.Background()
+	clone := t.TempDir()
+	gitT(t, clone, "init", "-q", "-b", "develop")
+	gitT(t, clone, "config", "user.name", "test")
+	gitT(t, clone, "config", "user.email", "test@test")
+
+	// a-big.json: LARGE (sorts first). z-source.ts: small source (sorts last).
+	big := ""
+	for i := 0; i < 200; i++ {
+		big += "  \"key" + itoa(i) + "\": \"a fairly long translation string value to inflate the file\",\n"
+	}
+	writeFileIn(t, clone, "a-big.json", "{\n"+big+"}\n")
+	writeFileIn(t, clone, "z-source.ts", "export const x = 1;\n")
+	gitT(t, clone, "add", ".")
+	gitT(t, clone, "commit", "-q", "-m", "base")
+
+	branch := "conductor/proj-1/T-trunc"
+	gitT(t, clone, "branch", branch)
+	wt := filepath.Join(t.TempDir(), "wt")
+	gitT(t, clone, "worktree", "add", "-q", wt, branch)
+	// A TINY change to the big file + a small change to the source file.
+	writeFileIn(t, wt, "a-big.json", "{\n"+big+"  \"added\": \"one new line\"\n}\n")
+	writeFileIn(t, wt, "z-source.ts", "export const x = 2;\n")
+	gitT(t, wt, "add", "-A")
+	gitT(t, wt, "commit", "-q", "-m", "task changes")
+
+	project := statestore.Project{ID: "proj-1", BaseBranch: "develop"}
+	ws := engine.Workspace{Path: wt, Branch: branch}
+
+	// A small cap so the big file's WHOLE-content FullPatch overflows it (truncating the
+	// later-sorting source file out), while the compact ReviewPatch fits both files.
+	d := NewGitDiffer(WithMaxFullPatchBytes(2000))
+
+	full, fullTrunc, err := d.FullPatch(ctx, project, ws)
+	if err != nil {
+		t.Fatalf("FullPatch: %v", err)
+	}
+	if !fullTrunc {
+		t.Fatalf("precondition: FullPatch should truncate the big whole-file diff at the 2000-byte cap")
+	}
+	if strings.Contains(full, "z-source.ts") {
+		t.Fatalf("precondition: FullPatch should have cut the later-sorting z-source.ts out; it is present")
+	}
+
+	rev, revTrunc, err := d.ReviewPatch(ctx, project, ws)
+	if err != nil {
+		t.Fatalf("ReviewPatch: %v", err)
+	}
+	if revTrunc {
+		t.Fatalf("ReviewPatch of a tiny change must NOT truncate")
+	}
+	if !strings.Contains(rev, "z-source.ts") || !strings.Contains(rev, "a-big.json") {
+		t.Fatalf("ReviewPatch must keep EVERY changed file visible; got:\n%s", rev)
+	}
 }
