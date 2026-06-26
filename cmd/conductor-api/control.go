@@ -575,6 +575,7 @@ func (s *apiServer) handleRetry(w http.ResponseWriter, r *http.Request) {
 	if err := s.updateTask(ctx, taskID, func(t *statestore.Task) {
 		t.Status = "ready"       // blocked→ready (valid registry transition); re-pickable
 		t.AbortRequested = false // clear any stale abort so the re-run is not killed on start
+		t.LastError = ""         // clear the prior block reason — the board shows it retrying clean
 	}); err != nil {
 		s.serverError(w, "retry: update task", err)
 		return

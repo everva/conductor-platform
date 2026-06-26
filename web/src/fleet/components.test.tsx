@@ -131,6 +131,22 @@ describe("TasksView", () => {
     expect(screen.getByText("abort")).toBeInTheDocument();
   });
 
+  it("shows the block reason on a stalled task, hidden otherwise", () => {
+    render(
+      <TasksView
+        selectedProjectId="p"
+        tasks={[
+          task({ id: "t-blocked", status: "blocked", reason: "agent run failed: malformed verdict" }),
+          task({ id: "t-run", status: "running", reason: "should not show" }),
+        ]}
+      />,
+    );
+    // The reason surfaces on the blocked task so the director sees WHY it stalled…
+    expect(screen.getByText("agent run failed: malformed verdict")).toBeInTheDocument();
+    // …but a non-blocked task never shows a (stale) reason.
+    expect(screen.queryByText("should not show")).not.toBeInTheDocument();
+  });
+
   it("prompts to select a project when none is selected", () => {
     render(<TasksView selectedProjectId={null} tasks={undefined} />);
     expect(screen.getByText(/select a project/i)).toBeInTheDocument();

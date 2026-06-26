@@ -224,6 +224,9 @@ type taskDTO struct {
 	RetryCount     int      `json:"retry_count"`
 	AbortRequested bool     `json:"abort_requested"`
 	Approved       bool     `json:"approved"`
+	// Reason is the task's LastError — WHY it last went non-pass (blocked / needs-user). Empty
+	// for healthy tasks; the board renders it on a stalled card so the director sees the cause.
+	Reason string `json:"reason"`
 }
 
 type taskDiffDTO struct {

@@ -31,17 +31,19 @@ const HOSTS = [
   { id: "host-mac", capabilities: ["macos", "ios-build", "maestro"], heartbeat_age_seconds: 3 },
 ];
 
-function task(id: string, project_id: string, status: string) {
+function task(id: string, project_id: string, status: string, reason = "") {
   return {
     id, project_id, lane: project_id === "ios-app" ? "ios" : "web", tier: "T2",
     status, requires: [], deps: [], branch: "", scenario_id: id,
-    retry_count: 0, abort_requested: false, approved: false,
+    retry_count: 0, abort_requested: false, approved: false, reason,
   };
 }
 
+const BLOCK_REASON = "agent run failed: engine: malformed verdict: no result-keyed JSON object in output";
+
 const TASKS_BY_PROJECT: Record<string, ReturnType<typeof task>[]> = {
   "web-shop": [task("W-ready", "web-shop", "ready"), task("W-run", "web-shop", "running"), task("W-done", "web-shop", "done")],
-  "ios-app": [task("I-await", "ios-app", "awaiting-approval"), task("I-block", "ios-app", "blocked")],
+  "ios-app": [task("I-await", "ios-app", "awaiting-approval"), task("I-block", "ios-app", "blocked", BLOCK_REASON)],
 };
 
 function json(body: unknown) {
@@ -79,6 +81,10 @@ test("board is the default surface and buckets tasks into the four lifecycle col
   await expect(column(page, "Needs Review").getByText("I-await")).toBeVisible();
   await expect(column(page, "Needs Review").getByText("I-block")).toBeVisible();
   await expect(column(page, "Done").getByText("W-done")).toBeVisible();
+
+  // A blocked card explains WHY it stalled (the agent's report summary), right on the board —
+  // the director no longer has to dig through agent logs to learn the cause.
+  await expect(column(page, "Needs Review").getByText(/malformed verdict/)).toBeVisible();
 
   // The leased task shows the host actually running it.
   await expect(column(page, "Running").getByText(/host-linux/)).toBeVisible();

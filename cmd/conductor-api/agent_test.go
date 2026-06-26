@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/everva/conductor-platform/internal/events"
@@ -351,6 +352,42 @@ func TestAgentResult_Blocked(t *testing.T) {
 	task, _ := store.GetTask(context.Background(), "T-1")
 	if task.Status != "blocked" {
 		t.Fatalf("task status = %q, want blocked (never fake-green)", task.Status)
+	}
+	// The block reason is persisted on the task so the board explains WHY it stalled.
+	if task.LastError != "tests failed" {
+		t.Fatalf("task LastError = %q, want the report summary %q", task.LastError, "tests failed")
+	}
+	// …and surfaces through the director-facing /tasks DTO as `reason`.
+	list := do(t, s, http.MethodGet, "/projects/p/tasks", bearer())
+	if !strings.Contains(list.Body.String(), `"reason":"tests failed"`) {
+		t.Fatalf("/tasks DTO missing reason; body=%s", list.Body.String())
+	}
+	// Retry clears the reason so the board shows the task retrying clean.
+	if rec := do(t, s, http.MethodPost, "/projects/p/tasks/T-1/retry", bearer()); rec.Code != http.StatusOK {
+		t.Fatalf("retry status=%d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if got, _ := store.GetTask(context.Background(), "T-1"); got.Status != "ready" || got.LastError != "" {
+		t.Fatalf("after retry: status=%q lastError=%q; want ready + cleared", got.Status, got.LastError)
+	}
+}
+
+// TestAgentLease_ClearsStaleLastError proves a fresh claim (lease → running) wipes a stale block
+// reason from a prior attempt, so the board never shows a running task next to an old failure.
+func TestAgentLease_ClearsStaleLastError(t *testing.T) {
+	s, store := agentServer(t)
+	ctx := context.Background()
+	seedProject(t, store, "p")
+	seedTodoTask(t, store, "p", "T-1", nil)
+	tk, _ := store.GetTask(ctx, "T-1")
+	tk.LastError = "prior block reason"
+	if err := store.UpdateTask(ctx, tk); err != nil {
+		t.Fatalf("stamp stale reason: %v", err)
+	}
+	if rec := doBody(t, s, http.MethodPost, "/projects/p/agent/lease", bearer(), `{"host_id":"davinci","capabilities":["backend"]}`); rec.Code != http.StatusOK {
+		t.Fatalf("lease status=%d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if got, _ := store.GetTask(ctx, "T-1"); got.Status != "running" || got.LastError != "" {
+		t.Fatalf("after fresh claim: status=%q lastError=%q; want running + cleared", got.Status, got.LastError)
 	}
 }
 

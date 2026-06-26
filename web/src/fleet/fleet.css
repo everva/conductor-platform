@@ -192,6 +192,21 @@ table.fleet-table {
   color: var(--text-3);
 }
 
+/* The block reason on a stalled task: a compact, danger-tinted line under the "blocked"
+   status so the director sees WHY it stopped. Truncated with an ellipsis; the full reason
+   shows on hover via the element's title attribute. */
+.task-reason {
+  margin-top: 0.2rem;
+  max-width: 24rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--danger-text);
+  font-size: var(--text-2xs);
+  font-family: var(--font-mono);
+  cursor: help;
+}
+
 /* --- chips + badges --- */
 .chip {
   display: inline-block;

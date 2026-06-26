@@ -364,10 +364,15 @@ func confTaskCRUD(t *testing.T, s StateStore) {
 	if got.Approved {
 		t.Fatalf("fresh task must default Approved=false, got %+v", got)
 	}
+	// A freshly created task defaults to an empty LastError (00012 additive column).
+	if got.LastError != "" {
+		t.Fatalf("fresh task must default LastError=\"\", got %q", got.LastError)
+	}
 	got.Status = "done"
 	got.RetryCount = 2
-	got.AbortRequested = true // F-2: round-trip the additive abort signal.
-	got.Approved = true       // Faz-1.5-b: round-trip the additive approval signal.
+	got.AbortRequested = true                             // F-2: round-trip the additive abort signal.
+	got.Approved = true                                   // Faz-1.5-b: round-trip the additive approval signal.
+	got.LastError = "agent run failed: malformed verdict" // 00012: round-trip the additive block reason.
 	if err := s.UpdateTask(ctx, got); err != nil {
 		t.Fatalf("UpdateTask: %v", err)
 	}
@@ -377,6 +382,9 @@ func confTaskCRUD(t *testing.T, s StateStore) {
 	}
 	if reread.Status != "done" || reread.RetryCount != 2 || !reread.AbortRequested || !reread.Approved {
 		t.Fatalf("after update = %+v, want status=done retry=2 abort=true approved=true", reread)
+	}
+	if reread.LastError != "agent run failed: malformed verdict" {
+		t.Fatalf("LastError round-trip = %q, want the persisted block reason", reread.LastError)
 	}
 	list, err := s.ListTasks(ctx, "p1")
 	if err != nil || len(list) != 1 || list[0].Status != "done" {

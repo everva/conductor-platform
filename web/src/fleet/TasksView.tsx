@@ -84,6 +84,11 @@ export function TasksView({ selectedProjectId, tasks, controls }: TasksViewProps
                       ) : (
                         t.status || <span className="muted">—</span>
                       )}
+                      {t.status === "blocked" && t.reason ? (
+                        <div className="task-reason" title={t.reason}>
+                          {t.reason}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="mono">
                       {t.deps.length === 0 ? (

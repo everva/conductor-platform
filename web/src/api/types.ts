@@ -31,6 +31,10 @@ export interface Task {
   retry_count: number;
   abort_requested: boolean;
   approved: boolean;
+  // reason is the task's LastError — WHY it last went non-pass (blocked / needs-user).
+  // Empty for healthy tasks; the board renders it on a stalled card so the director sees
+  // the cause instead of a bare "blocked". Optional: older gateways omit it.
+  reason?: string;
 }
 
 // Host mirrors hostDTO. last_heartbeat is omitted by the server when zero

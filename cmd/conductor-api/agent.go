@@ -75,6 +75,7 @@ func toTaskDTO(t statestore.Task) taskDTO {
 		RetryCount:     t.RetryCount,
 		AbortRequested: t.AbortRequested,
 		Approved:       t.Approved,
+		Reason:         t.LastError,
 	}
 }
 
@@ -152,11 +153,14 @@ func (s *apiServer) handleAgentLease(w http.ResponseWriter, r *http.Request) {
 	// terminal verdict reverts it (see handleAgentReleaseLease). Best-effort: if this write
 	// fails the lease is still held and the reaper will free it, so log + still return the
 	// task rather than fabricating a 500 the agent can't act on.
-	if err := s.updateTask(ctx, task.ID, func(t *statestore.Task) { t.Status = registry.StatusRunning }); err != nil {
+	// A fresh attempt clears any stale LastError from a prior block, so the board shows the task
+	// running clean rather than "running" next to a now-irrelevant failure reason.
+	if err := s.updateTask(ctx, task.ID, func(t *statestore.Task) { t.Status = registry.StatusRunning; t.LastError = "" }); err != nil {
 		s.serverError(w, "agent lease: mark task running", err)
 		return
 	}
 	task.Status = registry.StatusRunning
+	task.LastError = ""
 
 	writeJSON(w, http.StatusOK, agentLeaseResponse{
 		Task:  toTaskDTO(task),
@@ -440,8 +444,11 @@ func (s *apiServer) handleAgentResult(w http.ResponseWriter, r *http.Request) {
 		map[string]any{"result": result, "summary": req.Summary, "checks": checks})
 
 	if result != "pass" {
-		// Never fake-green: a failed gate blocks the task (re-runnable), never done.
-		if err := s.updateTask(ctx, taskID, func(t *statestore.Task) { t.Status = "blocked" }); err != nil {
+		// Never fake-green: a failed gate blocks the task (re-runnable), never done. Persist the
+		// agent's Summary as the task's LastError so the director's board explains WHY it stalled
+		// ("…malformed verdict…", "gate unresolved — needs user") instead of a bare "blocked".
+		reason := strings.TrimSpace(req.Summary)
+		if err := s.updateTask(ctx, taskID, func(t *statestore.Task) { t.Status = "blocked"; t.LastError = reason }); err != nil {
 			s.serverError(w, "agent result: mark blocked", err)
 			return
 		}

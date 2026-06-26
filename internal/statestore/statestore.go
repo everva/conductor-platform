@@ -91,6 +91,14 @@ type Task struct {
 	// defaults to false and is an ADDITIVE field on the otherwise-frozen contract
 	// (ADR-0021: additive growth, no signature break).
 	Approved bool
+	// LastError is the human-readable reason the task last went non-pass — the agent's
+	// report Summary (e.g. "agent run failed: …malformed verdict…", "gate unresolved after
+	// N rounds — needs user", "holdout: no holdout command configured"). The director's board
+	// surfaces it so a stalled job explains itself instead of showing a bare "blocked". The
+	// gateway sets it when it records a non-pass result and CLEARS it when the task starts a
+	// fresh attempt (claim→running) or is retried. Additive on the otherwise-frozen contract
+	// (ADR-0021); defaults to "".
+	LastError string
 }
 
 // Lease is the repo-scoped, host-spanning exclusivity record enforcing

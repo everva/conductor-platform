@@ -349,6 +349,13 @@ function BoardCardView({
         )}
         {card.livePhase && <span className="cc-phase">{card.livePhase}</span>}
       </div>
+      {blocked && t.reason && (
+        // WHY this card stalled — the agent's report summary (e.g. "…malformed verdict…",
+        // "gate unresolved — needs user"). Truncated; full text on hover via title.
+        <div className="cc-card-reason" title={t.reason}>
+          {t.reason}
+        </div>
+      )}
       {card.diff && (
         <div className="cc-card-diff">
           <span className="cc-add">+{card.diff.additions}</span>{" "}
