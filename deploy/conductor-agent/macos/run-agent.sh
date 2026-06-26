@@ -9,4 +9,5 @@ set -a; . "$HOME/conductor-agent/conductor-agent.env"; set +a
 exec "$HOME/conductor-agent/conductor-agent" \
   -gateway "$CONDUCTOR_GATEWAY" -project "$CONDUCTOR_PROJECT" -repo "$CONDUCTOR_REPO" \
   -base "$CONDUCTOR_BASE" -recipe-dir "$CONDUCTOR_RECIPE_DIR" -root "$CONDUCTOR_ROOT" \
-  -capabilities "$CONDUCTOR_CAPABILITIES" -host-id "${CONDUCTOR_HOST_ID:-$(hostname -s)}"
+  -capabilities "$CONDUCTOR_CAPABILITIES" -host-id "${CONDUCTOR_HOST_ID:-$(hostname -s)}" \
+  -timeout 6h

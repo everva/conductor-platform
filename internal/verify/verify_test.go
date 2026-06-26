@@ -127,6 +127,28 @@ func TestVerifier_HoldoutFail_ChangesRequested(t *testing.T) {
 	}
 }
 
+// TestVerifier_NoHoldoutRunner_SkipsHoldout: a scenario carries a stored holdout (the distiller
+// auto-generates one, Faz-S S4) but NO runner is configured. The holdout would FAIL if run (exit 1)
+// — proving it is SKIPPED, not run: the result is pass purely on the public gates, with no holdout
+// finding. Without this, every auto-holdout job would hard-block on the missing runner (the A-1 hit).
+func TestVerifier_NoHoldoutRunner_SkipsHoldout(t *testing.T) {
+	ctx := context.Background()
+	ws := engine.Workspace{Path: seedRepoWorktree(t), Branch: "develop"}
+	store := fakeHoldoutStore{name: "secret", relPath: "h_test.sh", content: []byte("exit 1\n")}
+	v := New(store, Config{}) // HoldoutCmd empty → no runner
+
+	res, _, err := v.Verify(ctx, engine.Verdict{Result: "pass"}, ws, []Gate{passingGate("build")}, "scn-1")
+	if err != nil {
+		t.Fatalf("Verify must not error when no holdout runner is configured: %v", err)
+	}
+	if res.Result != "pass" {
+		t.Fatalf("no runner → holdout skipped → pass on public gates, got %+v", res)
+	}
+	if len(res.Findings) != 0 {
+		t.Fatalf("a skipped holdout must contribute no findings, got %+v", res.Findings)
+	}
+}
+
 func TestVerifier_IgnoresSelfReportedVerdict(t *testing.T) {
 	ctx := context.Background()
 	ws := engine.Workspace{Path: seedRepoWorktree(t), Branch: "develop"}

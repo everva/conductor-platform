@@ -80,10 +80,12 @@ func (f *fakeGateway) Heartbeat(_ context.Context, _ string) error     { return 
 
 // fakeExecutor scripts the local develop/verify/merge for Runner tests.
 type fakeExecutor struct {
-	out      RunOutcome
-	runErr   error
-	mergeSHA string
-	mergeErr error
+	out        RunOutcome
+	runErr     error
+	mergeSHA   string
+	mergeBase  string
+	mergePatch string
+	mergeErr   error
 
 	// recorded
 	mergeApproved bool
@@ -96,10 +98,10 @@ func (f *fakeExecutor) Run(_ context.Context, _ agentclient.TaskInfo, _ agentcli
 	f.runs++
 	return f.out, f.runErr
 }
-func (f *fakeExecutor) Merge(_ context.Context, _ agentclient.TaskInfo, _ string, approved bool) (string, error) {
+func (f *fakeExecutor) Merge(_ context.Context, _ agentclient.TaskInfo, _ agentclient.ScenarioInfo, _ string, approved bool) (MergeResult, error) {
 	f.merges++
 	f.mergeApproved = approved
-	return f.mergeSHA, f.mergeErr
+	return MergeResult{SHA: f.mergeSHA, Base: f.mergeBase, Branch: "b", Patch: f.mergePatch}, f.mergeErr
 }
 func (f *fakeExecutor) Cleanup(_ context.Context, _ agentclient.TaskInfo) { f.cleaned = true }
 
@@ -131,6 +133,20 @@ func TestRunOnce_AutoMerge(t *testing.T) {
 	}
 	if gw.mergedSHA != "9f2c1ab" || !gw.released || !ex.cleaned {
 		t.Fatalf("merged sha/release/cleanup not recorded: %+v cleaned=%v", gw, ex.cleaned)
+	}
+}
+
+func TestRunOnce_StoresDiffOnMerge(t *testing.T) {
+	// The MERGE path itself persists the full diff (from the verified worktree) — so held→approved→
+	// merge and re-verify tasks get a TaskDiff even when the once-per-Run early emit produced none
+	// (out.Diff == nil here). This closes the gap that 404'd the big multi-file tasks.
+	gw := &fakeGateway{leaseTask: leased(), resultDecision: "merge"}
+	ex := &fakeExecutor{out: RunOutcome{Result: "pass", Branch: "conductor/p/T-1"}, mergeSHA: "s", mergeBase: "develop", mergePatch: "merge-time whole-file patch"}
+	if _, err := newRunner(gw, ex).RunOnce(context.Background()); err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if gw.storedDiff == nil || gw.storedDiff.Patch != "merge-time whole-file patch" || gw.storedDiff.Base != "develop" {
+		t.Fatalf("merge-path full diff not stored: %+v", gw.storedDiff)
 	}
 }
 
@@ -248,7 +264,9 @@ func (p *progressExecutor) Run(ctx context.Context, t agentclient.TaskInfo, s ag
 	return p.fakeExecutor.Run(ctx, t, s)
 }
 
-func (p *progressExecutor) Progress(_ string) (string, int) { return "developing", 3 }
+func (p *progressExecutor) Progress(_ string) (string, int, string) {
+	return "developing", 3, "📖 Okunuyor: apps/web/x.ts"
+}
 
 // TestRunOnce_EmitsProgressPulse proves the runner emits a live progress pulse (kind=="progress"
 // with the executor's phase) DURING Run, feeding the editor's "Now" view.

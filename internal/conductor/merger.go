@@ -143,6 +143,21 @@ func (m *GitMerger) SquashMerge(ctx context.Context, project statestore.Project,
 		return "", fmt.Errorf("git merger: checkout base %q: %w", project.BaseBranch, err)
 	}
 
+	// Refresh the base to the CURRENT remote tip BEFORE recording it + squashing, so the merge lands
+	// ON origin's latest and the push is a fast-forward. Without this, a concurrent merge that advanced
+	// origin between a task's provision and its merge — common for a HELD task that waited for approval
+	// — leaves the local base stale; the work then merges locally but the push is REJECTED as a
+	// non-fast-forward and never reaches the remote. Push-only (the local-only model has no remote to
+	// race) + best-effort fetch (a fetch failure falls through to the prior local-ref behavior); the
+	// hard reset to the fetched tip discards only never-pushed local merge attempts on the base.
+	if m.push.Enabled {
+		if err := git(ctx, repo, "fetch", "--prune", m.push.Remote, project.BaseBranch); err == nil {
+			if err := git(ctx, repo, "reset", "--hard", m.push.Remote+"/"+project.BaseBranch); err != nil {
+				return "", fmt.Errorf("git merger: reset base %q to %s tip: %w", project.BaseBranch, m.push.Remote, err)
+			}
+		}
+	}
+
 	// Record the base tip BEFORE touching the working tree. On ANY failure after
 	// this checkout (a squash conflict, a failed commit, ...) the base checkout must
 	// be restored to THIS exact commit with a clean worktree+index so the next tick
