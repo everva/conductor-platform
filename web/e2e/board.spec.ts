@@ -118,6 +118,35 @@ test("a blocked card offers Retry (re-run from the board) and a running card off
   await expect.poll(() => retryHit).toContain("/tasks/I-block/retry");
 });
 
+test("a developing card surfaces the rich live activity pushed over the stream", async ({ page }) => {
+  // Push one develop progress pulse carrying claude's real activity line (the agent streams
+  // 📖/🔎/🤔 from its transcript) — the board must render it verbatim so the director watches it work.
+  await page.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+    ws.send(
+      JSON.stringify({
+        id: "e1", ts: "2026-06-20T00:00:30Z", project: "web-shop", task: "W-run",
+        phase: "develop", kind: "progress",
+        payload: { step: "developing", detail: "🔎 Aranıyor: serviceCompany" },
+      }),
+    );
+  });
+  await page.route("**/status", (r) => r.fulfill(json(STATUS)));
+  await page.route("**/hosts", (r) => r.fulfill(json(HOSTS)));
+  await page.route("**/projects", (r) => r.fulfill(json(PROJECTS)));
+  await page.route("**/projects/*/tasks", (r) => {
+    const pid = r.request().url().match(/\/projects\/([^/]+)\/tasks/)?.[1] ?? "";
+    return r.fulfill(json(TASKS_BY_PROJECT[pid] ?? []));
+  });
+  await page.route("**/projects/*/scenarios", (r) => r.fulfill(json([])));
+  await page.route("**/events*", (r) => r.fulfill(json([])));
+  await page.goto("/");
+  await page.getByLabel(/api token/i).fill("test-token");
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page.getByRole("region", { name: /command center/i })).toBeVisible();
+  await expect(column(page, "Running").getByText(/Aranıyor: serviceCompany/)).toBeVisible();
+  await page.screenshot({ path: "test-results/live-activity.png", fullPage: true });
+});
+
 test("awaiting-approval card exposes Approve; a card click drills into its session", async ({ page }) => {
   await signInToBoard(page);
 

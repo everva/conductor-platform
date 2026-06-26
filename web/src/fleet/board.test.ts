@@ -120,6 +120,30 @@ describe("buildBoard enrichment", () => {
     expect(board.columns.running[0]?.livePhase).toBe("verifying");
   });
 
+  it("surfaces the rich live activity from the latest progress pulse's payload.detail", () => {
+    const tasks = { p: [task({ id: "T-1", project_id: "p", status: "running" })] };
+    const events: Event[] = [
+      ev({ task: "T-1", phase: "develop", kind: "started", ts: "2026-06-20T10:00:00Z" }),
+      ev({
+        task: "T-1",
+        phase: "develop",
+        kind: "progress",
+        ts: "2026-06-20T10:00:30Z",
+        payload: { step: "developing", detail: "📖 Okunuyor: optiway/src/app.ts" },
+      }),
+    ];
+    const board = buildBoard(tasks, {}, events);
+    expect(board.columns.running[0]?.liveActivity).toBe("📖 Okunuyor: optiway/src/app.ts");
+  });
+
+  it("leaves liveActivity null when the latest event carries no detail", () => {
+    const tasks = { p: [task({ id: "T-1", project_id: "p", status: "running" })] };
+    const board = buildBoard(tasks, {}, [
+      ev({ task: "T-1", phase: "develop", kind: "started" }),
+    ]);
+    expect(board.columns.running[0]?.liveActivity).toBeNull();
+  });
+
   it("sums per-file additions/deletions from the latest KindDiff event", () => {
     const tasks = { p: [task({ id: "T-1", project_id: "p", status: "awaiting-approval" })] };
     const events: Event[] = [

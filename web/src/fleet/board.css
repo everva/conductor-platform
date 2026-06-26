@@ -249,6 +249,24 @@
   color: var(--violet-400);
 }
 
+/* The rich live activity line (📖/🔎/🤔 — what claude is doing right now). Takes the card's full
+   meta width and truncates so a long path never blows out the card; full text on hover (title). */
+.cc-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1 1 100%;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.cc-activity-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cc-card-diff {
   font-size: var(--text-xs);
   display: inline-flex;

@@ -385,7 +385,14 @@ function BoardCardView({
             <StatusDot tone="success" pulse /> {card.host}
           </span>
         )}
-        {card.livePhase && <span className="cc-phase">{card.livePhase}</span>}
+        {card.liveActivity ? (
+          <span className="cc-activity" title={card.liveActivity}>
+            <StatusDot tone="info" pulse />
+            <span className="cc-activity-text">{card.liveActivity}</span>
+          </span>
+        ) : card.livePhase ? (
+          <span className="cc-phase">{card.livePhase}</span>
+        ) : null}
       </div>
       {blocked && t.reason && (
         // WHY this card stalled — the agent's report summary (e.g. "…malformed verdict…",

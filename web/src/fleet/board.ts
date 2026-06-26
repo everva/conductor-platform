@@ -34,11 +34,14 @@ export interface BoardDiff {
 
 // BoardCard is one task enriched for the board. `host` is the lease holder (the
 // live "where it runs" signal); `livePhase` is a present-tense activity label
-// ("developing"/"verifying"/…) or null; `diff` is the latest diff size or null.
+// ("developing"/"verifying"/…) or null; `liveActivity` is the RICH line the performer
+// surfaced (📖/✍️/🔎/🤔 — what claude is doing right now, from the latest progress pulse's
+// payload.detail) or null; `diff` is the latest diff size or null.
 export interface BoardCard {
   task: Task;
   host: string | null;
   livePhase: string | null;
+  liveActivity: string | null;
   diff: BoardDiff | null;
 }
 
@@ -213,10 +216,17 @@ export function buildBoard(
     }
     const ev = lastEvent.get(task.id);
     const diffEv = lastDiff.get(task.id);
+    // The rich activity line rides on the latest progress pulse's payload.detail (the agent
+    // streams claude's 📖/🔎/🤔 from its transcript every ~20s). Surface it verbatim when present.
+    const detail =
+      ev && typeof ev.payload.detail === "string" && ev.payload.detail !== ""
+        ? ev.payload.detail
+        : null;
     columns[col].push({
       task,
       host,
       livePhase: ev ? phaseLabel(ev.phase) : null,
+      liveActivity: detail,
       diff: diffEv ? parseDiff(diffEv) : null,
     });
   }

@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommandCenter } from "./CommandCenter.tsx";
-import type { Host, Lease, Project, Task } from "../api/types.ts";
+import type { Event, Host, Lease, Project, Task } from "../api/types.ts";
 import type { FleetControls } from "./useFleetControls.ts";
 
 function task(p: Partial<Task> & Pick<Task, "id" | "project_id" | "status">): Task {
@@ -104,6 +104,29 @@ describe("CommandCenter board", () => {
     expect(onOpenSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: "T-h", project_id: "p" }),
     );
+  });
+
+  it("shows the rich live activity (📖/🔎) on a developing card", () => {
+    render(
+      <CommandCenter
+        tasksByProject={{ p: [task({ id: "T-1", project_id: "p", status: "running" })] }}
+        leasesByProject={{}}
+        hosts={[]}
+        recentEvents={[
+          {
+            id: "e1",
+            ts: "2026-06-20T00:00:00Z",
+            project: "p",
+            task: "T-1",
+            phase: "develop",
+            kind: "progress",
+            payload: { step: "developing", detail: "📖 Okunuyor: app.ts" },
+          } as unknown as Event,
+        ]}
+      />,
+    );
+    // The board surfaces claude's real activity line verbatim — the director watches it work.
+    expect(screen.getByText("📖 Okunuyor: app.ts")).toBeInTheDocument();
   });
 
   it("multi-selects held cards and bulk-approves the exact selection (E4)", async () => {
