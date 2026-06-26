@@ -11,12 +11,12 @@
 // E2 replaces this with a full session view). Awaiting-approval cards get the same
 // confirm-gated Approve the TasksView uses; blocked cards offer Review.
 import { useEffect, useMemo, useState } from "react";
-import type { Event, Host, Lease, Task } from "../api/types.ts";
+import type { Event, Host, Lease, Project, Task } from "../api/types.ts";
 import { buildBoard, BOARD_COLUMNS } from "./board.ts";
 import type { BoardCard } from "./board.ts";
 import { isAwaitingApproval } from "./controls.ts";
 import type { FleetControls } from "./useFleetControls.ts";
-import { Plus, ChevronRight, CircleDashed } from "lucide-react";
+import { Plus, ChevronRight, CircleDashed, Pause, Play } from "lucide-react";
 import { Badge, Button, Card, Chip, Skeleton, StatusDot, Tooltip } from "../ui/index.ts";
 import type { CardAccent } from "../ui/index.ts";
 import "./board.css";
@@ -41,6 +41,9 @@ export interface CommandCenterProps {
   tasksByProject: Record<string, Task[]>;
   leasesByProject: Record<string, Lease[]>;
   hosts: Host[];
+  // projects carries each project's paused flag so a scoped board can offer Pause/Resume for
+  // it. Optional: when omitted (or the scoped project is absent) the pause control is hidden.
+  projects?: Project[];
   recentEvents: readonly Event[];
   // controls is the action layer; when omitted the board is read-only (no Approve).
   controls?: FleetControls;
@@ -63,6 +66,7 @@ export function CommandCenter({
   tasksByProject,
   leasesByProject,
   hosts,
+  projects,
   recentEvents,
   controls,
   onOpenSession,
@@ -152,6 +156,13 @@ export function CommandCenter({
     return items;
   }, [scopedTasks, selected]);
 
+  // The scoped project (when the board is narrowed to one) drives the Pause/Resume control in
+  // the scope chip — so the director can halt or resume the whole pipeline from the board.
+  const scopedProject =
+    selectedProjectId != null && projects
+      ? projects.find((p) => p.id === selectedProjectId)
+      : undefined;
+
   return (
     <section className="cc" aria-label="Command Center">
       <div className="cc-strip">
@@ -160,6 +171,29 @@ export function CommandCenter({
             <Chip className="cc-scope-pill">
               <CircleDashed size={12} strokeWidth={2.2} aria-hidden="true" /> {selectedProjectId}
             </Chip>
+            {controls && scopedProject && (
+              controls.isPaused(scopedProject.id, scopedProject.paused) ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  leftIcon={<Play size={13} strokeWidth={2.2} />}
+                  disabled={controls.isProjectBusy(scopedProject.id)}
+                  onClick={() => controls.resume(scopedProject.id)}
+                >
+                  {controls.projectAction(scopedProject.id) === "resume" ? "Resuming…" : "Resume"}
+                </Button>
+              ) : (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  leftIcon={<Pause size={13} strokeWidth={2.2} />}
+                  disabled={controls.isProjectBusy(scopedProject.id)}
+                  onClick={() => controls.pause(scopedProject.id)}
+                >
+                  {controls.projectAction(scopedProject.id) === "pause" ? "Pausing…" : "Pause"}
+                </Button>
+              )
+            )}
             {onShowAllProjects && (
               <button type="button" className="cc-scope-clear" onClick={onShowAllProjects}>
                 Show all

@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommandCenter } from "./CommandCenter.tsx";
-import type { Host, Lease, Task } from "../api/types.ts";
+import type { Host, Lease, Project, Task } from "../api/types.ts";
 import type { FleetControls } from "./useFleetControls.ts";
 
 function task(p: Partial<Task> & Pick<Task, "id" | "project_id" | "status">): Task {
@@ -206,5 +206,65 @@ describe("CommandCenter board", () => {
     expect(screen.getByRole("region", { name: "Bulk actions" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Clear" }));
     expect(screen.queryByRole("region", { name: "Bulk actions" })).not.toBeInTheDocument();
+  });
+});
+
+describe("CommandCenter — scoped project Pause / Resume", () => {
+  function pauseControls(over: Partial<Record<string, unknown>>): FleetControls {
+    return {
+      isTaskBusy: () => false,
+      isProjectBusy: () => false,
+      projectAction: () => null,
+      isPaused: (_id: string, stored: boolean) => stored,
+      pause: vi.fn(),
+      resume: vi.fn(),
+      retry: vi.fn(),
+      requestApprove: vi.fn(),
+      ...over,
+    } as unknown as FleetControls;
+  }
+
+  function renderScoped(controls: FleetControls, paused: boolean) {
+    render(
+      <CommandCenter
+        tasksByProject={{ p: [task({ id: "T-1", project_id: "p", status: "running" })] }}
+        leasesByProject={{}}
+        hosts={[]}
+        projects={[{ id: "p", paused } as Project]}
+        recentEvents={[]}
+        controls={controls}
+        selectedProjectId="p"
+      />,
+    );
+  }
+
+  it("offers Pause for a scoped, running project and calls pause", async () => {
+    const user = userEvent.setup();
+    const pause = vi.fn();
+    renderScoped(pauseControls({ pause }), false);
+    await user.click(screen.getByRole("button", { name: /^pause$/i }));
+    expect(pause).toHaveBeenCalledWith("p");
+  });
+
+  it("offers Resume for a scoped, paused project and calls resume", async () => {
+    const user = userEvent.setup();
+    const resume = vi.fn();
+    renderScoped(pauseControls({ isPaused: () => true, resume }), true);
+    await user.click(screen.getByRole("button", { name: /^resume$/i }));
+    expect(resume).toHaveBeenCalledWith("p");
+  });
+
+  it("shows no pause control across the whole fleet (no scoped project)", () => {
+    render(
+      <CommandCenter
+        tasksByProject={{ p: [task({ id: "T-1", project_id: "p", status: "running" })] }}
+        leasesByProject={{}}
+        hosts={[]}
+        projects={[{ id: "p", paused: false } as Project]}
+        recentEvents={[]}
+        controls={pauseControls({})}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /^pause$/i })).not.toBeInTheDocument();
   });
 });

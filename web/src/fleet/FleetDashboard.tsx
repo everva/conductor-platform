@@ -298,6 +298,7 @@ export function FleetDashboard({
           tasksByProject={fleet.tasksByProject}
           leasesByProject={fleet.leasesByProject}
           hosts={fleet.hosts}
+          projects={fleet.projects}
           recentEvents={fleet.recentEvents}
           controls={controls}
           onOpenSession={setSelectedTask}
