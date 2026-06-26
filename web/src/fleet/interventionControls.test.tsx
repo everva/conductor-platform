@@ -74,6 +74,7 @@ interface FakeClient extends ControlClient {
   resume: ReturnType<typeof vi.fn>;
   abort: ReturnType<typeof vi.fn>;
   approve: ReturnType<typeof vi.fn>;
+  retry: ReturnType<typeof vi.fn>;
 }
 
 function makeFake(over?: Partial<Record<keyof ControlClient, unknown>>): FakeClient {
@@ -84,6 +85,11 @@ function makeFake(over?: Partial<Record<keyof ControlClient, unknown>>): FakeCli
     approve: vi.fn(async (id: string, taskId?: string) => ({
       project: id,
       approved_task: taskId ?? "t1",
+    })),
+    retry: vi.fn(async (id: string, taskId: string) => ({
+      project: id,
+      task: taskId,
+      status: "ready",
     })),
     ...over,
   } as FakeClient;
@@ -301,6 +307,58 @@ describe("Abort", () => {
     await user.click(screen.getByRole("button", { name: /^cancel$/i }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(client.abort).not.toHaveBeenCalled();
+  });
+});
+
+describe("Retry / Stop (board task actions)", () => {
+  it("Retry on a blocked task is direct (no confirm), refreshes, and notices on success", async () => {
+    const user = userEvent.setup({ delay: null });
+    const d = deferred<{ project: string; task: string; status: string }>();
+    const client = makeFake({ retry: vi.fn(() => d.promise) });
+    const refresh = vi.fn(async () => {});
+    render(
+      <Harness
+        client={client}
+        projects={[project({ id: "p1" })]}
+        tasks={[task({ id: "T-1", status: "blocked", reason: "boom" })]}
+        selectedProjectId="p1"
+        refresh={refresh}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /^retry$/i }));
+    // No confirm dialog — retry is non-destructive.
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(client.retry).toHaveBeenCalledWith("p1", "T-1");
+    expect(screen.getByRole("button", { name: /retrying/i })).toBeDisabled();
+
+    d.resolve({ project: "p1", task: "T-1", status: "ready" });
+    await settle();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/Retrying T-1 on p1\./)).toBeInTheDocument();
+  });
+
+  it("Stop on a running task opens the abort confirm and aborts on confirm", async () => {
+    const user = userEvent.setup({ delay: null });
+    const client = makeFake();
+    const refresh = vi.fn(async () => {});
+    render(
+      <Harness
+        client={client}
+        projects={[project({ id: "p1" })]}
+        tasks={[task({ id: "T-1", status: "running" })]}
+        selectedProjectId="p1"
+        refresh={refresh}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /^stop$/i }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(client.abort).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /abort task/i }));
+    await settle();
+    expect(client.abort).toHaveBeenCalledWith("p1");
   });
 });
 

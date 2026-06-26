@@ -25,6 +25,10 @@ export interface ControlClient {
     projectId: string,
     taskId?: string,
   ): Promise<{ project: string; approved_task: string }>;
+  retry(
+    projectId: string,
+    taskId: string,
+  ): Promise<{ project: string; task: string; status: string }>;
 }
 
 // ControlNotice is a one-shot, non-fatal message surfaced after an action. `tone`

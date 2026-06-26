@@ -22,7 +22,7 @@ import { classifyControlError, successNotice } from "./controls.ts";
 import type { ControlClient, ControlNotice } from "./controls.ts";
 
 // ActionKind is the verb of a control action; it keys the busy state and the labels.
-export type ActionKind = "pause" | "resume" | "abort" | "approve";
+export type ActionKind = "pause" | "resume" | "abort" | "approve" | "retry";
 
 // PendingConfirm describes an action awaiting the operator's explicit confirmation.
 // It carries everything needed to render the dialog and run the action on confirm.
@@ -66,6 +66,9 @@ export interface FleetControls {
   // pause/resume are immediate (no confirm): optimistic flip → POST → refresh/revert.
   pause: (projectId: string) => void;
   resume: (projectId: string) => void;
+  // retry re-queues a BLOCKED task (blocked→ready) so the agent picks it up again. Direct
+  // (no confirm): non-destructive, and the gateway clears the stale block reason on the re-run.
+  retry: (projectId: string, taskId: string) => void;
   // requestAbort / requestApprove OPEN the confirm dialog (they do not act yet).
   requestAbort: (projectId: string) => void;
   // requestApprove with a taskId is task-level; without it is project-level auto-resolve.
@@ -223,6 +226,29 @@ export function useFleetControls(opts: UseFleetControlsOptions): FleetControls {
     [client, refresh, pushNotice, handleError],
   );
 
+  // retry is a DIRECT task action (no confirm): re-queue a blocked task, refresh, notice.
+  const retry = useCallback(
+    (projectId: string, taskId: string) => {
+      const key = busyKey(projectId, taskId);
+      setBusy((b) => ({ ...b, [key]: "retry" }));
+      void client
+        .retry(projectId, taskId)
+        .then(async (res) => {
+          await refresh();
+          pushNotice(successNotice(`Retrying ${res.task} on ${projectId}.`));
+        })
+        .catch(handleError)
+        .finally(() => {
+          setBusy((b) => {
+            const next = { ...b };
+            delete next[key];
+            return next;
+          });
+        });
+    },
+    [client, refresh, pushNotice, handleError],
+  );
+
   const requestAbort = useCallback((projectId: string) => {
     setPending({
       kind: "abort",
@@ -328,6 +354,7 @@ export function useFleetControls(opts: UseFleetControlsOptions): FleetControls {
     isTaskBusy,
     pause,
     resume,
+    retry,
     requestAbort,
     requestApprove,
     requestBulkApprove,

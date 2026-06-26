@@ -81,6 +81,8 @@ describe("CommandCenter board", () => {
     const requestApprove = vi.fn();
     const controls = {
       isTaskBusy: () => false,
+      isProjectBusy: () => false,
+      retry: vi.fn(),
       requestApprove,
     } as unknown as FleetControls;
 
@@ -110,6 +112,8 @@ describe("CommandCenter board", () => {
     const requestBulkApprove = vi.fn();
     const controls = {
       isTaskBusy: () => false,
+      isProjectBusy: () => false,
+      retry: vi.fn(),
       requestApprove: vi.fn(),
       requestBulkApprove,
     } as unknown as FleetControls;
@@ -181,6 +185,8 @@ describe("CommandCenter board", () => {
     const user = userEvent.setup();
     const controls = {
       isTaskBusy: () => false,
+      isProjectBusy: () => false,
+      retry: vi.fn(),
       requestApprove: vi.fn(),
       requestBulkApprove: vi.fn(),
     } as unknown as FleetControls;

@@ -420,6 +420,18 @@ export class ApiClient {
     return this.request("POST", `/projects/${encodeURIComponent(projectId)}/abort`);
   }
 
+  // retry resets a BLOCKED task back to "ready" so the agent re-picks it (the gateway
+  // clears the stale abort + block reason). Returns the project, task, and new status.
+  retry(
+    projectId: string,
+    taskId: string,
+  ): Promise<{ project: string; task: string; status: string }> {
+    return this.request(
+      "POST",
+      `/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/retry`,
+    );
+  }
+
   approve(
     projectId: string,
     taskId?: string,

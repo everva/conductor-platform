@@ -285,7 +285,11 @@ function BoardCardView({
   const t = card.task;
   const held = isAwaitingApproval(t);
   const blocked = t.status === "blocked";
+  const running = t.status === "running";
   const busy = controls?.isTaskBusy(t.project_id, t.id) ?? false;
+  // Abort is project-scoped (it cancels the in-flight task), so its busy/label key off
+  // the project, not the task.
+  const projBusy = controls?.isProjectBusy(t.project_id) ?? false;
   const select = () => onOpenSession?.(t);
   // Only held (approvable) cards can be multi-selected for a bulk approve.
   const selectable = held && controls !== undefined && onToggleSelect !== undefined;
@@ -365,7 +369,7 @@ function BoardCardView({
           </span>
         </div>
       )}
-      {(held || blocked) && (
+      {(held || blocked || running || onOpenSession) && (
         <div className="cc-card-actions" onClick={(e) => e.stopPropagation()}>
           {held && controls && (
             <Button
@@ -375,6 +379,26 @@ function BoardCardView({
               onClick={() => controls.requestApprove(t.project_id, t.id)}
             >
               {busy ? "Approving…" : "Approve"}
+            </Button>
+          )}
+          {blocked && controls && (
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={busy}
+              onClick={() => controls.retry(t.project_id, t.id)}
+            >
+              {busy ? "Retrying…" : "Retry"}
+            </Button>
+          )}
+          {running && controls && (
+            <Button
+              variant="danger"
+              size="sm"
+              disabled={projBusy}
+              onClick={() => controls.requestAbort(t.project_id)}
+            >
+              {projBusy ? "Stopping…" : "Stop"}
             </Button>
           )}
           {onOpenSession && (

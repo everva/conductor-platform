@@ -127,6 +127,26 @@ export function TasksView({ selectedProjectId, tasks, controls }: TasksViewProps
                           >
                             {busy ? "Approving…" : "Approve"}
                           </button>
+                        ) : t.status === "blocked" ? (
+                          <button
+                            type="button"
+                            className="fleet-btn primary"
+                            disabled={busy}
+                            onClick={() => controls.retry(t.project_id, t.id)}
+                          >
+                            {busy ? "Retrying…" : "Retry"}
+                          </button>
+                        ) : t.status === "running" ? (
+                          <button
+                            type="button"
+                            className="fleet-btn danger"
+                            disabled={controls.isProjectBusy(t.project_id)}
+                            onClick={() => controls.requestAbort(t.project_id)}
+                          >
+                            {controls.isProjectBusy(t.project_id)
+                              ? "Stopping…"
+                              : "Stop"}
+                          </button>
                         ) : (
                           <span className="muted">—</span>
                         )}

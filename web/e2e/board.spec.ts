@@ -98,6 +98,26 @@ test("board is the default surface and buckets tasks into the four lifecycle col
   await page.screenshot({ path: "test-results/command-center-board.png", fullPage: true });
 });
 
+test("a blocked card offers Retry (re-run from the board) and a running card offers Stop", async ({ page }) => {
+  let retryHit = "";
+  await page.route("**/projects/*/tasks/*/retry", (route) => {
+    retryHit = route.request().url();
+    return route.fulfill(json({ project: "ios-app", task: "I-block", status: "ready" }));
+  });
+  await signInToBoard(page);
+
+  // The blocked card is no longer a dead-end: Retry re-queues it straight from the board.
+  const review = column(page, "Needs Review");
+  const retry = review.getByRole("button", { name: /^retry$/i });
+  await expect(retry).toBeVisible();
+  // The running card can be stopped without leaving the board.
+  await expect(column(page, "Running").getByRole("button", { name: /^stop$/i })).toBeVisible();
+
+  // Clicking Retry POSTs to the task's retry endpoint (the director acts, not just watches).
+  await retry.click();
+  await expect.poll(() => retryHit).toContain("/tasks/I-block/retry");
+});
+
 test("awaiting-approval card exposes Approve; a card click drills into its session", async ({ page }) => {
   await signInToBoard(page);
 

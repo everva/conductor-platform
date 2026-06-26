@@ -122,6 +122,7 @@ const makeControlClient: FleetDashboardProps["makeControlClient"] = () => ({
   resume: async () => ({ project: PROJECT.id, paused: false }),
   abort: async () => ({ project: PROJECT.id, aborted_task: "" }),
   approve: async () => ({ project: PROJECT.id, approved_task: "" }),
+  retry: async () => ({ project: PROJECT.id, task: "", status: "ready" }),
 });
 
 const makeIntakeClient: FleetDashboardProps["makeIntakeClient"] = () => ({
