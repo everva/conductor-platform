@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // The clarifying distiller now emits JSON inside the <<<SCENARIOS>>> / <<<QUESTIONS>>>
@@ -117,6 +118,25 @@ func TestParseScenarios_PresentButInvalidRefStillRejected(t *testing.T) {
 		`"deps":[],"acceptance":["ok"],"hidden_holdout_ref":"internal/x/holdout_test.go"}]}` + "\n" + scenariosFenceEnd
 	if _, err := ParseScenarios([]byte(out)); err == nil || !errors.Is(err, ErrMalformedScenarios) {
 		t.Fatalf("want ErrMalformedScenarios for repo-relative ref, got %v", err)
+	}
+}
+
+func TestParseQuestions_TruncatesOverlongHeader(t *testing.T) {
+	// The model sometimes emits a chip header over the 12-rune limit (esp. Turkish, e.g.
+	// "Satır kapsamı" = 13 runes); truncate rather than dead-end the director on it.
+	out := questionsFenceStart + "\n" +
+		`{"questions":[{"question":"Hangi satırlar?","header":"Satır kapsamı","multi_select":false,` +
+		`"options":[{"label":"Hepsi","description":"tüm satırlar"},{"label":"Seçili","description":"seçili olanlar"}]}]}` +
+		"\n" + questionsFenceEnd
+	qs, err := ParseQuestions([]byte(out))
+	if err != nil {
+		t.Fatalf("ParseQuestions(13-rune header) error = %v, want truncated success", err)
+	}
+	if n := utf8.RuneCountInString(qs[0].Header); n > maxHeaderChars {
+		t.Fatalf("header not truncated: %q (%d runes > %d)", qs[0].Header, n, maxHeaderChars)
+	}
+	if qs[0].Header != "Satır kapsam" {
+		t.Fatalf("header truncation = %q, want %q", qs[0].Header, "Satır kapsam")
 	}
 }
 

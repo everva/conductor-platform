@@ -276,10 +276,26 @@ func ParseQuestions(stdout []byte) ([]Question, error) {
 	if len(parsed.Questions) == 0 {
 		return nil, fmt.Errorf("%w: block has an empty questions list", ErrNoQuestions)
 	}
+	normalizeQuestions(parsed.Questions)
 	if err := ValidateQuestions(parsed.Questions); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrMalformedQuestions, err)
 	}
 	return parsed.Questions, nil
+}
+
+// normalizeQuestions makes a question set robust to small, cosmetic model-output
+// overruns instead of dead-ending the director on them: a chip header longer than
+// maxHeaderChars is truncated (the header is a short label; the full text lives in
+// Question). It mutates qs in place and only ever SHRINKS a header, so an already-valid
+// set is unchanged. Rune-aware so multi-byte (Turkish) labels truncate correctly.
+func normalizeQuestions(qs []Question) {
+	for i := range qs {
+		h := strings.TrimSpace(qs[i].Header)
+		if utf8.RuneCountInString(h) > maxHeaderChars {
+			h = strings.TrimSpace(string([]rune(h)[:maxHeaderChars]))
+		}
+		qs[i].Header = h
+	}
 }
 
 // ParseOutcome is the deterministic parser for a clarifying distill run: the model
