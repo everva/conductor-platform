@@ -192,17 +192,33 @@ function summarize(e: Event): string {
   }
 }
 
-// buildTimeline maps the task's events (ascending) to readable timeline entries,
-// each with a payload-derived summary for the replay log.
+// buildTimeline maps the task's events (ascending) to readable timeline entries, each with a
+// payload-derived summary for the replay log. Consecutive heartbeat pulses (the ~20s develop/
+// verify/review liveness pulse) for the SAME phase are FOLDED into ONE entry — the latest, which
+// carries the freshest ts/summary — with a "×N" suffix; a long phase would otherwise add dozens of
+// identical "… · progress" rows and bury the milestones in this replay timeline. Pure.
 export function buildTimeline(events: readonly Event[]): TimelineEntry[] {
-  return events.map((e) => ({
+  const entry = (e: Event, run: number): TimelineEntry => ({
     id: e.id,
     ts: e.ts,
     phase: e.phase,
     kind: e.kind,
-    label: `${PHASE_LABEL[e.phase] ?? e.phase} · ${KIND_LABEL[e.kind] ?? e.kind}`,
+    label: `${PHASE_LABEL[e.phase] ?? e.phase} · ${KIND_LABEL[e.kind] ?? e.kind}${run > 0 ? ` ×${run + 1}` : ""}`,
     summary: summarize(e),
-  }));
+  });
+  const out: TimelineEntry[] = [];
+  let run = 0; // consecutive same-phase progress pulses folded into the current (last) entry
+  for (const e of events) {
+    const prev = out[out.length - 1];
+    if (e.kind === "progress" && prev !== undefined && prev.kind === "progress" && prev.phase === e.phase) {
+      run += 1;
+      out[out.length - 1] = entry(e, run); // replace with the latest pulse, bump the ×N count
+      continue;
+    }
+    run = 0;
+    out.push(entry(e, 0));
+  }
+  return out;
 }
 
 /**

@@ -132,6 +132,21 @@ describe("buildTimeline", () => {
     ]);
   });
 
+  it("folds a run of consecutive same-phase progress heartbeats into one ×N entry", () => {
+    const t = buildTimeline([
+      ev({ id: "s", kind: "started", phase: "develop", ts: "2026-06-20T10:00:00Z" }),
+      ev({ id: "p1", kind: "progress", phase: "review", ts: "2026-06-20T10:01:00Z" }),
+      ev({ id: "p2", kind: "progress", phase: "review", ts: "2026-06-20T10:01:20Z" }),
+      ev({ id: "p3", kind: "progress", phase: "review", ts: "2026-06-20T10:01:40Z" }),
+      ev({ id: "d", kind: "diff", phase: "review", ts: "2026-06-20T10:02:00Z" }),
+    ]);
+    // The three review pulses collapse to ONE "Review · progress ×3" entry — no flood in the
+    // replay timeline — kept at the LATEST pulse's ts for accurate replay positioning.
+    expect(t).toHaveLength(3);
+    expect(t[1]?.label).toBe("Review · progress ×3");
+    expect(t[1]?.ts).toBe("2026-06-20T10:01:40Z");
+  });
+
   it("derives a payload summary per entry for the replay log (E4)", () => {
     const t = buildTimeline([
       ev({ kind: "progress", phase: "develop", payload: { pct: 42 } }),
