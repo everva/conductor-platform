@@ -40,19 +40,22 @@ type MemoryStore struct {
 	taskDiffs map[string]TaskDiff   // keyed by taskDiffKey(projectID, taskID) (P2b, ADR-0041)
 	creds     map[string]Credential // keyed by Credential.Kind (L3, ADR-0049)
 	enhance   map[string]EnhanceJob // keyed by EnhanceJob.ID (intake enhance, agent-side)
+	// intakeSessions holds persisted intake conversations keyed by IntakeSession.ID (history).
+	intakeSessions map[string]IntakeSession
 }
 
 // NewMemoryStore returns an empty, ready-to-use in-memory StateStore.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		projects:  make(map[string]Project),
-		tasks:     make(map[string]Task),
-		leases:    make(map[string]Lease),
-		scenarios: make(map[string]Scenario),
-		hosts:     make(map[string]Host),
-		taskDiffs: make(map[string]TaskDiff),
-		creds:     make(map[string]Credential),
-		enhance:   make(map[string]EnhanceJob),
+		projects:       make(map[string]Project),
+		tasks:          make(map[string]Task),
+		leases:         make(map[string]Lease),
+		scenarios:      make(map[string]Scenario),
+		hosts:          make(map[string]Host),
+		taskDiffs:      make(map[string]TaskDiff),
+		creds:          make(map[string]Credential),
+		enhance:        make(map[string]EnhanceJob),
+		intakeSessions: make(map[string]IntakeSession),
 	}
 }
 

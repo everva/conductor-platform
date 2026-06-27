@@ -55,6 +55,7 @@ func runConformanceSuite(t *testing.T, newStore storeFactory) {
 		{"TaskDiffStoreRoundTrip", confTaskDiffRoundTrip},
 		{"CredentialStoreRoundTrip", confCredentialRoundTrip},
 		{"EnhanceProgressRoundTrip", confEnhanceProgressRoundTrip},
+		{"IntakeSessionRoundTrip", confIntakeSessionRoundTrip},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -183,6 +184,104 @@ func confEnhanceProgressRoundTrip(t *testing.T, s StateStore) {
 	}
 	if j.Progress == "📖 Okunuyor: late.ts" {
 		t.Fatalf("late progress after completion must be ignored, got %q", j.Progress)
+	}
+}
+
+// confIntakeSessionRoundTrip proves the additive IntakeSessionStore seam (intake conversation
+// history) against every implementation (Memory + real Postgres via the suite, exercising
+// migration 00013): upsert by id, list newest-first SCOPED to a project with Messages omitted from
+// the light summary, full Get with the thread, upsert PRESERVING created_at while bumping the
+// content, and ErrNotFound / ErrInvalid edges — identically across MemoryStore and PostgresStore.
+func confIntakeSessionRoundTrip(t *testing.T, s StateStore) {
+	t.Helper()
+	ctx := context.Background()
+	is, ok := s.(IntakeSessionStore)
+	if !ok {
+		t.Fatalf("%T does not implement IntakeSessionStore", s)
+	}
+
+	// Empty id/project is rejected.
+	if err := is.PutIntakeSession(ctx, IntakeSession{ID: "", ProjectID: "p1"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("PutIntakeSession(empty id) err = %v, want ErrInvalid", err)
+	}
+	if err := is.PutIntakeSession(ctx, IntakeSession{ID: "s1", ProjectID: ""}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("PutIntakeSession(empty project) err = %v, want ErrInvalid", err)
+	}
+
+	// A missing session is ErrNotFound.
+	if _, err := is.GetIntakeSession(ctx, "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetIntakeSession(missing) err = %v, want ErrNotFound", err)
+	}
+
+	// Two conversations in p1 with explicit, distinct created-at so order is deterministic, plus
+	// one in p2 that must NOT leak into p1's list.
+	t0 := time.Date(2026, 6, 27, 10, 0, 0, 0, time.UTC)
+	older := IntakeSession{
+		ID: "s-old", ProjectID: "p1", Title: "remove service company", CreatedAt: t0,
+		Messages: []IntakeMessage{{Role: "you", Text: "kaldır"}, {Role: "assistant", Text: "drafted", Tone: "warn"}},
+	}
+	newer := IntakeSession{
+		ID: "s-new", ProjectID: "p1", Title: "add export", CreatedAt: t0.Add(time.Hour),
+		Messages: []IntakeMessage{{Role: "you", Text: "export ekle"}}, Result: "id: E-1\n",
+	}
+	other := IntakeSession{ID: "s-p2", ProjectID: "p2", Title: "other proj", CreatedAt: t0.Add(2 * time.Hour)}
+	for _, sess := range []IntakeSession{older, newer, other} {
+		if err := is.PutIntakeSession(ctx, sess); err != nil {
+			t.Fatalf("PutIntakeSession(%s): %v", sess.ID, err)
+		}
+	}
+
+	// List is scoped to p1 and newest-first; summaries omit Messages but keep Result.
+	list, err := is.ListIntakeSessions(ctx, "p1")
+	if err != nil {
+		t.Fatalf("ListIntakeSessions: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("ListIntakeSessions(p1) len = %d, want 2 (p2 must not leak)", len(list))
+	}
+	if list[0].ID != "s-new" || list[1].ID != "s-old" {
+		t.Fatalf("ListIntakeSessions order = [%s,%s], want [s-new,s-old] (newest first)", list[0].ID, list[1].ID)
+	}
+	if len(list[0].Messages) != 0 {
+		t.Fatalf("list summary must omit Messages, got %d", len(list[0].Messages))
+	}
+	if list[0].Result != "id: E-1\n" {
+		t.Fatalf("list summary must keep Result, got %q", list[0].Result)
+	}
+
+	// Get returns the FULL thread.
+	full, err := is.GetIntakeSession(ctx, "s-old")
+	if err != nil {
+		t.Fatalf("GetIntakeSession(s-old): %v", err)
+	}
+	if len(full.Messages) != 2 || full.Messages[1].Role != "assistant" || full.Messages[1].Tone != "warn" {
+		t.Fatalf("GetIntakeSession messages round-trip wrong: %+v", full.Messages)
+	}
+
+	// Re-put updates content + bumps UpdatedAt but PRESERVES the original CreatedAt and ProjectID
+	// (a caller passing a different project/created-at on update must not move the conversation).
+	update := IntakeSession{
+		ID: "s-old", ProjectID: "WRONG", Title: "remove service company (v2)", CreatedAt: t0.Add(99 * time.Hour),
+		Messages: []IntakeMessage{{Role: "you", Text: "kaldır"}, {Role: "you", Text: "ve test ekle"}},
+	}
+	if err := is.PutIntakeSession(ctx, update); err != nil {
+		t.Fatalf("PutIntakeSession(update): %v", err)
+	}
+	got, err := is.GetIntakeSession(ctx, "s-old")
+	if err != nil {
+		t.Fatalf("GetIntakeSession(after update): %v", err)
+	}
+	if !got.CreatedAt.Equal(t0) {
+		t.Fatalf("update must preserve CreatedAt, got %v want %v", got.CreatedAt, t0)
+	}
+	if got.ProjectID != "p1" {
+		t.Fatalf("update must preserve ProjectID, got %q want p1", got.ProjectID)
+	}
+	if got.Title != "remove service company (v2)" || len(got.Messages) != 2 || got.Messages[1].Text != "ve test ekle" {
+		t.Fatalf("update must replace title+messages, got title=%q msgs=%+v", got.Title, got.Messages)
+	}
+	if !got.UpdatedAt.After(got.CreatedAt) {
+		t.Fatalf("UpdatedAt %v must be after CreatedAt %v", got.UpdatedAt, got.CreatedAt)
 	}
 }
 

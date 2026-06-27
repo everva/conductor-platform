@@ -127,6 +127,11 @@ func (s *apiServer) routes() http.Handler {
 	// for human review. It persists NOTHING; approval flows through POST /intake.
 	mux.Handle("POST /projects/{id}/distill", s.requireAuth(http.HandlerFunc(s.handleDistill)))
 	mux.Handle("POST /projects/{id}/distill/stream", s.requireAuth(http.HandlerFunc(s.handleDistillStream)))
+	// Intake CONVERSATION history (additive): the web upserts each conversation and lists/opens
+	// prior ones per project (Claude-Code-style). Persists the director's chat only — no tokens.
+	mux.Handle("PUT /projects/{id}/intake/sessions/{sid}", s.requireAuth(http.HandlerFunc(s.handlePutIntakeSession)))
+	mux.Handle("GET /projects/{id}/intake/sessions", s.requireAuth(http.HandlerFunc(s.handleListIntakeSessions)))
+	mux.Handle("GET /projects/{id}/intake/sessions/{sid}", s.requireAuth(http.HandlerFunc(s.handleGetIntakeSession)))
 	// Intake ENHANCE (agent-side, code-aware): POST records a rough request, an agent runs
 	// claude over the real code and writes back a detailed Turkish spec; GET polls the result.
 	mux.Handle("POST /projects/{id}/enhance", s.requireAuth(http.HandlerFunc(s.handleEnhance)))

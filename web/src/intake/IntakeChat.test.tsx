@@ -14,7 +14,14 @@ import userEvent from "@testing-library/user-event";
 import { IntakeChat } from "./IntakeChat.tsx";
 import type { IntakeClient } from "./IntakeChat.tsx";
 import { ApiError, DistillNoScenariosError } from "../api/client.ts";
-import type { DistillResult, IntakeResult, Project, Scenario } from "../api/types.ts";
+import type {
+  DistillResult,
+  IntakeResult,
+  IntakeSessionDetail,
+  IntakeSessionMessage,
+  Project,
+  Scenario,
+} from "../api/types.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -435,5 +442,138 @@ describe("IntakeChat", () => {
     const client = fakeClient(); // no enhance
     render(<IntakeChat projects={[project()]} client={client} onUnauthorized={vi.fn()} />);
     expect(screen.queryByRole("button", { name: /Geliştir/ })).not.toBeInTheDocument();
+  });
+
+  // --- conversation history (Claude-Code-style) ---
+
+  // withHistory wraps a base client with a STATEFUL in-memory session store (upsert + list +
+  // get), so the component's auto-save → list-refresh → reopen loop runs end-to-end offline.
+  function withHistory(base: IntakeClient, seed: IntakeSessionDetail[] = []) {
+    const store = new Map<string, IntakeSessionDetail>();
+    for (const s of seed) store.set(s.id, s);
+    const listIntakeSessions = vi.fn(() =>
+      Promise.resolve(
+        [...store.values()]
+          .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+          .map((s) => ({
+            id: s.id,
+            project_id: s.project_id,
+            title: s.title,
+            has_result: (s.result ?? "").trim() !== "",
+            created_at: s.created_at,
+            updated_at: s.updated_at,
+          })),
+      ),
+    );
+    const getIntakeSession = vi.fn((_p: string, id: string) => {
+      const s = store.get(id);
+      return s ? Promise.resolve(s) : Promise.reject(new ApiError(404, "not found"));
+    });
+    const putIntakeSession = vi.fn(
+      (
+        p: string,
+        id: string,
+        snap: {
+          title: string;
+          messages: IntakeSessionMessage[];
+          result?: string;
+          created_at?: string;
+        },
+      ) => {
+        const existing = store.get(id);
+        store.set(id, {
+          id,
+          project_id: p,
+          title: snap.title,
+          messages: snap.messages,
+          result: snap.result ?? "",
+          created_at: existing?.created_at ?? snap.created_at ?? "2026-06-27T10:00:00Z",
+          updated_at: "2026-06-27T10:05:00Z",
+        });
+        return Promise.resolve({ status: "ok", id });
+      },
+    );
+    const client: IntakeClient = { ...base, listIntakeSessions, getIntakeSession, putIntakeSession };
+    return { client, store, listIntakeSessions, getIntakeSession, putIntakeSession };
+  }
+
+  it("hides the History panel when the client cannot persist conversations", () => {
+    const client = fakeClient(); // no history methods
+    render(<IntakeChat projects={[project()]} client={client} onUnauthorized={vi.fn()} />);
+    expect(screen.queryByLabelText("Conversation history")).not.toBeInTheDocument();
+  });
+
+  it("persists each conversation and surfaces it in the per-project History", async () => {
+    const user = userEvent.setup({ delay: null });
+    const { client, putIntakeSession } = withHistory(fakeClient());
+    render(<IntakeChat projects={[project()]} client={client} onUnauthorized={vi.fn()} />);
+
+    await user.type(screen.getByLabelText("Message"), "servis şirketini kaldır");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByTestId("scenario-card"); // distill completed (assistant replied)
+
+    // The conversation was auto-saved: title derived from the first turn, the WHOLE thread sent.
+    await vi.waitFor(() => expect(putIntakeSession).toHaveBeenCalled());
+    const lastCall = putIntakeSession.mock.calls.at(-1);
+    expect(lastCall?.[2].title).toBe("servis şirketini kaldır");
+    expect(lastCall?.[2].messages.length).toBeGreaterThanOrEqual(2);
+
+    // And it shows up in the History panel (scoped, so it's not the thread copy).
+    const history = await screen.findByLabelText("Conversation history");
+    expect(within(history).getByText("servis şirketini kaldır")).toBeInTheDocument();
+  });
+
+  it("reopens a saved conversation from History, restoring its thread", async () => {
+    const user = userEvent.setup({ delay: null });
+    const prior: IntakeSessionDetail = {
+      id: "is-prior",
+      project_id: "proj-x",
+      title: "earlier work",
+      messages: [
+        { role: "you", text: "do the earlier thing" },
+        { role: "assistant", text: "drafted earlier", tone: "warn" },
+      ],
+      result: "",
+      created_at: "2026-06-20T09:00:00Z",
+      updated_at: "2026-06-20T09:01:00Z",
+    };
+    const { client, getIntakeSession } = withHistory(fakeClient(), [prior]);
+    render(<IntakeChat projects={[project()]} client={client} onUnauthorized={vi.fn()} />);
+
+    // The prior conversation is listed; click it to reopen.
+    const history = await screen.findByLabelText("Conversation history");
+    await user.click(within(history).getByText("earlier work"));
+
+    // Its thread is restored into the conversation log.
+    const thread = await screen.findByRole("log", { name: "Intake conversation" });
+    expect(within(thread).getByText("do the earlier thing")).toBeInTheDocument();
+    expect(within(thread).getByText("drafted earlier")).toBeInTheDocument();
+    expect(getIntakeSession).toHaveBeenCalledWith("proj-x", "is-prior");
+  });
+
+  it("'New' starts a fresh conversation, clearing the thread (the saved one stays in History)", async () => {
+    const user = userEvent.setup({ delay: null });
+    const prior: IntakeSessionDetail = {
+      id: "is-prior",
+      project_id: "proj-x",
+      title: "earlier work",
+      messages: [{ role: "you", text: "earlier turn" }],
+      result: "",
+      created_at: "2026-06-20T09:00:00Z",
+      updated_at: "2026-06-20T09:01:00Z",
+    };
+    const { client } = withHistory(fakeClient(), [prior]);
+    render(<IntakeChat projects={[project()]} client={client} onUnauthorized={vi.fn()} />);
+
+    const history = await screen.findByLabelText("Conversation history");
+    await user.click(within(history).getByText("earlier work"));
+    expect(await screen.findByText("earlier turn")).toBeInTheDocument(); // thread loaded
+
+    await user.click(within(history).getByRole("button", { name: /New/ }));
+    // The thread is cleared, but History still lists the saved conversation.
+    expect(screen.queryByRole("log", { name: "Intake conversation" })).not.toBeInTheDocument();
+    expect(
+      within(await screen.findByLabelText("Conversation history")).getByText("earlier work"),
+    ).toBeInTheDocument();
   });
 });

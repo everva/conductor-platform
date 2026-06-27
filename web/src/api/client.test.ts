@@ -205,6 +205,80 @@ describe("ApiClient", () => {
     expect(progress).toEqual([]); // no streaming transport → no progress events
     expect(res.scenarios).toEqual([]);
   });
+
+  it("listIntakeSessions GETs and unwraps the {sessions} envelope", async () => {
+    const fetchFn = mockFetch(() =>
+      jsonResponse(200, {
+        sessions: [
+          {
+            id: "is-1",
+            project_id: "proj",
+            title: "remove X",
+            has_result: true,
+            created_at: "2026-06-27T10:00:00Z",
+            updated_at: "2026-06-27T10:05:00Z",
+          },
+        ],
+      }),
+    );
+    const client = new ApiClient({ baseUrl: "https://gw.test", token: TEST_TOKEN });
+
+    const sessions = await client.listIntakeSessions("proj");
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].id).toBe("is-1");
+    expect(sessions[0].has_result).toBe(true);
+    const [url, init] = fetchFn.mock.calls[0];
+    expect(String(url)).toBe("https://gw.test/projects/proj/intake/sessions");
+    expect((init as RequestInit).method).toBe("GET");
+  });
+
+  it("getIntakeSession GETs the full conversation thread", async () => {
+    const fetchFn = mockFetch(() =>
+      jsonResponse(200, {
+        id: "is-1",
+        project_id: "proj",
+        title: "remove X",
+        messages: [
+          { role: "you", text: "kaldır" },
+          { role: "assistant", text: "ok", tone: "warn" },
+        ],
+        result: "id: A-1\n",
+        created_at: "2026-06-27T10:00:00Z",
+        updated_at: "2026-06-27T10:05:00Z",
+      }),
+    );
+    const client = new ApiClient({ baseUrl: "https://gw.test", token: TEST_TOKEN });
+
+    const full = await client.getIntakeSession("proj", "is-1");
+
+    expect(full.messages).toHaveLength(2);
+    expect(full.messages[1].tone).toBe("warn");
+    expect(full.result).toBe("id: A-1\n");
+    const [url] = fetchFn.mock.calls[0];
+    expect(String(url)).toBe("https://gw.test/projects/proj/intake/sessions/is-1");
+  });
+
+  it("putIntakeSession PUTs the conversation snapshot as JSON", async () => {
+    const fetchFn = mockFetch(() => jsonResponse(200, { status: "ok", id: "is-1" }));
+    const client = new ApiClient({ baseUrl: "https://gw.test", token: TEST_TOKEN });
+
+    const snapshot = {
+      title: "remove X",
+      messages: [{ role: "you" as const, text: "kaldır" }],
+      result: "id: A-1\n",
+      created_at: "2026-06-27T10:00:00Z",
+    };
+    const res = await client.putIntakeSession("proj", "is-1", snapshot);
+
+    expect(res).toEqual({ status: "ok", id: "is-1" });
+    const [url, init] = fetchFn.mock.calls[0];
+    expect(String(url)).toBe("https://gw.test/projects/proj/intake/sessions/is-1");
+    expect((init as RequestInit).method).toBe("PUT");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual(snapshot);
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers["Content-Type"]).toBe("application/json");
+  });
 });
 
 function jsonResponse(status: number, body: unknown): Response {

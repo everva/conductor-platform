@@ -117,6 +117,36 @@ export interface DistillResult {
   questions?: Question[];
 }
 
+// Intake conversation HISTORY (intakesession.go). The intake chat is persisted per project so
+// the director can reopen prior conversations (Claude-Code-style). A message mirrors a ChatMsg.
+export interface IntakeSessionMessage {
+  role: "you" | "assistant";
+  text: string;
+  tone?: "warn" | "error";
+}
+
+// IntakeSessionSummary is one row of the per-project history list — light (no message bodies);
+// has_result flags a conversation that produced an authored draft.
+export interface IntakeSessionSummary {
+  id: string;
+  project_id: string;
+  title: string;
+  has_result: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// IntakeSessionDetail is a full saved conversation (with the message thread + any authored YAML).
+export interface IntakeSessionDetail {
+  id: string;
+  project_id: string;
+  title: string;
+  messages: IntakeSessionMessage[];
+  result?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // Query params accepted by GET /events (and /ws), mirroring parseEventFilter in
 // events.go: project/task/phase/kind/intervention + since/limit for history.
 export interface EventQuery {

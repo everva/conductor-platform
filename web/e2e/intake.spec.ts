@@ -37,6 +37,7 @@ test("'+ New work' → Write spec directly opens the authoritative YAML editor (
   await page.route("**/projects/*/scenarios", (r) => r.fulfill(json([])));
   await page.route("**/events*", (r) => r.fulfill(json([])));
   await page.route("**/projects/*/tasks", (r) => r.fulfill(json([])));
+  await page.route("**/projects/*/intake/sessions**", (r) => r.fulfill(json({ sessions: [] })));
   await page.route("**/projects", (r) => r.fulfill(json(PROJECTS)));
 
   await page.goto("/");
@@ -63,6 +64,7 @@ test("'+ New work' → distill asks a clarifying question; answering re-distills
   await page.route("**/projects/*/scenarios", (r) => r.fulfill(json([])));
   await page.route("**/events*", (r) => r.fulfill(json([])));
   await page.route("**/projects/*/tasks", (r) => r.fulfill(json([])));
+  await page.route("**/projects/*/intake/sessions**", (r) => r.fulfill(json({ sessions: [] })));
   await page.route("**/projects", (r) => r.fulfill(json(PROJECTS)));
 
   // Stateful streaming-distill mock (ADR-0047 + Q3c.4 SSE): the 1st call streams a
@@ -142,4 +144,73 @@ test("'+ New work' → distill asks a clarifying question; answering re-distills
 
   await expect(page.getByLabel("Intake YAML")).toHaveValue(/id: A-1/);
   await expect(page.getByTestId("question-card")).toHaveCount(0);
+});
+
+test("intake history: a saved conversation is listed per project and reopens its thread", async ({ page }) => {
+  await mockWebSocket(page);
+  await page.route("**/status", (r) => r.fulfill(json(STATUS)));
+  await page.route("**/hosts", (r) => r.fulfill(json([])));
+  await page.route("**/projects/*/scenarios", (r) => r.fulfill(json([])));
+  await page.route("**/events*", (r) => r.fulfill(json([])));
+  await page.route("**/projects/*/tasks", (r) => r.fulfill(json([])));
+
+  // A prior conversation already saved for this project (the gateway's history endpoints).
+  const PRIOR_FULL = {
+    id: "is-prior",
+    project_id: "web-shop",
+    title: "kullanıcı profili ekle",
+    messages: [
+      { role: "you", text: "kullanıcı profili sayfası ekle" },
+      { role: "assistant", text: "Drafted 1 scenario — review the plan below." },
+    ],
+    result: "id: A-1\ntitle: profile\n",
+    created_at: "2026-06-20T09:00:00Z",
+    updated_at: "2026-06-20T09:01:00Z",
+  };
+  // The GET-with-id (full) and PUT (autosave) share the `/sessions/*` glob — branch on method.
+  await page.route("**/projects/*/intake/sessions/*", (r) => {
+    if (r.request().method() === "PUT") {
+      void r.fulfill(json({ status: "ok", id: "is-prior" }));
+      return;
+    }
+    void r.fulfill(json(PRIOR_FULL));
+  });
+  // The list (no trailing id) returns the one prior conversation as a summary.
+  await page.route("**/projects/*/intake/sessions", (r) =>
+    r.fulfill(
+      json({
+        sessions: [
+          {
+            id: "is-prior",
+            project_id: "web-shop",
+            title: "kullanıcı profili ekle",
+            has_result: true,
+            created_at: "2026-06-20T09:00:00Z",
+            updated_at: "2026-06-20T09:01:00Z",
+          },
+        ],
+      }),
+    ),
+  );
+  await page.route("**/projects", (r) => r.fulfill(json(PROJECTS)));
+
+  await page.goto("/");
+  await page.getByLabel(/api token/i).fill("test-token");
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page.getByRole("region", { name: /command center/i })).toBeVisible();
+
+  await page.getByRole("button", { name: /new work/i }).click();
+  await expect(page.getByRole("tab", { name: /intake/i })).toHaveAttribute("aria-selected", "true");
+
+  // The History panel lists the prior conversation for this project (Claude-Code-style).
+  const history = page.getByRole("region", { name: /conversation history/i });
+  await expect(history).toBeVisible();
+  await expect(history.getByText("kullanıcı profili ekle")).toBeVisible();
+
+  // Clicking it reopens the full thread (both turns restored) and resumes its authored YAML.
+  await history.getByText("kullanıcı profili ekle").click();
+  const thread = page.getByRole("log", { name: /intake conversation/i });
+  await expect(thread.getByText("kullanıcı profili sayfası ekle")).toBeVisible();
+  await expect(thread.getByText(/Drafted 1 scenario/)).toBeVisible();
+  await expect(page.getByLabel("Intake YAML")).toHaveValue(/id: A-1/);
 });

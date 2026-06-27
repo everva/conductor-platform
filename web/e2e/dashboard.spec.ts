@@ -261,6 +261,9 @@ test("intake tab: converse → distill → review proposed scenario + holdout (3
   await page.route("**/hosts", (route) => route.fulfill(json(HOSTS)));
   await page.route("**/projects", (route) => route.fulfill(json(PROJECTS)));
   await page.route("**/projects/*/tasks", (route) => route.fulfill(json(TASKS)));
+  // Intake auto-saves the conversation to history (best-effort); stub it so the test makes no
+  // real network call (the feature itself is covered by intake.spec.ts + IntakeChat.test.tsx).
+  await page.route("**/projects/*/intake/sessions**", (route) => route.fulfill(json({ sessions: [] })));
   // The app distills over SSE (POST /distill/stream, Q3c.4); fulfill one `result`
   // frame carrying the proposal.
   await page.route("**/projects/*/distill/stream", (route) =>

@@ -23,10 +23,18 @@
 // not even questions) still surfaces as the never-fabricate guidance. Conversation accumulates
 // CLIENT-side over the single-string /distill, which now also carries the optional `questions`.
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Clock, Plus } from "lucide-react";
 import { ApiError, DistillNoScenariosError } from "../api/client.ts";
 import { holdoutIdFromRef } from "./holdoutRef.ts";
-import type { DistillResult, IntakeResult, Project, Question } from "../api/types.ts";
+import type {
+  DistillResult,
+  IntakeResult,
+  IntakeSessionDetail,
+  IntakeSessionMessage,
+  IntakeSessionSummary,
+  Project,
+  Question,
+} from "../api/types.ts";
 import { ConfirmDialog } from "../fleet/ConfirmDialog.tsx";
 import type { PendingConfirm } from "../fleet/useFleetControls.ts";
 import { ScenarioCard } from "./ScenarioCard.tsx";
@@ -64,6 +72,25 @@ export interface IntakeClient {
     roughSpec: string,
     onProgress?: (detail: string) => void,
   ): Promise<string>;
+  // Intake conversation HISTORY (optional, all three together). When present the chat PERSISTS
+  // each conversation (putIntakeSession after every turn) and offers a per-project history panel
+  // (listIntakeSessions) to reopen a prior one (getIntakeSession). Absent on a fake/older client →
+  // the panel is hidden and nothing is persisted (the chat stays ephemeral, unchanged).
+  listIntakeSessions?(projectId: string): Promise<IntakeSessionSummary[]>;
+  getIntakeSession?(
+    projectId: string,
+    sessionId: string,
+  ): Promise<IntakeSessionDetail>;
+  putIntakeSession?(
+    projectId: string,
+    sessionId: string,
+    snapshot: {
+      title: string;
+      messages: IntakeSessionMessage[];
+      result?: string;
+      created_at?: string;
+    },
+  ): Promise<unknown>;
 }
 
 export interface IntakeChatProps {
@@ -107,6 +134,34 @@ acceptance:
 hidden_holdout_ref: store://holdouts/NEW-1/holdout_test.go
 `;
 
+// mintSessionId returns a stable, collision-free id for a NEW intake conversation (web-minted so
+// the gateway just persists it). Prefers crypto.randomUUID; falls back when it is unavailable.
+function mintSessionId(): string {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return `is-${crypto.randomUUID()}`;
+    }
+  } catch {
+    /* fall through to the timestamp form */
+  }
+  return `is-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+// deriveTitle makes a short history label from the first director turn (the conversation's gist).
+function deriveTitle(msgs: { role: ChatRole; text: string }[]): string {
+  const first = msgs.find((m) => m.role === "you");
+  const t = (first?.text ?? "").trim().replace(/\s+/g, " ");
+  if (t === "") return "New conversation";
+  return t.length > 60 ? `${t.slice(0, 57)}…` : t;
+}
+
+// historyTime renders a saved conversation's time for the list (locale date+time; falls back to
+// the raw value if unparseable). Day-precision matters across a multi-day history.
+function historyTime(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
 export function IntakeChat({
   projects,
   client,
@@ -149,6 +204,18 @@ export function IntakeChat({
   const [directMode, setDirectMode] = useState<boolean>(false);
   const nextMsgId = useRef<number>(0);
 
+  // Conversation HISTORY (Claude-Code-style). sessionId is the CURRENT conversation's persisted id
+  // (empty until the first turn mints one); createdAtRef stamps its start. history is the saved
+  // conversations for the selected project. skipSaveRef suppresses the immediate re-save right
+  // after we LOAD a session (we just fetched it; no need to write it straight back).
+  const [sessionId, setSessionId] = useState<string>("");
+  const createdAtRef = useRef<string>("");
+  const [history, setHistory] = useState<IntakeSessionSummary[]>([]);
+  const skipSaveRef = useRef<boolean>(false);
+  // History persistence is OPT-IN on the client: present only on the real ApiClient (a fake/older
+  // client omits it → the chat stays ephemeral and the panel is hidden).
+  const canBrowseHistory = typeof client.listIntakeSessions === "function";
+
   const hasProjects = projects.length > 0;
   const canSend = hasProjects && projectId !== "" && draft.trim() !== "" && !distilling;
   const canPickProject = hasProjects && projectId !== "";
@@ -161,6 +228,115 @@ export function IntakeChat({
       ...prev,
       { id: nextMsgId.current++, role, text, ...(tone ? { tone } : {}) },
     ]);
+  }
+
+  // refreshHistory loads the saved conversations for the current project (newest-first). A plain
+  // function (not memoized): it is only CALLED, never a hook dependency, so its per-render identity
+  // is irrelevant — and the parent rebuilds `client` every render, so memoizing on it would churn.
+  function refreshHistory() {
+    if (!client.listIntakeSessions || projectId === "") {
+      setHistory([]);
+      return;
+    }
+    void client
+      .listIntakeSessions(projectId)
+      .then(setHistory)
+      .catch(() => {
+        /* history is best-effort; a fetch failure leaves the last list in place */
+      });
+  }
+
+  // resetConversation clears the working thread + draft so a fresh (or different) conversation
+  // starts clean. The selected project and the loaded history list are untouched.
+  function resetConversation() {
+    setMessages([]);
+    setProposal(null);
+    setEditedYaml("");
+    setDirectMode(false);
+    setPendingQuestions(null);
+    setResult(null);
+    setSessionId("");
+    createdAtRef.current = "";
+  }
+
+  // When the project changes, start a clean conversation and reload THAT project's history — each
+  // project has its own history ("projeyi seçince o projedeki geçmişi göreyim"). Keyed on projectId
+  // ONLY: the parent rebuilds `client` every render, so depending on it (or on a callback closing
+  // over it) would wipe the thread on every render. The effect reads the current-render client,
+  // which is correct for this one-shot reset+load.
+  useEffect(() => {
+    resetConversation();
+    refreshHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  // Auto-save: whenever the thread or the authored YAML changes (a turn happened), UPSERT the
+  // conversation so it lands in history. The id is minted lazily on the first save; created_at
+  // stamps the start. A save right after LOADING a session is skipped (skipSaveRef — we just read
+  // it). Best-effort: a write failure never blocks the chat. Keyed on the conversation CONTENT;
+  // projectId/sessionId are read but a project switch clears messages first (above), so a save can
+  // never land under the wrong project.
+  useEffect(() => {
+    if (skipSaveRef.current) {
+      skipSaveRef.current = false;
+      return;
+    }
+    if (!client.putIntakeSession || projectId === "" || messages.length === 0) return;
+    let sid = sessionId;
+    if (sid === "") {
+      sid = mintSessionId();
+      createdAtRef.current = new Date().toISOString();
+      setSessionId(sid);
+    }
+    const snapshot = {
+      title: deriveTitle(messages),
+      messages: messages.map((m) => ({
+        role: m.role,
+        text: m.text,
+        ...(m.tone ? { tone: m.tone } : {}),
+      })),
+      ...(editedYaml.trim() !== "" ? { result: editedYaml } : {}),
+      ...(createdAtRef.current !== "" ? { created_at: createdAtRef.current } : {}),
+    };
+    void client
+      .putIntakeSession(projectId, sid, snapshot)
+      .then(() => refreshHistory())
+      .catch(() => {
+        /* best-effort persistence */
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, editedYaml]);
+
+  // openSession loads a saved conversation back into the thread (and its draft YAML, if any) so the
+  // director can read or resume it. The immediate auto-save is skipped (we just fetched this).
+  async function openSession(sid: string) {
+    if (!client.getIntakeSession || projectId === "" || sid === sessionId) return;
+    try {
+      const full = await client.getIntakeSession(projectId, sid);
+      skipSaveRef.current = true;
+      const loaded: ChatMsg[] = full.messages.map((m) => ({
+        id: nextMsgId.current++,
+        role: m.role === "assistant" ? "assistant" : "you",
+        text: m.text,
+        ...(m.tone === "warn" || m.tone === "error" ? { tone: m.tone } : {}),
+      }));
+      setMessages(loaded);
+      setSessionId(full.id);
+      createdAtRef.current = full.created_at;
+      setPendingQuestions(null);
+      setResult(null);
+      setProposal(null);
+      // Resume the authored YAML if this conversation produced one (direct-editor view).
+      if (full.result !== undefined && full.result.trim() !== "") {
+        setEditedYaml(full.result);
+        setDirectMode(true);
+      } else {
+        setEditedYaml("");
+        setDirectMode(false);
+      }
+    } catch {
+      /* leave the current thread untouched on a load failure */
+    }
   }
 
   // While enhancing, tick once a second so the idle counter ("⏳ N saniyedir…") re-renders even
@@ -418,6 +594,42 @@ export function IntakeChat({
                   ))}
                 </select>
               </label>
+
+              {canBrowseHistory && history.length > 0 && (
+                <div className="intake-history" role="region" aria-label="Conversation history">
+                  <div className="intake-history-head">
+                    <span className="intake-label intake-history-label">
+                      <Clock size={13} strokeWidth={2.2} /> History
+                    </span>
+                    <button
+                      type="button"
+                      className="fleet-btn ghost intake-history-new"
+                      onClick={resetConversation}
+                      title="Start a new conversation (the current one stays in history)"
+                    >
+                      <Plus size={13} strokeWidth={2.2} /> New
+                    </button>
+                  </div>
+                  <ul className="intake-history-list">
+                    {history.map((h) => (
+                      <li key={h.id}>
+                        <button
+                          type="button"
+                          className={`intake-history-item${h.id === sessionId ? " active" : ""}`}
+                          onClick={() => void openSession(h.id)}
+                          data-testid="intake-history-item"
+                        >
+                          <span className="intake-history-title">{h.title || "Untitled"}</span>
+                          {h.has_result && (
+                            <span className="chip intake-history-chip">spec</span>
+                          )}
+                          <span className="intake-history-time">{historyTime(h.updated_at)}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               {messages.length > 0 && (
                 <div className="intake-thread" role="log" aria-label="Intake conversation">

@@ -13,6 +13,9 @@ import type {
   EventQuery,
   Host,
   IntakeResult,
+  IntakeSessionDetail,
+  IntakeSessionMessage,
+  IntakeSessionSummary,
   Project,
   Scenario,
   StatusSummary,
@@ -441,6 +444,48 @@ export class ApiClient {
       "POST",
       `/projects/${encodeURIComponent(projectId)}/approve`,
       body,
+    );
+  }
+
+  // --- intake conversation history (intakesession.go) ---
+
+  // listIntakeSessions returns a project's saved intake conversations newest-first as light
+  // summaries (no message bodies). Empty when none are saved.
+  listIntakeSessions(projectId: string): Promise<IntakeSessionSummary[]> {
+    return this.request<{ sessions: IntakeSessionSummary[] }>(
+      "GET",
+      `/projects/${encodeURIComponent(projectId)}/intake/sessions`,
+    ).then((r) => r.sessions ?? []);
+  }
+
+  // getIntakeSession returns one saved conversation in full (the message thread + any draft YAML).
+  getIntakeSession(
+    projectId: string,
+    sessionId: string,
+  ): Promise<IntakeSessionDetail> {
+    return this.request<IntakeSessionDetail>(
+      "GET",
+      `/projects/${encodeURIComponent(projectId)}/intake/sessions/${encodeURIComponent(sessionId)}`,
+    );
+  }
+
+  // putIntakeSession UPSERTS a conversation snapshot (the web mints the id; saving after each turn
+  // builds the history). created_at (optional) stamps the conversation's start on the first save;
+  // the gateway preserves it across later saves. The conversation crosses the authed channel only.
+  putIntakeSession(
+    projectId: string,
+    sessionId: string,
+    snapshot: {
+      title: string;
+      messages: IntakeSessionMessage[];
+      result?: string;
+      created_at?: string;
+    },
+  ): Promise<{ status: string; id: string }> {
+    return this.request(
+      "PUT",
+      `/projects/${encodeURIComponent(projectId)}/intake/sessions/${encodeURIComponent(sessionId)}`,
+      snapshot,
     );
   }
 
