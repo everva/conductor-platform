@@ -112,6 +112,11 @@ export function EventStreamView({
 }: EventStreamViewProps) {
   const [filter, setFilter] = useState<FilterState>(EMPTY_FILTER);
   const [paused, setPaused] = useState(false);
+  // Heartbeats (the ~20s develop/verify/review progress pulse) are liveness, not milestones —
+  // a long phase emits dozens. The board card already carries the live signal, so the stream
+  // HIDES them by DEFAULT (no flood of identical "… · progress" rows); a toggle brings them back
+  // (collapsed) for anyone who wants the pulse. This is the decisive cure for the flood.
+  const [showHeartbeats, setShowHeartbeats] = useState(false);
   // Which rows are expanded to show their full formatted JSON payload (A2). A Set, so several
   // can be open at once; toggled by clicking a row. Kept by event id (stable across re-renders).
   const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -150,11 +155,22 @@ export function EventStreamView({
     onUnauthorized();
   }
 
-  // Render newest-first: the buffer is ascending by ts, so reverse for display. Consecutive
-  // progress heartbeats for the same (project, task, phase) are folded into one row (the newest)
-  // so a long develop/verify/review — a pulse every ~20s — does not flood the feed (it shows one
-  // "… · progress ×N" line that carries the latest activity instead of dozens of identical rows).
-  const rows = useMemo(() => collapseProgress([...feed.events].reverse()), [feed.events]);
+  // Render newest-first: the buffer is ascending by ts, so reverse for display. Heartbeats are
+  // HIDDEN by default (a long phase emits dozens of identical "… · progress" rows — pure noise);
+  // when shown, consecutive same-(project, task, phase) pulses are still folded into one "… ·
+  // progress ×N" row carrying the latest activity, so even then the feed never floods.
+  const rows = useMemo(() => {
+    const ordered = [...feed.events].reverse();
+    const visible = showHeartbeats
+      ? ordered
+      : ordered.filter((e) => e.kind !== "progress");
+    return collapseProgress(visible);
+  }, [feed.events, showHeartbeats]);
+  // How many heartbeats are currently hidden — surfaced on the toggle so they are discoverable.
+  const hiddenHeartbeats = useMemo(
+    () => (showHeartbeats ? 0 : feed.events.reduce((n, e) => (e.kind === "progress" ? n + 1 : n), 0)),
+    [feed.events, showHeartbeats],
+  );
 
   const set = <K extends keyof FilterState>(key: K, value: FilterState[K]) => {
     setFilter((prev) => ({ ...prev, [key]: value }));
@@ -176,6 +192,17 @@ export function EventStreamView({
               Reconnect
             </button>
           )}
+          <button
+            type="button"
+            aria-pressed={showHeartbeats}
+            className={showHeartbeats ? "evt-toggle on" : "evt-toggle"}
+            onClick={() => setShowHeartbeats((s) => !s)}
+            title="Heartbeats are the ~20s develop/verify/review liveness pulse — hidden by default so the feed shows milestones, not noise"
+          >
+            {showHeartbeats
+              ? "Hide heartbeats"
+              : `Show heartbeats${hiddenHeartbeats > 0 ? ` (${hiddenHeartbeats})` : ""}`}
+          </button>
           <button
             type="button"
             aria-pressed={paused}

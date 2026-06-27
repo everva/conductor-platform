@@ -38,6 +38,9 @@ class FakeWebSocket {
   }
 }
 
+// Defaults to a MILESTONE kind ("log") so generic rows are visible — heartbeats (kind
+// "progress") are hidden by default in the view, so progress-specific tests opt in explicitly
+// and toggle "Show heartbeats".
 function ev(over: Partial<Event>): Event {
   return {
     id: "e",
@@ -45,7 +48,7 @@ function ev(over: Partial<Event>): Event {
     project: "p1",
     task: "t1",
     phase: "develop",
-    kind: "progress",
+    kind: "log",
     payload: {},
     ...over,
   };
@@ -258,16 +261,23 @@ describe("EventStreamView", () => {
     expect(screen.queryByText(/"old"/)).not.toBeInTheDocument();
   });
 
-  it("(e2) folds consecutive progress heartbeats into one row with a ×N count", async () => {
+  it("(e2) HIDES heartbeats by default, then folds them into one ×N row when shown", async () => {
     const h = makeFakeHistory([
-      ev({ id: "p1", ts: "2026-06-18T00:00:01.000Z" }),
-      ev({ id: "p2", ts: "2026-06-18T00:00:02.000Z" }),
-      ev({ id: "p3", ts: "2026-06-18T00:00:03.000Z" }),
+      ev({ id: "m1", ts: "2026-06-18T00:00:00.000Z", kind: "decision" }),
+      ev({ id: "p1", ts: "2026-06-18T00:00:01.000Z", kind: "progress" }),
+      ev({ id: "p2", ts: "2026-06-18T00:00:02.000Z", kind: "progress" }),
+      ev({ id: "p3", ts: "2026-06-18T00:00:03.000Z", kind: "progress" }),
     ]);
     render(<EventStreamView token="tkn" makeHistory={() => h.loader} />);
     await flush();
-    // Three same-phase progress pulses collapse to ONE row carrying a ×3 fold count — no flood.
+    // DEFAULT: heartbeats hidden — only the milestone shows, no progress flood, no ×N.
     expect(screen.getAllByTestId("evt-row")).toHaveLength(1);
+    expect(within(screen.getByTestId("evt-row")).getByText("decision")).toBeInTheDocument();
+    expect(screen.queryByText("×3")).not.toBeInTheDocument();
+
+    // Toggle "Show heartbeats (3)" → the three pulses fold into ONE collapsed ×3 row (still no flood).
+    await userEvent.click(screen.getByRole("button", { name: /show heartbeats/i }));
+    expect(screen.getAllByTestId("evt-row")).toHaveLength(2); // milestone + one collapsed progress row
     expect(screen.getByText("×3")).toBeInTheDocument();
   });
 
