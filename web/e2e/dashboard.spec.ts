@@ -155,6 +155,11 @@ test("event stream: human-readable lines, click-to-expand full JSON, no raw dump
   await expect(page.getByRole("region", { name: /event stream/i })).toBeVisible();
   await expect(page.getByLabel(/intervention needed/i)).toBeVisible();
 
+  // Heartbeat pulses (the ~20s develop/verify/review liveness progress) are hidden by
+  // default so the feed shows milestones, not a flood; reveal them to assert the live
+  // activity line ALSO renders human-readably when shown.
+  await page.getByRole("button", { name: /show heartbeats/i }).click();
+
   // A1: rows show PLAIN-ENGLISH lines, not raw JSON — and the raw payload dump is NOT
   // on screen (the old behavior printed `{"step":"developing",…}` truncated).
   await expect(page.getByText("Writing code · 1m · 3 files")).toBeVisible();
