@@ -57,6 +57,14 @@ type approveRequest struct {
 	TaskID string `json:"task_id"`
 }
 
+// rejectRequest is the OPTIONAL JSON body of POST /projects/{id}/reject — the counterpart to
+// approve. task_id resolves the same way (empty → the project's unique held task); reason is an
+// optional short note recorded on the task so the board shows WHY it left the review queue.
+type rejectRequest struct {
+	TaskID string `json:"task_id"`
+	Reason string `json:"reason"`
+}
+
 // distillRequest is the JSON body of POST /projects/{id}/distill: the free-text
 // conversation to distill into PROPOSED scenarios. An empty/absent conversation
 // is rejected (the distiller has nothing to work on).
@@ -531,6 +539,47 @@ func (s *apiServer) handleApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"project": id, "approved_task": approvedID})
+}
+
+// handleReject: POST /projects/{id}/reject — REJECT a held awaiting-approval task (the counterpart
+// to approve) so it leaves the review queue WITHOUT merging, via the StoreRejecter. The body is
+// OPTIONAL JSON {"task_id":"...","reason":"..."}; an empty/absent task_id auto-resolves the unique
+// held task. The honest mapping mirrors approve: nothing/ambiguous → 409, unknown project → 404.
+func (s *apiServer) handleReject(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var req rejectRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+
+	// Existence-check the project first (mirrors approve): an unknown project lists EMPTY with no
+	// error, which would misreport as 409; a missing project must be 404.
+	if _, err := s.store.GetProject(r.Context(), id); err != nil {
+		if errors.Is(err, statestore.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		s.serverError(w, "reject: get project", err)
+		return
+	}
+
+	rejectedID, err := conductor.NewStoreRejecter(s.store).RequestReject(r.Context(), id, req.TaskID, req.Reason)
+	if err != nil {
+		switch {
+		case errors.Is(err, conductor.ErrNothingToApprove):
+			writeError(w, http.StatusConflict, "no task awaiting approval")
+		case errors.Is(err, conductor.ErrAmbiguousApproval):
+			writeError(w, http.StatusConflict, "multiple tasks awaiting approval; specify task_id")
+		case errors.Is(err, statestore.ErrNotFound):
+			writeError(w, http.StatusNotFound, "project not found")
+		default:
+			s.serverError(w, "reject", err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"project": id, "rejected_task": rejectedID})
 }
 
 // handleRetry: POST /projects/{id}/tasks/{task}/retry — reset a BLOCKED task back to

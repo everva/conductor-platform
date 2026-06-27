@@ -447,6 +447,24 @@ export class ApiClient {
     );
   }
 
+  // reject DECLINES a held awaiting-approval task (counterpart to approve): the gateway moves it to
+  // the terminal "rejected" status WITHOUT merging. taskId targets the specific held task; reason is
+  // an optional short note recorded on the task so the board shows why it left the review queue.
+  reject(
+    projectId: string,
+    taskId?: string,
+    reason?: string,
+  ): Promise<{ project: string; rejected_task: string }> {
+    const body: { task_id?: string; reason?: string } = {};
+    if (taskId !== undefined) body.task_id = taskId;
+    if (reason !== undefined && reason !== "") body.reason = reason;
+    return this.request(
+      "POST",
+      `/projects/${encodeURIComponent(projectId)}/reject`,
+      Object.keys(body).length > 0 ? body : undefined,
+    );
+  }
+
   // --- intake conversation history (intakesession.go) ---
 
   // listIntakeSessions returns a project's saved intake conversations newest-first as light

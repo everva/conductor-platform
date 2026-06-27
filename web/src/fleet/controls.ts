@@ -25,6 +25,13 @@ export interface ControlClient {
     projectId: string,
     taskId?: string,
   ): Promise<{ project: string; approved_task: string }>;
+  // reject DECLINES a held awaiting-approval task (counterpart to approve): it moves to the
+  // terminal "rejected" status WITHOUT merging. reason is an optional short note for the board.
+  reject(
+    projectId: string,
+    taskId?: string,
+    reason?: string,
+  ): Promise<{ project: string; rejected_task: string }>;
   retry(
     projectId: string,
     taskId: string,

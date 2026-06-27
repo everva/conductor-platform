@@ -75,15 +75,17 @@ describe("CommandCenter board", () => {
     expect(within(running).getByText(/host-mac/)).toBeInTheDocument();
   });
 
-  it("offers Approve on an awaiting-approval card and opens its session on click", async () => {
+  it("offers Approve AND Reject on an awaiting-approval card and opens its session on click", async () => {
     const user = userEvent.setup();
     const onOpenSession = vi.fn();
     const requestApprove = vi.fn();
+    const requestReject = vi.fn();
     const controls = {
       isTaskBusy: () => false,
       isProjectBusy: () => false,
       retry: vi.fn(),
       requestApprove,
+      requestReject,
     } as unknown as FleetControls;
 
     render(
@@ -98,6 +100,10 @@ describe("CommandCenter board", () => {
     );
     await user.click(screen.getByRole("button", { name: "Approve" }));
     expect(requestApprove).toHaveBeenCalledWith("p", "T-h");
+
+    // A held card is NOT a dead-end: Reject declines the merge (the counterpart action).
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+    expect(requestReject).toHaveBeenCalledWith("p", "T-h");
 
     // Clicking the card body (not the action) drills into the task's session.
     await user.click(screen.getByText("T-h"));

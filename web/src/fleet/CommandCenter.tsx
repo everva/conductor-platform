@@ -349,6 +349,7 @@ function BoardCardView({
   const t = card.task;
   const held = isAwaitingApproval(t);
   const blocked = t.status === "blocked";
+  const rejected = t.status === "rejected";
   const running = t.status === "running";
   const busy = controls?.isTaskBusy(t.project_id, t.id) ?? false;
   // Abort is project-scoped (it cancels the in-flight task), so its busy/label key off
@@ -425,9 +426,10 @@ function BoardCardView({
           <span className="cc-phase">{card.livePhase}</span>
         ) : null}
       </div>
-      {blocked && t.reason && (
-        // WHY this card stalled — the agent's report summary (e.g. "…malformed verdict…",
-        // "gate unresolved — needs user"). Truncated; full text on hover via title.
+      {(blocked || rejected) && t.reason && (
+        // WHY this card stalled or was declined — the agent's report summary (e.g. "…malformed
+        // verdict…", "gate unresolved — needs user") or the director's reject reason ("rejected by
+        // director"). Truncated; full text on hover via title.
         <div className="cc-card-reason" title={t.reason}>
           {t.reason}
         </div>
@@ -451,6 +453,18 @@ function BoardCardView({
               onClick={() => controls.requestApprove(t.project_id, t.id)}
             >
               {busy ? "Approving…" : "Approve"}
+            </Button>
+          )}
+          {held && controls && (
+            // Decline the held work: the counterpart to Approve so a held card is never a
+            // dead-end (the user's "held'i sadece onaylayabiliyordum"). Confirm-gated.
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={busy}
+              onClick={() => controls.requestReject(t.project_id, t.id)}
+            >
+              Reject
             </Button>
           )}
           {blocked && controls && (

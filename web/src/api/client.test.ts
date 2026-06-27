@@ -206,6 +206,29 @@ describe("ApiClient", () => {
     expect(res.scenarios).toEqual([]);
   });
 
+  it("reject POSTs task_id + reason and returns the rejected task", async () => {
+    const fetchFn = mockFetch(() => jsonResponse(200, { project: "proj", rejected_task: "T-9" }));
+    const client = new ApiClient({ baseUrl: "https://gw.test", token: TEST_TOKEN });
+
+    const res = await client.reject("proj", "T-9", "not needed");
+
+    expect(res).toEqual({ project: "proj", rejected_task: "T-9" });
+    const [url, init] = fetchFn.mock.calls[0];
+    expect(String(url)).toBe("https://gw.test/projects/proj/reject");
+    expect((init as RequestInit).method).toBe("POST");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ task_id: "T-9", reason: "not needed" });
+  });
+
+  it("reject omits an empty reason from the body", async () => {
+    const fetchFn = mockFetch(() => jsonResponse(200, { project: "proj", rejected_task: "T-9" }));
+    const client = new ApiClient({ baseUrl: "https://gw.test", token: TEST_TOKEN });
+
+    await client.reject("proj", "T-9");
+
+    const [, init] = fetchFn.mock.calls[0];
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ task_id: "T-9" });
+  });
+
   it("listIntakeSessions GETs and unwraps the {sessions} envelope", async () => {
     const fetchFn = mockFetch(() =>
       jsonResponse(200, {

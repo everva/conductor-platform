@@ -42,6 +42,7 @@ describe("buildBoard bucketing", () => {
         task({ id: "T-await", project_id: "p", status: "awaiting-approval" }),
         task({ id: "T-block", project_id: "p", status: "blocked" }),
         task({ id: "T-done", project_id: "p", status: "done" }),
+        task({ id: "T-reject", project_id: "p", status: "rejected" }),
       ],
     };
     const board = buildBoard(tasks, {}, []);
@@ -51,7 +52,9 @@ describe("buildBoard bucketing", () => {
       "T-await",
       "T-block",
     ]);
-    expect(board.columns.done.map((c) => c.task.id)).toEqual(["T-done"]);
+    // done + rejected are both terminal → the Done column (a rejected held task left the queue
+    // WITHOUT merging, so it is NOT in Needs-Review and must not read as a fresh Ready task).
+    expect(board.columns.done.map((c) => c.task.id)).toEqual(["T-done", "T-reject"]);
   });
 
   it("treats a leased task as running regardless of stored status, with its host", () => {

@@ -385,6 +385,62 @@ func TestApproveAutoResolve200(t *testing.T) {
 	}
 }
 
+// --- reject (counterpart to approve) ---
+
+func TestRejectNoAwaiting409(t *testing.T) {
+	s, store := emptyServer()
+	mustCreate(t, store.CreateProject(context.Background(), statestore.Project{ID: "proj-x", Repo: "owner/x", BaseBranch: "develop"}))
+	rec := doBody(t, s, http.MethodPost, "/projects/proj-x/reject", bearer(), "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRejectUnknownProject404(t *testing.T) {
+	s, _ := emptyServer()
+	rec := doBody(t, s, http.MethodPost, "/projects/does-not-exist/reject", bearer(), "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRejectSpecificTaskID200 rejects a held task by id: it moves to the terminal rejected status
+// with the supplied reason, is NOT approved (never merges), and the response names the task.
+func TestRejectSpecificTaskID200(t *testing.T) {
+	s, store := emptyServer()
+	ctx := context.Background()
+	mustCreate(t, store.CreateProject(ctx, statestore.Project{ID: "proj-x", Repo: "owner/x", BaseBranch: "develop"}))
+	mustCreate(t, store.CreateTask(ctx, statestore.Task{
+		ID: "T-9", ProjectID: "proj-x", Lane: "backend", Tier: "T3",
+		Status: conductor.StatusAwaitingApproval, Branch: "task/T-9",
+	}))
+
+	rec := doBody(t, s, http.MethodPost, "/projects/proj-x/reject", bearer(), `{"task_id":"T-9","reason":"not needed"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["rejected_task"] != "T-9" {
+		t.Fatalf("rejected_task = %v, want T-9", got["rejected_task"])
+	}
+	tk, err := store.GetTask(ctx, "T-9")
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if tk.Status != conductor.StatusRejected {
+		t.Fatalf("status = %q, want %q", tk.Status, conductor.StatusRejected)
+	}
+	if tk.LastError != "not needed" {
+		t.Fatalf("reason = %q, want \"not needed\"", tk.LastError)
+	}
+	if tk.Approved {
+		t.Fatalf("a rejected task must not be approved")
+	}
+}
+
 func TestApproveSpecificTaskID200(t *testing.T) {
 	s, store := emptyServer()
 	ctx := context.Background()
@@ -426,6 +482,7 @@ func TestControlEndpointsRequireAuth(t *testing.T) {
 		{http.MethodPost, "/projects/proj-x/resume", ""},
 		{http.MethodPost, "/projects/proj-x/abort", ""},
 		{http.MethodPost, "/projects/proj-x/approve", ""},
+		{http.MethodPost, "/projects/proj-x/reject", ""},
 	}
 	for _, c := range cases {
 		// No token → 401.

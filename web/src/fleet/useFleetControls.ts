@@ -22,7 +22,7 @@ import { classifyControlError, successNotice } from "./controls.ts";
 import type { ControlClient, ControlNotice } from "./controls.ts";
 
 // ActionKind is the verb of a control action; it keys the busy state and the labels.
-export type ActionKind = "pause" | "resume" | "abort" | "approve" | "retry";
+export type ActionKind = "pause" | "resume" | "abort" | "approve" | "reject" | "retry";
 
 // PendingConfirm describes an action awaiting the operator's explicit confirmation.
 // It carries everything needed to render the dialog and run the action on confirm.
@@ -73,6 +73,10 @@ export interface FleetControls {
   requestAbort: (projectId: string) => void;
   // requestApprove with a taskId is task-level; without it is project-level auto-resolve.
   requestApprove: (projectId: string, taskId?: string) => void;
+  // requestReject OPENS a confirm to DECLINE a held task (counterpart to approve): on confirm the
+  // task moves to the terminal "rejected" status WITHOUT merging. Confirm-gated (it discards the
+  // proposed merge), like abort/approve.
+  requestReject: (projectId: string, taskId?: string) => void;
   // requestBulkApprove OPENS one confirm enumerating every selected gate-green task;
   // on confirm each is approved+merged. A no-op for an empty selection (redesign E4).
   requestBulkApprove: (items: { projectId: string; taskId: string }[]) => void;
@@ -229,6 +233,29 @@ export function useFleetControls(opts: UseFleetControlsOptions): FleetControls {
     [client, refresh, pushNotice, handleError],
   );
 
+  // runReject executes AFTER the operator confirms: mark busy, POST reject, refresh, notice.
+  const runReject = useCallback(
+    (projectId: string, taskId: string | undefined) => {
+      const key = busyKey(projectId, taskId);
+      setBusy((b) => ({ ...b, [key]: "reject" }));
+      void client
+        .reject(projectId, taskId)
+        .then(async (res) => {
+          await refresh();
+          pushNotice(successNotice(`Rejected ${res.rejected_task} on ${projectId}.`));
+        })
+        .catch(handleError)
+        .finally(() => {
+          setBusy((b) => {
+            const next = { ...b };
+            delete next[key];
+            return next;
+          });
+        });
+    },
+    [client, refresh, pushNotice, handleError],
+  );
+
   // retry is a DIRECT task action (no confirm): re-queue a blocked task, refresh, notice.
   const retry = useCallback(
     (projectId: string, taskId: string) => {
@@ -276,6 +303,21 @@ export function useFleetControls(opts: UseFleetControlsOptions): FleetControls {
           : `Approving the unique awaiting task on ${projectId} triggers a real merge on the next tick.`,
       confirmLabel: "Approve & merge",
       tone: "primary",
+    });
+  }, []);
+
+  const requestReject = useCallback((projectId: string, taskId?: string) => {
+    setPending({
+      kind: "reject",
+      projectId,
+      taskId,
+      title: taskId !== undefined ? `Reject task ${taskId}?` : "Reject awaiting task?",
+      body:
+        taskId !== undefined
+          ? `Rejecting ${taskId} declines the proposed merge — it moves to "rejected" and is NOT merged. The work branch is kept for manual handling.`
+          : `Rejecting the unique awaiting task on ${projectId} declines its merge (moves to "rejected", not merged).`,
+      confirmLabel: "Reject",
+      tone: "danger",
     });
   }, []);
 
@@ -343,13 +385,15 @@ export function useFleetControls(opts: UseFleetControlsOptions): FleetControls {
       } else {
         runApprove(p.projectId, p.taskId);
       }
+    } else if (p.kind === "reject") {
+      runReject(p.projectId, p.taskId);
     } else if (p.kind === "retry" && p.items && p.items.length > 0) {
       // Bulk retry: re-queue each selected blocked task (each tracked + reconciled on its own).
       for (const it of p.items) {
         retry(it.projectId, it.taskId);
       }
     }
-  }, [pending, runAbort, runApprove, retry]);
+  }, [pending, runAbort, runApprove, runReject, retry]);
 
   const cancelConfirm = useCallback(() => setPending(null), []);
 
@@ -386,6 +430,7 @@ export function useFleetControls(opts: UseFleetControlsOptions): FleetControls {
     pause,
     resume,
     retry,
+    requestReject,
     requestBulkRetry,
     requestAbort,
     requestApprove,

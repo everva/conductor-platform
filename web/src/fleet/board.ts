@@ -137,8 +137,9 @@ function leaseHostByTask(leasesByProject: Record<string, Lease[]>): Map<string, 
 // columnFor decides a task's lifecycle column. A task holding an active lease is
 // RUNNING regardless of its stored status (the lease is the live truth, and the
 // in-store "running" window is brief). Otherwise it maps by status: awaiting-
-// approval/blocked → the director's Needs-Review lane; done → Done; everything
-// else (todo/ready/unknown) → Ready.
+// approval/blocked → the director's Needs-Review lane; done/rejected → Done (both
+// terminal — a rejected held task left the queue WITHOUT merging); everything else
+// (todo/ready/unknown) → Ready.
 function columnFor(task: Task, leased: boolean): BoardColumnKey {
   if (leased) {
     return "running";
@@ -150,6 +151,7 @@ function columnFor(task: Task, leased: boolean): BoardColumnKey {
     case "blocked":
       return "needs-review";
     case "done":
+    case "rejected":
       return "done";
     default:
       return "ready";

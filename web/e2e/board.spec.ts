@@ -262,3 +262,37 @@ test("multi-select blocked cards opens an enumerated bulk-retry confirm and re-q
   await dialog.getByRole("button", { name: /^retry 2$/i }).click();
   await expect.poll(() => [...retried].sort().join(",")).toBe("B-a,B-b");
 });
+
+test("a held card offers Reject; confirming declines the merge (POST /reject) — quick-win", async ({ page }) => {
+  await mockWebSocket(page);
+  await page.route("**/status", (r) => r.fulfill(json({ projects: 1, hosts: 1, leases: [], generated_at: "2026-06-20T00:00:00Z" })));
+  await page.route("**/hosts", (r) => r.fulfill(json(HOSTS)));
+  await page.route("**/projects", (r) => r.fulfill(json([PROJECTS[0]])));
+  await page.route("**/projects/*/tasks", (r) => {
+    const pid = r.request().url().match(/\/projects\/([^/]+)\/tasks/)?.[1] ?? "";
+    return r.fulfill(json(pid === "web-shop" ? [task("H-1", "web-shop", "awaiting-approval")] : []));
+  });
+  await page.route("**/projects/*/scenarios", (r) => r.fulfill(json([])));
+  await page.route("**/events*", (r) => r.fulfill(json([])));
+  // Capture the reject POST the confirm fires.
+  let rejectedTaskId: string | undefined;
+  await page.route(/\/projects\/[^/]+\/reject$/, (r) => {
+    rejectedTaskId = (JSON.parse(r.request().postData() ?? "{}") as { task_id?: string }).task_id;
+    return r.fulfill(json({ project: "web-shop", rejected_task: "H-1" }));
+  });
+  await page.goto("/");
+  await page.getByLabel(/api token/i).fill("test-token");
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page.getByRole("region", { name: /command center/i })).toBeVisible();
+
+  // A held card now offers BOTH Approve and Reject (no dead-end).
+  const review = column(page, "Needs Review");
+  await expect(review.getByRole("button", { name: "Approve" })).toBeVisible();
+  await review.getByRole("button", { name: "Reject" }).click();
+
+  // Reject is confirm-gated (danger-toned); confirming POSTs /reject for that task.
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("Reject task H-1?");
+  await dialog.getByRole("button", { name: "Reject" }).click();
+  await expect.poll(() => rejectedTaskId).toBe("H-1");
+});

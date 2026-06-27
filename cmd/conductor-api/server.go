@@ -140,6 +140,7 @@ func (s *apiServer) routes() http.Handler {
 	mux.Handle("POST /projects/{id}/resume", s.requireAuth(http.HandlerFunc(s.handleResume)))
 	mux.Handle("POST /projects/{id}/abort", s.requireAuth(http.HandlerFunc(s.handleAbort)))
 	mux.Handle("POST /projects/{id}/approve", s.requireAuth(http.HandlerFunc(s.handleApprove)))
+	mux.Handle("POST /projects/{id}/reject", s.requireAuth(http.HandlerFunc(s.handleReject)))
 	mux.Handle("POST /projects/{id}/tasks/{task}/retry", s.requireAuth(http.HandlerFunc(s.handleRetry)))
 
 	// Gateway-mediated host-agent API (ADR-0048, Faz G): a performer host leases work
