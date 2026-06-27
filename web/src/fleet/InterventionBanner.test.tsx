@@ -33,6 +33,10 @@ function fake(): ControlClient & Record<string, ReturnType<typeof vi.fn>> {
       project: id,
       approved_task: taskId ?? "t1",
     })),
+    reject: vi.fn(async (id: string, taskId?: string) => ({
+      project: id,
+      rejected_task: taskId ?? "t1",
+    })),
     retry: vi.fn(async (id: string, taskId: string) => ({
       project: id,
       task: taskId,
