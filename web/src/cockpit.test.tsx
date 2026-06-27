@@ -72,7 +72,9 @@ const LIVE_EVENT: Event = {
   project: "fork-proj",
   task: "fork-task",
   phase: "develop",
-  kind: "progress",
+  // A MILESTONE kind: the recent-events ticker drops heartbeat "progress" pulses, so this proves
+  // the live tail reaches the UI with an event the ticker actually surfaces.
+  kind: "started",
   payload: { pct: 42 },
 };
 

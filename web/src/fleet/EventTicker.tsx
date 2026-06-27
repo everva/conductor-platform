@@ -13,8 +13,10 @@ export interface EventTickerProps {
 }
 
 export function EventTicker({ events, limit = 12 }: EventTickerProps) {
-  // Newest first, capped.
-  const recent = events.slice(-limit).reverse();
+  // Newest first, capped. Heartbeat pulses (the ~20s liveness progress) are dropped — they are
+  // not milestones and a long phase would fill the whole tail with identical "develop/progress"
+  // rows; the board card already carries the live signal, so the ticker shows recent MILESTONES.
+  const recent = events.filter((e) => e.kind !== "progress").slice(-limit).reverse();
 
   return (
     <section className="fleet-panel" aria-label="Recent events">
