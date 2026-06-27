@@ -16,6 +16,11 @@ const OPEN_SESSION_COMMAND = "conductor.openSession";
 const NEW_WORK_COMMAND = "conductor.newWork";
 const DISPATCH_COMMAND = "conductor.dispatch";
 const REFRESH_SESSIONS_COMMAND = "conductor.refreshSessions";
+// B — separate windows: the per-surface open commands + the Board window's tab title.
+const OPEN_BOARD_COMMAND = "conductor.openBoard";
+const OPEN_FLEET_COMMAND = "conductor.openFleet";
+const OPEN_EVENTS_COMMAND = "conductor.openEvents";
+const BOARD_WINDOW_TITLE = "Conductor Board";
 const COMMAND_CENTER_TITLE = "Conductor";
 const INTAKE_TITLE = "New Work";
 const DIFF_SCHEME = "conductor-diff";
@@ -170,6 +175,25 @@ export async function smoke(): Promise<void> {
   assert.ok(
     intakeOpened,
     `executing ${NEW_WORK_COMMAND} should open the "${INTAKE_TITLE}" tab; saw ${JSON.stringify(
+      collectTabLabels(),
+    )}`,
+  );
+
+  // B — separate windows: the three per-surface open commands must be registered (a menu/keybinding-
+  // free command still must be declared in package.json for the palette + executeCommand to find it).
+  for (const cmd of [OPEN_BOARD_COMMAND, OPEN_FLEET_COMMAND, OPEN_EVENTS_COMMAND]) {
+    assert.ok(allCommands.includes(cmd), `command ${cmd} should be registered`);
+  }
+
+  // B — EXPLICIT-OPEN proof in a REAL host: opening a surface window mounts its OWN editor tab, the
+  // cockpit bundle LOCKED to that surface via data-surface. Prove the Board window appears (no gateway
+  // → no data, but the SurfacePanel + bridge + tab wiring must not throw).
+  await vscode.commands.executeCommand(OPEN_BOARD_COMMAND);
+  const boardOpened = await waitFor(() => collectTabLabels().includes(BOARD_WINDOW_TITLE), 10000);
+  console.log(`[vscode-smoke] tabs after ${OPEN_BOARD_COMMAND}: ${JSON.stringify(collectTabLabels())}`);
+  assert.ok(
+    boardOpened,
+    `executing ${OPEN_BOARD_COMMAND} should open the "${BOARD_WINDOW_TITLE}" tab; saw ${JSON.stringify(
       collectTabLabels(),
     )}`,
   );

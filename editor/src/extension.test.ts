@@ -45,6 +45,11 @@ import {
   INTAKE_VIEW_TYPE,
   INTAKE_TITLE,
   NEW_WORK_COMMAND,
+  SurfacePanel,
+  SURFACE_WINDOWS,
+  OPEN_BOARD_COMMAND,
+  OPEN_FLEET_COMMAND,
+  OPEN_EVENTS_COMMAND,
   OPEN_COMMAND,
   OPEN_SESSION_COMMAND,
   OPEN_TASK_DIFF_COMMAND,
@@ -201,9 +206,10 @@ describe("registerConductor", () => {
 
     // connect + disconnect + login + logout + pause + resume + abort + approve + diff-provider +
     // show-diff + open (N0) + openSession (N3) + openTaskDiff (P3) + showEventJson + retryTask (A/B) +
-    // newWork (Q3a) + dispatch (Faz-R) + openTour = 18. (Q0.4: no sidebar webview view; the CC + Intake
-    // panels are built only when a fleetConfig is supplied — registerConductor here gets none.)
-    expect(disposables).toHaveLength(18);
+    // newWork (Q3a) + dispatch (Faz-R) + openTour = 18, + openBoard/openFleet/openEvents (B) = 21.
+    // (Q0.4: no sidebar webview view; the CC + Intake + surface panels are built only when a
+    // fleetConfig is supplied — registerConductor here gets none, so only the 3 commands register.)
+    expect(disposables).toHaveLength(21);
     expect(commands.registerCommand).toHaveBeenCalledWith(CONNECT_COMMAND, expect.any(Function));
     expect(commands.registerCommand).toHaveBeenCalledWith(DISCONNECT_COMMAND, expect.any(Function));
     // L1: the editor-mediated claude login/logout commands.
@@ -226,6 +232,11 @@ describe("registerConductor", () => {
     expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_TASK_DIFF_COMMAND, expect.any(Function));
     // Q3a: the Intake "New Work" window command.
     expect(commands.registerCommand).toHaveBeenCalledWith(NEW_WORK_COMMAND, expect.any(Function));
+    // B — separate windows: the three per-surface open commands (registered unconditionally so
+    // they show in the palette; a no-op until the host is connected).
+    expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_BOARD_COMMAND, expect.any(Function));
+    expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_FLEET_COMMAND, expect.any(Function));
+    expect(commands.registerCommand).toHaveBeenCalledWith(OPEN_EVENTS_COMMAND, expect.any(Function));
     // Faz-R: the native Dispatch Work command.
     expect(commands.registerCommand).toHaveBeenCalledWith(DISPATCH_COMMAND, expect.any(Function));
     // Q0.4: NO sidebar webview view is registered any more (the cockpit lives only in the panel).
@@ -1540,8 +1551,9 @@ describe("activate", () => {
     // 33 (post-diagnostics) + Activity's three (view + provider + nowBar status item) = 36,
     // + the M2 auto-reconnect controller's dispose = 37, + the A/B Stream commands
     // (showEventJson + retryTask) = 39, + the openTour command = 40, + the Faz-R dispatch command = 41,
-    // + the live-polling backbone's clearInterval dispose = 42.
-    expect(subscriptions).toHaveLength(42);
+    // + the live-polling backbone's clearInterval dispose = 42, + B's openBoard/openFleet/openEvents
+    // commands (3) + their SurfacePanels disposed (3, fleetConfig present here) = 48.
+    expect(subscriptions).toHaveLength(48);
   });
 
   it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {
@@ -1767,6 +1779,60 @@ describe("IntakePanel (Q3a — editor-area New Work window)", () => {
   });
 });
 
+describe("SurfacePanel (B — per-surface separate windows)", () => {
+  it("opens a WebviewPanel BESIDE, LOCKED to its surface (data-surface), + attaches a bridge", () => {
+    const attach = vi.fn();
+    const bridgeFactory = vi.fn(() => ({ attach, dispose: vi.fn() }));
+
+    new SurfacePanel(
+      makeFleetConfig({ bridgeFactory }),
+      "events",
+      "conductor.eventsWindow",
+      "Conductor Events",
+    ).open();
+
+    expect(window.createWebviewPanel).toHaveBeenCalledTimes(1);
+    // Opened BESIDE the active editor (so it lands next to the Command Center) with its own viewType.
+    expect(window.createWebviewPanel).toHaveBeenCalledWith(
+      "conductor.eventsWindow",
+      "Conductor Events",
+      ViewColumn.Beside,
+      expect.objectContaining({ enableScripts: true, retainContextWhenHidden: true }),
+    );
+    const created = window.createWebviewPanel.mock.results[0]?.value as { webview: { html: string } };
+    // The SAME bundle, but #root carries data-surface="events" → main.tsx mounts the LOCKED cockpit.
+    expect(created.webview.html).toContain('<div id="root" data-surface="events"></div>');
+    expect(bridgeFactory).toHaveBeenCalledTimes(1);
+    expect(attach).toHaveBeenCalledTimes(1);
+  });
+
+  it("is a singleton: a second open reveals the existing window instead of creating another", () => {
+    const bridgeFactory = vi.fn(() => ({ attach: vi.fn(), dispose: vi.fn() }));
+    const panel = new SurfacePanel(
+      makeFleetConfig({ bridgeFactory }),
+      "board",
+      "conductor.boardWindow",
+      "Conductor Board",
+    );
+    panel.open();
+    panel.open();
+    expect(window.createWebviewPanel).toHaveBeenCalledTimes(1);
+    const created = window.createWebviewPanel.mock.results[0]?.value as { reveal: ReturnType<typeof vi.fn> };
+    expect(created.reveal).toHaveBeenCalledTimes(1);
+  });
+
+  it("SURFACE_WINDOWS describes board/fleet/events with distinct commands + view types", () => {
+    expect(SURFACE_WINDOWS.map((w) => w.surface)).toEqual(["board", "fleet", "events"]);
+    expect(SURFACE_WINDOWS.map((w) => w.command)).toEqual([
+      OPEN_BOARD_COMMAND,
+      OPEN_FLEET_COMMAND,
+      OPEN_EVENTS_COMMAND,
+    ]);
+    // Distinct view types so each surface window is its own singleton tab.
+    expect(new Set(SURFACE_WINDOWS.map((w) => w.viewType)).size).toBe(3);
+  });
+});
+
 describe("webviewHtml", () => {
   // A representative opts bundle (the runtime values resolveWebviewView passes).
   const opts = {
@@ -1782,6 +1848,18 @@ describe("webviewHtml", () => {
     expect(html).toContain("default-src 'none'");
     // connect-src 'none' is the enforcement that all data flows over the host bridge.
     expect(html).toContain("connect-src 'none'");
+  });
+
+  it("reflects a KNOWN surface as data-surface (B), nothing for the default or an unknown one", () => {
+    // Each separate-window surface is emitted verbatim onto #root.
+    expect(webviewHtml({ ...opts, surface: "events" })).toContain('<div id="root" data-surface="events"></div>');
+    expect(webviewHtml({ ...opts, surface: "board" })).toContain('<div id="root" data-surface="board"></div>');
+    expect(webviewHtml({ ...opts, surface: "fleet" })).toContain('<div id="root" data-surface="fleet"></div>');
+    expect(webviewHtml({ ...opts, surface: "intake" })).toContain('<div id="root" data-surface="intake"></div>');
+    // Default cockpit (no surface) → bare #root.
+    expect(webviewHtml(opts)).toContain('<div id="root"></div>');
+    // An UNKNOWN surface is dropped (whitelist) so no attacker-controlled string reaches the markup.
+    expect(webviewHtml({ ...opts, surface: '"><script>x' })).toContain('<div id="root"></div>');
   });
 
   it("allows only a nonce'd script (script-src 'nonce-…', no 'unsafe-inline')", () => {

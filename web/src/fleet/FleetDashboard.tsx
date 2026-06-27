@@ -78,13 +78,18 @@ export interface FleetDashboardProps {
   // selectedTask seam a board drill-in uses (the former N3 deep-link). The fork passes a NEW object
   // per host request (even for the same ids) so a repeat selection re-fires. Web mode omits it.
   selection?: { project: string; task?: string } | null;
+  // surface, when set, LOCKS the cockpit to a single surface (B — separate windows): the segmented
+  // tab-bar + ⌘K palette are hidden and the dashboard renders only that surface. The editor opens
+  // one such window per surface (Board / Fleet / Events) so the director can place them side by side
+  // or "Move into New Window" natively. Omitted → the full tabbed dashboard (today's behavior).
+  surface?: DashboardTab;
 }
 
 // DashboardTab selects the cockpit surface. "board" is the agent-native Command
 // Center (redesign E1) and the DEFAULT surface a director lands on; "fleet" is the
 // per-project detail (the 3B overview, kept as a drill-in), "events" the full
 // filterable feed (3B-2), "intake" the spec/distill flow.
-type DashboardTab = "board" | "fleet" | "events" | "intake";
+export type DashboardTab = "board" | "fleet" | "events" | "intake";
 
 const TABS: { key: DashboardTab; label: string; Icon: LucideIcon }[] = [
   { key: "board", label: "Board", Icon: LayoutGrid },
@@ -103,13 +108,19 @@ export function FleetDashboard({
   makeScenarioClient,
   eventTransport,
   selection,
+  surface,
 }: FleetDashboardProps) {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   // selectedTask drives the session detail view (redesign E2): set by a board card
   // drill-in; cleared by the session's back button. When set it replaces the tabbed
   // content with the SessionView (the status bar + notices + confirm dialog persist).
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [tab, setTab] = useState<DashboardTab>("board");
+  const [tab, setTab] = useState<DashboardTab>(surface ?? "board");
+  // surface-LOCK (B — separate windows): when the host opens a single-surface window, the tab-bar
+  // and ⌘K palette are hidden and the rendered surface is fixed to `surface` regardless of any
+  // internal setTab (so a stray "New work"/intervention callback can't navigate the window away).
+  const locked = surface !== undefined;
+  const activeTab: DashboardTab = surface ?? tab;
   // The ⌘K command palette (redesign E4): a keyboard-first overlay to jump to any
   // session, switch surface, or start new work. Opened globally by ⌘K/Ctrl+K (or
   // the tab-bar trigger) and reachable from the session view too.
@@ -186,6 +197,10 @@ export function FleetDashboard({
   // a tab, or a session). A window-level listener keeps the shortcut working
   // regardless of which control holds focus.
   useEffect(() => {
+    // A surface-locked window has no palette (it can't navigate surfaces) — don't bind ⌘K there.
+    if (locked) {
+      return;
+    }
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
         e.preventDefault();
@@ -194,7 +209,7 @@ export function FleetDashboard({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [locked]);
 
   // runPaletteAction maps a palette selection to the cockpit's existing navigation
   // seams (the same setTab/setSelectedTask a tab click or board drill-in uses) and
@@ -265,6 +280,7 @@ export function FleetDashboard({
         />
       ) : (
         <>
+      {!locked && (
       <div className="fleet-tabbar">
       <div className="fleet-tabs" role="tablist" aria-label="Dashboard view">
         {TABS.map(({ key, label, Icon }) => (
@@ -292,8 +308,9 @@ export function FleetDashboard({
         <kbd>⌘K</kbd>
       </button>
       </div>
+      )}
 
-      {tab === "board" ? (
+      {activeTab === "board" ? (
         <CommandCenter
           tasksByProject={fleet.tasksByProject}
           leasesByProject={fleet.leasesByProject}
@@ -307,7 +324,7 @@ export function FleetDashboard({
           selectedProjectId={selectedProjectId}
           onShowAllProjects={() => setSelectedProjectId(null)}
         />
-      ) : tab === "fleet" ? (
+      ) : activeTab === "fleet" ? (
         <>
           <InterventionBanner
             events={fleet.recentEvents}
@@ -339,7 +356,7 @@ export function FleetDashboard({
             </div>
           </div>
         </>
-      ) : tab === "events" ? (
+      ) : activeTab === "events" ? (
         <EventStreamView
           token={token}
           projects={fleet.projects.map((p) => p.id)}

@@ -96,6 +96,21 @@
         "category": "Conductor"
       },
       {
+        "command": "conductor.openBoard",
+        "title": "Conductor: Open Board in New Pane",
+        "category": "Conductor"
+      },
+      {
+        "command": "conductor.openFleet",
+        "title": "Conductor: Open Fleet in New Pane",
+        "category": "Conductor"
+      },
+      {
+        "command": "conductor.openEvents",
+        "title": "Conductor: Open Events in New Pane",
+        "category": "Conductor"
+      },
+      {
         "command": "conductor.dispatch",
         "title": "Conductor: Dispatch Work",
         "category": "Conductor",

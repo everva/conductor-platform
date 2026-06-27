@@ -23,7 +23,7 @@
 
 // --- Mount component (the one cockpit a host renders) ---
 export { FleetDashboard } from "./fleet/FleetDashboard.tsx";
-export type { FleetDashboardProps } from "./fleet/FleetDashboard.tsx";
+export type { FleetDashboardProps, DashboardTab } from "./fleet/FleetDashboard.tsx";
 
 // --- Intake surface (Faz-Q / Q3): mountable STANDALONE so a host can give Intake its own
 // window (the fork's editor-area "New Work" panel) instead of burying it in a cockpit tab. It

@@ -41,7 +41,7 @@ import "./theme-vscode.css";
 import { createBridgeTransports, subscribeToMessages } from "../src/bridge/webviewTransport";
 import { isSelect } from "../src/bridge/protocol";
 import { forkClientFactories } from "./connect";
-import { FleetDashboard, IntakeChat, ApiClient, type Project } from "@cockpit";
+import { FleetDashboard, IntakeChat, ApiClient, type Project, type DashboardTab } from "@cockpit";
 
 // The VS Code webview api (declared in types.d.ts). The only channel to the host.
 const vscodeApi = acquireVsCodeApi();
@@ -67,7 +67,7 @@ const { makeClient, makeControlClient, makeIntakeClient, makeHistory, makeScenar
  * repeat selection (same ids) still re-fires the dashboard's effect. `task` may be absent (select
  * a project) or present (also open that task's session — the former deep-link).
  */
-function ForkApp(): React.JSX.Element {
+function ForkApp({ surface }: { surface?: DashboardTab }): React.JSX.Element {
   const [selection, setSelection] = useState<{ project: string; task?: string } | null>(null);
 
   useEffect(() => {
@@ -91,6 +91,7 @@ function ForkApp(): React.JSX.Element {
       makeScenarioClient={makeScenarioClient}
       eventTransport={events}
       selection={selection}
+      {...(surface ? { surface } : {})}
       onUnauthorized={() => {
         // FORK MODE: the host owns auth, so the webview can't re-prompt. A 401 here means a
         // stored token went stale; surfacing it to the host is a later step. Log it (no token).
@@ -143,6 +144,17 @@ if (root === null) {
   throw new Error("conductor webview: #root element is missing");
 }
 
-// Surface selection (Q3): the host sets data-surface="intake" on #root for the New Work window;
-// everything else is the default Command Center cockpit. One bundle, two mount modes.
-createRoot(root).render(root.dataset.surface === "intake" ? <IntakeApp /> : <ForkApp />);
+// Surface selection: the host sets data-surface on #root to pick the mount (one bundle, N modes).
+//   "intake"                  → the standalone Intake "New Work" window (REST-only, Q3);
+//   "board" | "fleet" | "events" → the cockpit LOCKED to that single surface (B — separate windows);
+//   absent                    → the full tabbed Command Center cockpit (default).
+const dataSurface = root.dataset.surface;
+createRoot(root).render(
+  dataSurface === "intake" ? (
+    <IntakeApp />
+  ) : dataSurface === "board" || dataSurface === "fleet" || dataSurface === "events" ? (
+    <ForkApp surface={dataSurface} />
+  ) : (
+    <ForkApp />
+  ),
+);

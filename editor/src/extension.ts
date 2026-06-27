@@ -153,6 +153,28 @@ export const WALKTHROUGH_ID = "everva.conductor-editor#conductor.gettingStarted"
 export const INTAKE_VIEW_TYPE = "conductor.intake";
 export const INTAKE_TITLE = "New Work";
 
+/** Command ids for the per-surface "separate windows" (B — the user's "board/fleet/events'i ayrı
+ * pencerelere"). Each opens (or reveals) a SINGLETON editor-area panel LOCKED to one cockpit
+ * surface, so the director can place Board / Fleet / Events side by side or "Move into New Window"
+ * natively. They reuse the SAME cockpit bundle + live bridge as the Command Center — only the
+ * mounted surface (data-surface) differs. */
+export const OPEN_BOARD_COMMAND = "conductor.openBoard";
+export const OPEN_FLEET_COMMAND = "conductor.openFleet";
+export const OPEN_EVENTS_COMMAND = "conductor.openEvents";
+
+/** The three surface-window descriptors: (surface, command, viewType, tab title). The IntakePanel
+ * already owns "intake"; these add Board/Fleet/Events as their own windows via {@link SurfacePanel}. */
+export const SURFACE_WINDOWS: ReadonlyArray<{
+  readonly surface: "board" | "fleet" | "events";
+  readonly command: string;
+  readonly viewType: string;
+  readonly title: string;
+}> = [
+  { surface: "board", command: OPEN_BOARD_COMMAND, viewType: "conductor.boardWindow", title: "Conductor Board" },
+  { surface: "fleet", command: OPEN_FLEET_COMMAND, viewType: "conductor.fleetWindow", title: "Conductor Fleet" },
+  { surface: "events", command: OPEN_EVENTS_COMMAND, viewType: "conductor.eventsWindow", title: "Conductor Events" },
+];
+
 /** when-clause context key (P3): true while the gateway connection is live. Set via the
  * built-in `setContext` on every connection-state change; the sessions-tree context menus +
  * the control keybindings gate on it (`when: conductor.connected`) so they don't offer
@@ -327,11 +349,16 @@ export interface WebviewHtmlOptions {
   readonly nonce: string;
   readonly scriptUri: string;
   readonly styleUri: string;
-  /** Q3: the cockpit surface to mount. Omitted/"" → the full Command Center cockpit (default);
-   * "intake" → the standalone Intake surface (its own "New Work" window). Host-controlled literal
-   * (never user input); the fork entry reads it off `#root`'s data-surface. */
+  /** The cockpit surface to mount. Omitted → the full Command Center cockpit (default); "intake" →
+   * the standalone Intake "New Work" window; "board" | "fleet" | "events" → the cockpit LOCKED to
+   * that single surface (B — separate windows). Host-controlled literal (never user input); the
+   * fork entry reads it off `#root`'s data-surface. */
   readonly surface?: string;
 }
+
+/** The surfaces the host may mount in their OWN editor-area window (B / Q3). A whitelist so the
+ * data-surface attribute is injection-free even though `surface` is already host-controlled. */
+export const KNOWN_SURFACES: ReadonlySet<string> = new Set(["intake", "board", "fleet", "events"]);
 
 /**
  * Builds the Fleet view HTML that loads the SHARED cockpit bundle (4B-3). Pure (no vscode
@@ -346,9 +373,9 @@ export interface WebviewHtmlOptions {
  */
 export function webviewHtml(opts: WebviewHtmlOptions): string {
   const { cspSource, nonce, scriptUri, styleUri, surface } = opts;
-  // Surface attribute: only the known "intake" literal is emitted (host-controlled); anything
-  // else is treated as the default cockpit (no attribute). Keeps the markup injection-free.
-  const surfaceAttr = surface === "intake" ? ` data-surface="intake"` : "";
+  // Surface attribute: only a KNOWN surface literal is emitted (host-controlled); anything else is
+  // the default cockpit (no attribute). The whitelist keeps the markup injection-free.
+  const surfaceAttr = surface !== undefined && KNOWN_SURFACES.has(surface) ? ` data-surface="${surface}"` : "";
   return `<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -718,6 +745,83 @@ export class IntakePanel implements vscode.Disposable {
       scriptUri,
       styleUri,
       surface: "intake",
+    });
+
+    const factory = config.bridgeFactory ?? makeBridgeFactory(config.secrets, config.gatewayUrl);
+    const bridge = factory(webview);
+    this.#bridge = bridge;
+    bridge.attach();
+
+    panel.onDidDispose(() => {
+      bridge.dispose();
+      if (this.#bridge === bridge) {
+        this.#bridge = undefined;
+      }
+      if (this.#panel === panel) {
+        this.#panel = undefined;
+      }
+    });
+  }
+
+  /** Disposes the panel + its bridge if open (deactivate / test cleanup). Idempotent. */
+  dispose(): void {
+    this.#panel?.dispose();
+    if (this.#panel === undefined) {
+      this.#bridge?.dispose();
+      this.#bridge = undefined;
+    }
+  }
+}
+
+/**
+ * A per-surface editor-area window (B — the user's "board/fleet/events'i ayrı pencerelere"): a
+ * SINGLETON {@link vscode.WebviewPanel} LOCKED to one cockpit surface (board / fleet / events) via
+ * data-surface, so the director can place surfaces side by side or "Move into New Window" natively.
+ * Reuses the SAME cockpit bundle + LIVE bridge as the Command Center (the full FleetDashboard with
+ * the WS event stream) — the only difference is the locked surface. Opens BESIDE the active editor
+ * (so it lands next to the Command Center, not on top of it); a second open reveals the existing
+ * window. Token stays host-side (SecretStorage + the bridge's fetch), CSP `connect-src 'none'`.
+ */
+export class SurfacePanel implements vscode.Disposable {
+  readonly #config: FleetViewConfig;
+  readonly #surface: string;
+  readonly #viewType: string;
+  readonly #title: string;
+  #panel: vscode.WebviewPanel | undefined;
+  #bridge: { dispose(): void } | undefined;
+
+  constructor(config: FleetViewConfig, surface: string, viewType: string, title: string) {
+    this.#config = config;
+    this.#surface = surface;
+    this.#viewType = viewType;
+    this.#title = title;
+  }
+
+  /** Opens the surface window beside the active editor, or reveals the existing one (singleton). */
+  open(): void {
+    if (this.#panel !== undefined) {
+      this.#panel.reveal();
+      return;
+    }
+    const config = this.#config;
+    const distRoot = vscode.Uri.joinPath(config.extensionUri, "dist", "webview");
+    const panel = vscode.window.createWebviewPanel(this.#viewType, this.#title, vscode.ViewColumn.Beside, {
+      enableScripts: true,
+      localResourceRoots: [distRoot],
+      retainContextWhenHidden: true,
+    });
+    this.#panel = panel;
+
+    const webview = panel.webview;
+    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "main.js")).toString();
+    const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "main.css")).toString();
+    // The SAME bundle mounts the cockpit LOCKED to this.#surface (webview/main.tsx reads data-surface).
+    webview.html = webviewHtml({
+      cspSource: webview.cspSource,
+      nonce: makeNonce(),
+      scriptUri,
+      styleUri,
+      surface: this.#surface,
     });
 
     const factory = config.bridgeFactory ?? makeBridgeFactory(config.secrets, config.gatewayUrl);
@@ -1945,6 +2049,19 @@ export function registerConductor(
   const newWork = api.commands.registerCommand(NEW_WORK_COMMAND, () => {
     intakePanel?.open();
   });
+  // B — separate windows: a SINGLETON SurfacePanel per surface (Board / Fleet / Events), each opened
+  // BESIDE the active editor so the director can place them side by side or "Move into New Window".
+  // The commands register UNCONDITIONALLY (so they show in the palette); a panel only exists when the
+  // host is configured/connected, so a command is a no-op until then (mirrors NEW_WORK_COMMAND).
+  const surfacePanels = new Map<string, SurfacePanel>();
+  if (fleetConfig) {
+    for (const w of SURFACE_WINDOWS) {
+      surfacePanels.set(w.command, new SurfacePanel(fleetConfig, w.surface, w.viewType, w.title));
+    }
+  }
+  const surfaceCommands = SURFACE_WINDOWS.map((w) =>
+    api.commands.registerCommand(w.command, () => surfacePanels.get(w.command)?.open()),
+  );
   // Faz-R: the NATIVE, webview-less dispatch path. From the palette (no arg → quick-pick project)
   // or the sessions-tree project context menu (the clicked project is preselected). A short prompt
   // chain synthesizes intake YAML and POSTs it host-side (token in the Authorization header only).
@@ -1974,6 +2091,7 @@ export function registerConductor(
     showEventJson,
     retryTask,
     newWork,
+    ...surfaceCommands,
     dispatch,
     openTour,
   ];
@@ -1983,6 +2101,9 @@ export function registerConductor(
   }
   if (intakePanel) {
     disposables.push(intakePanel);
+  }
+  for (const panel of surfacePanels.values()) {
+    disposables.push(panel);
   }
   return disposables;
 }

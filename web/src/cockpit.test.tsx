@@ -351,6 +351,55 @@ describe("cockpit barrel: FleetDashboard token-free over injected transports", (
     expect(screen.queryByRole("button", { name: "Show all" })).not.toBeInTheDocument();
   });
 
+  it("surface lock (B — separate windows): renders ONLY that surface, no tab-bar, no ⌘K palette", async () => {
+    const fakeTransport = new FakeEventTransport();
+    render(
+      <FleetDashboard
+        token=""
+        onUnauthorized={() => {}}
+        makeClient={makeReadClient}
+        makeControlClient={makeControlClient}
+        makeIntakeClient={makeIntakeClient}
+        makeHistory={() => ({ listEvents: async () => [] })}
+        eventTransport={fakeTransport}
+        surface="events"
+      />,
+    );
+    await flush();
+
+    // The locked Events surface is mounted directly (not the default board)...
+    expect(screen.getByRole("region", { name: /event stream/i })).toBeInTheDocument();
+    // ...and the segmented tab-bar is gone — a locked window can't switch surfaces.
+    expect(screen.queryByRole("tablist", { name: "Dashboard view" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Board" })).not.toBeInTheDocument();
+
+    // ⌘K does NOT open the palette here (it would navigate surfaces, which the lock forbids).
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }));
+    });
+    expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+  });
+
+  it("surface lock (B): a board-locked window shows the board with no tab-bar", async () => {
+    const fakeTransport = new FakeEventTransport();
+    render(
+      <FleetDashboard
+        token=""
+        onUnauthorized={() => {}}
+        makeClient={makeReadClient}
+        makeControlClient={makeControlClient}
+        makeIntakeClient={makeIntakeClient}
+        eventTransport={fakeTransport}
+        surface="board"
+      />,
+    );
+    await flush();
+
+    // The board surface renders (its lifecycle columns), with NO surface tab-bar.
+    expect(screen.getByRole("region", { name: /command center/i })).toBeInTheDocument();
+    expect(screen.queryByRole("tablist", { name: "Dashboard view" })).not.toBeInTheDocument();
+  });
+
   it("exposes the transport seams the fork wires (ApiClient over an injected HttpTransport)", async () => {
     // The fork's REST factory is literally `() => new ApiClient({ transport })`. Prove
     // that exact shape works token-free through the barrel's re-exported ApiClient +
