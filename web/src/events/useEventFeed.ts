@@ -106,6 +106,40 @@ export function mergeById(base: Event[], incoming: Event[], cap: number): Event[
   return out.length > cap ? out.slice(out.length - cap) : out;
 }
 
+// FeedRow is one displayed event plus how many EXTRA consecutive same-(project, task, phase)
+// progress pulses it stands in for (0 = a lone event). The develop/verify/review heartbeat fires
+// every ~20s, so a long phase would otherwise flood the feed with dozens of identical "… ·
+// progress" rows.
+export interface FeedRow {
+  event: Event;
+  collapsed: number;
+}
+
+// collapseProgress folds runs of CONSECUTIVE progress pulses for the SAME (project, task, phase)
+// into a single representative row — the first in the input order (so when the view feeds it the
+// reversed newest-first buffer, the newest pulse wins and carries the latest detail/timestamp) —
+// counting the rest in `collapsed`. Any non-progress event, or a progress event of a different
+// (task, phase), breaks the run and starts a fresh row. Pure; the underlying buffer is untouched.
+export function collapseProgress(events: Event[]): FeedRow[] {
+  const out: FeedRow[] = [];
+  for (const e of events) {
+    const prev = out[out.length - 1];
+    if (
+      e.kind === "progress" &&
+      prev !== undefined &&
+      prev.event.kind === "progress" &&
+      prev.event.project === e.project &&
+      prev.event.task === e.task &&
+      prev.event.phase === e.phase
+    ) {
+      prev.collapsed += 1;
+      continue;
+    }
+    out.push({ event: e, collapsed: 0 });
+  }
+  return out;
+}
+
 export function useEventFeed(opts: UseEventFeedOptions): EventFeed {
   const {
     token,

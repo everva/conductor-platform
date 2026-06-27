@@ -17,7 +17,7 @@ import { KIND_INTERVENTION_NEEDED } from "../types/events.gen.ts";
 import type { Kind, Phase } from "../api/types.ts";
 import type { EventQuery } from "../api/types.ts";
 import type { EventTransport } from "../api/useEventStream.ts";
-import { useEventFeed } from "./useEventFeed.ts";
+import { useEventFeed, collapseProgress } from "./useEventFeed.ts";
 import type { HistoryLoader } from "./useEventFeed.ts";
 import { absoluteTime, shortTime } from "../fleet/format.ts";
 import { describeEvent } from "./eventText.ts";
@@ -150,8 +150,11 @@ export function EventStreamView({
     onUnauthorized();
   }
 
-  // Render newest-first: the buffer is ascending by ts, so reverse for display.
-  const rows = useMemo(() => [...feed.events].reverse(), [feed.events]);
+  // Render newest-first: the buffer is ascending by ts, so reverse for display. Consecutive
+  // progress heartbeats for the same (project, task, phase) are folded into one row (the newest)
+  // so a long develop/verify/review — a pulse every ~20s — does not flood the feed (it shows one
+  // "… · progress ×N" line that carries the latest activity instead of dozens of identical rows).
+  const rows = useMemo(() => collapseProgress([...feed.events].reverse()), [feed.events]);
 
   const set = <K extends keyof FilterState>(key: K, value: FilterState[K]) => {
     setFilter((prev) => ({ ...prev, [key]: value }));
@@ -271,7 +274,8 @@ export function EventStreamView({
             {feed.loading ? "Loading events…" : "No events match the current filter."}
           </p>
         ) : (
-          rows.map((e) => {
+          rows.map((row) => {
+            const e = row.event;
             const intervention = e.kind === KIND_INTERVENTION_NEEDED;
             const desc = describeEvent(e);
             const expanded = expandedIds.has(e.id);
@@ -312,6 +316,14 @@ export function EventStreamView({
                     <span className={`badge evt-kind${intervention ? " abort" : ""}`}>
                       {e.kind}
                     </span>
+                    {row.collapsed > 0 && (
+                      <span
+                        className="badge evt-collapsed"
+                        title={`${row.collapsed + 1} progress pulses for this phase, folded into one row`}
+                      >
+                        ×{row.collapsed + 1}
+                      </span>
+                    )}
                     {intervention && (
                       <span className="evt-marker" aria-label="intervention needed">
                         ⚠ intervention

@@ -236,9 +236,11 @@ describe("EventStreamView", () => {
   });
 
   it("(e) caps the buffer, dropping the oldest", async () => {
+    // Distinct kinds so the progress-collapse never folds them — this asserts the buffer CAP,
+    // not the display transform (consecutive same-phase progress pulses would render as one row).
     const h = makeFakeHistory([
-      ev({ id: "old", ts: "2026-06-18T00:00:01.000Z" }),
-      ev({ id: "mid", ts: "2026-06-18T00:00:02.000Z" }),
+      ev({ id: "old", ts: "2026-06-18T00:00:01.000Z", kind: "started" }),
+      ev({ id: "mid", ts: "2026-06-18T00:00:02.000Z", kind: "log" }),
     ]);
     render(
       <EventStreamView token="tkn" makeHistory={() => h.loader} bufferCap={2} />,
@@ -254,6 +256,19 @@ describe("EventStreamView", () => {
     expect(rows).toHaveLength(2);
     expect(within(rows[0]).getByText("pr")).toBeInTheDocument(); // newest
     expect(screen.queryByText(/"old"/)).not.toBeInTheDocument();
+  });
+
+  it("(e2) folds consecutive progress heartbeats into one row with a ×N count", async () => {
+    const h = makeFakeHistory([
+      ev({ id: "p1", ts: "2026-06-18T00:00:01.000Z" }),
+      ev({ id: "p2", ts: "2026-06-18T00:00:02.000Z" }),
+      ev({ id: "p3", ts: "2026-06-18T00:00:03.000Z" }),
+    ]);
+    render(<EventStreamView token="tkn" makeHistory={() => h.loader} />);
+    await flush();
+    // Three same-phase progress pulses collapse to ONE row carrying a ×3 fold count — no flood.
+    expect(screen.getAllByTestId("evt-row")).toHaveLength(1);
+    expect(screen.getByText("×3")).toBeInTheDocument();
   });
 
   it("(f) the pause toggle freezes display updates", async () => {

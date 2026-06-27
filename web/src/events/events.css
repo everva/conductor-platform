@@ -154,6 +154,14 @@
   color: #cbd5e1;
 }
 
+/* The folded-progress count (×N): how many consecutive same-phase heartbeats this one row
+   stands in for. Muted so it reads as metadata, not a new event. */
+.badge.evt-collapsed {
+  background: #1f242b;
+  color: #8b94a3;
+  font-variant-numeric: tabular-nums;
+}
+
 .evt-marker {
   color: #fca5a5;
   font-weight: 700;
