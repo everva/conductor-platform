@@ -214,3 +214,51 @@ test("multi-select held cards opens an enumerated bulk-approve confirm (E4)", as
   await expect(dialog).toContainText("web-shop/W-b");
   await page.screenshot({ path: "test-results/bulk-approve.png", fullPage: true });
 });
+
+test("multi-select blocked cards opens an enumerated bulk-retry confirm and re-queues each (quick-win)", async ({ page }) => {
+  await mockWebSocket(page);
+  await page.route("**/status", (r) => r.fulfill(json({ projects: 1, hosts: 1, leases: [], generated_at: "2026-06-20T00:00:00Z" })));
+  await page.route("**/hosts", (r) => r.fulfill(json(HOSTS)));
+  await page.route("**/projects", (r) => r.fulfill(json([PROJECTS[0]])));
+  const blocked: Record<string, ReturnType<typeof task>[]> = {
+    "web-shop": [task("B-a", "web-shop", "blocked"), task("B-b", "web-shop", "blocked")],
+  };
+  await page.route("**/projects/*/tasks", (r) => {
+    const pid = r.request().url().match(/\/projects\/([^/]+)\/tasks/)?.[1] ?? "";
+    return r.fulfill(json(blocked[pid] ?? []));
+  });
+  await page.route("**/projects/*/scenarios", (r) => r.fulfill(json([])));
+  await page.route("**/events*", (r) => r.fulfill(json([])));
+  // Capture the per-task retry POSTs the bulk action fires on confirm (retry is non-destructive).
+  const retried: string[] = [];
+  await page.route(/\/projects\/[^/]+\/tasks\/[^/]+\/retry$/, (r) => {
+    const m = r.request().url().match(/\/tasks\/([^/]+)\/retry/);
+    if (m) retried.push(m[1]);
+    return r.fulfill(json({ project: "web-shop", task: m?.[1] ?? "", status: "ready" }));
+  });
+  await page.goto("/");
+  await page.getByLabel(/api token/i).fill("test-token");
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page.getByRole("region", { name: /command center/i })).toBeVisible();
+
+  // Select both blocked cards (they bucket into the Needs Review lane alongside held cards).
+  const review = column(page, "Needs Review");
+  await review.getByRole("checkbox", { name: /select task B-a for bulk retry/i }).check();
+  await review.getByRole("checkbox", { name: /select task B-b for bulk retry/i }).check();
+
+  const bulkbar = page.getByRole("region", { name: "Bulk actions" });
+  await expect(bulkbar).toContainText("2 selected");
+  // A blocked selection offers Retry, NOT Approve.
+  await expect(bulkbar.getByRole("button", { name: /approve/i })).toHaveCount(0);
+
+  // Retry opens ONE confirm enumerating BOTH blocked tasks.
+  await bulkbar.getByRole("button", { name: /^retry 2$/i }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("Retry 2 blocked tasks?");
+  await expect(dialog).toContainText("web-shop/B-a");
+  await expect(dialog).toContainText("web-shop/B-b");
+
+  // Confirm → each blocked task is re-queued (a real per-task retry POST fires for each).
+  await dialog.getByRole("button", { name: /^retry 2$/i }).click();
+  await expect.poll(() => [...retried].sort().join(",")).toBe("B-a,B-b");
+});

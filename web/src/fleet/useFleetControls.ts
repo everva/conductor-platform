@@ -76,6 +76,9 @@ export interface FleetControls {
   // requestBulkApprove OPENS one confirm enumerating every selected gate-green task;
   // on confirm each is approved+merged. A no-op for an empty selection (redesign E4).
   requestBulkApprove: (items: { projectId: string; taskId: string }[]) => void;
+  // requestBulkRetry OPENS one confirm enumerating every selected BLOCKED task; on confirm each is
+  // re-queued (blocked→ready). Non-destructive (re-runs the work). A no-op for an empty selection.
+  requestBulkRetry: (items: { projectId: string; taskId: string }[]) => void;
   // the pending confirmation (null when none); confirm runs it, cancel dismisses it.
   pending: PendingConfirm | null;
   confirm: () => void;
@@ -300,6 +303,29 @@ export function useFleetControls(opts: UseFleetControlsOptions): FleetControls {
     [],
   );
 
+  const requestBulkRetry = useCallback(
+    (items: { projectId: string; taskId: string }[]) => {
+      if (items.length === 0) {
+        return;
+      }
+      // Enumerate so nothing is hidden; cap the visible list (the count in the title is authoritative).
+      const shown = items.slice(0, 15).map((i) => `${i.projectId}/${i.taskId}`);
+      const more = items.length - shown.length;
+      const list = shown.join(", ") + (more > 0 ? `, and ${more} more` : "");
+      setPending({
+        kind: "retry",
+        projectId: items[0]!.projectId,
+        taskId: undefined,
+        items,
+        title: `Retry ${items.length} blocked task${items.length === 1 ? "" : "s"}?`,
+        body: `Each is re-queued (blocked → ready) for the agent to run again: ${list}.`,
+        confirmLabel: `Retry ${items.length}`,
+        tone: "primary",
+      });
+    },
+    [],
+  );
+
   const confirm = useCallback(() => {
     if (pending === null) {
       return;
@@ -317,8 +343,13 @@ export function useFleetControls(opts: UseFleetControlsOptions): FleetControls {
       } else {
         runApprove(p.projectId, p.taskId);
       }
+    } else if (p.kind === "retry" && p.items && p.items.length > 0) {
+      // Bulk retry: re-queue each selected blocked task (each tracked + reconciled on its own).
+      for (const it of p.items) {
+        retry(it.projectId, it.taskId);
+      }
     }
-  }, [pending, runAbort, runApprove]);
+  }, [pending, runAbort, runApprove, retry]);
 
   const cancelConfirm = useCallback(() => setPending(null), []);
 
@@ -355,6 +386,7 @@ export function useFleetControls(opts: UseFleetControlsOptions): FleetControls {
     pause,
     resume,
     retry,
+    requestBulkRetry,
     requestAbort,
     requestApprove,
     requestBulkApprove,

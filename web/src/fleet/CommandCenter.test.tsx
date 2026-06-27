@@ -178,6 +178,56 @@ describe("CommandCenter board", () => {
     ]);
   });
 
+  it("multi-selects BLOCKED cards and bulk-retries the exact selection (quick-win)", async () => {
+    const user = userEvent.setup();
+    const onOpenSession = vi.fn();
+    const requestBulkRetry = vi.fn();
+    const controls = {
+      isTaskBusy: () => false,
+      isProjectBusy: () => false,
+      retry: vi.fn(),
+      requestApprove: vi.fn(),
+      requestBulkRetry,
+    } as unknown as FleetControls;
+
+    render(
+      <CommandCenter
+        tasksByProject={{
+          web: [
+            task({ id: "B-1", project_id: "web", status: "blocked" }),
+            task({ id: "B-2", project_id: "web", status: "blocked" }),
+            task({ id: "W-run", project_id: "web", status: "running" }),
+          ],
+        }}
+        leasesByProject={{}}
+        hosts={[]}
+        recentEvents={[]}
+        controls={controls}
+        onOpenSession={onOpenSession}
+      />,
+    );
+
+    // Only the two blocked cards are selectable; the running one has no checkbox.
+    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+
+    // Ticking a blocked card selects it WITHOUT opening the session.
+    await user.click(screen.getByRole("checkbox", { name: /select task B-1 for bulk retry/i }));
+    expect(onOpenSession).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("checkbox", { name: /select task B-2 for bulk retry/i }));
+
+    // The bulk bar offers Retry (not Approve) for a blocked selection.
+    const bulkbar = screen.getByRole("region", { name: "Bulk actions" });
+    expect(within(bulkbar).getByText("2 selected")).toBeInTheDocument();
+    expect(within(bulkbar).queryByRole("button", { name: /approve/i })).not.toBeInTheDocument();
+
+    // Retry passes the EXACT selected blocked items (stable order).
+    await user.click(within(bulkbar).getByRole("button", { name: /^retry 2$/i }));
+    expect(requestBulkRetry).toHaveBeenCalledWith([
+      { projectId: "web", taskId: "B-1" },
+      { projectId: "web", taskId: "B-2" },
+    ]);
+  });
+
   it("scopes the board to selectedProjectId and Show all clears the scope (Q1)", async () => {
     const user = userEvent.setup();
     const onShowAllProjects = vi.fn();

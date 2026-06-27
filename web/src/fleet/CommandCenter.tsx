@@ -98,17 +98,17 @@ export function CommandCenter({
   const boardEmpty = BOARD_COLUMNS.every((c) => board.columns[c.key].length === 0);
   const showSkeleton = loading && boardEmpty;
 
-  // Multi-select bulk approve (redesign E4): a director can select several gate-green
-  // (awaiting-approval) tasks and clear the review queue in one confirm. Only held
-  // tasks are selectable — they are the only approvable ones. The selection is pruned
-  // to the still-held set so approved tasks (which leave the held state after refresh)
-  // drop out automatically.
+  // Multi-select bulk actions (redesign E4 + quick-wins): a director can select several HELD
+  // (gate-green) tasks to clear the review queue in one confirm (bulk approve), OR several BLOCKED
+  // tasks to re-run them in one confirm (bulk retry). Only held/blocked tasks are selectable — the
+  // two states that carry a bulk action. The selection is pruned to the still-actionable set so a
+  // task that leaves held/blocked after refresh (approved or re-queued) drops out automatically.
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const heldKeys = useMemo(() => {
+  const selectableKeys = useMemo(() => {
     const s = new Set<string>();
     for (const tasks of Object.values(scopedTasks)) {
       for (const t of tasks) {
-        if (isAwaitingApproval(t)) {
+        if (isAwaitingApproval(t) || t.status === "blocked") {
           s.add(selKey(t.project_id, t.id));
         }
       }
@@ -120,12 +120,12 @@ export function CommandCenter({
       let changed = false;
       const next = new Set<string>();
       for (const k of prev) {
-        if (heldKeys.has(k)) next.add(k);
+        if (selectableKeys.has(k)) next.add(k);
         else changed = true;
       }
       return changed ? next : prev;
     });
-  }, [heldKeys]);
+  }, [selectableKeys]);
 
   const toggleSelect = (projectId: string, taskId: string) => {
     setSelected((prev) => {
@@ -144,6 +144,25 @@ export function CommandCenter({
     for (const tasks of Object.values(scopedTasks)) {
       for (const t of tasks) {
         if (isAwaitingApproval(t) && selected.has(selKey(t.project_id, t.id))) {
+          items.push({ projectId: t.project_id, taskId: t.id });
+        }
+      }
+    }
+    items.sort((a, b) =>
+      a.projectId === b.projectId
+        ? a.taskId.localeCompare(b.taskId)
+        : a.projectId.localeCompare(b.projectId),
+    );
+    return items;
+  }, [scopedTasks, selected]);
+
+  // selectedBlocked resolves the live selection to the BLOCKED {projectId, taskId} for bulk retry,
+  // in the same stable order. Held → bulk approve; blocked → bulk retry; the two never overlap.
+  const selectedBlocked = useMemo(() => {
+    const items: { projectId: string; taskId: string }[] = [];
+    for (const tasks of Object.values(scopedTasks)) {
+      for (const t of tasks) {
+        if (t.status === "blocked" && selected.has(selKey(t.project_id, t.id))) {
           items.push({ projectId: t.project_id, taskId: t.id });
         }
       }
@@ -234,19 +253,30 @@ export function CommandCenter({
         </span>
       </div>
 
-      {controls && selectedItems.length > 0 && (
+      {controls && (selectedItems.length > 0 || selectedBlocked.length > 0) && (
         <div className="cc-bulkbar" role="region" aria-label="Bulk actions">
           <span className="cc-bulkbar-count">
-            {selectedItems.length} selected
+            {selectedItems.length + selectedBlocked.length} selected
           </span>
           <span className="cc-bulkbar-actions">
-            <Button
-              variant="success"
-              size="sm"
-              onClick={() => controls.requestBulkApprove(selectedItems)}
-            >
-              Approve &amp; merge {selectedItems.length}
-            </Button>
+            {selectedItems.length > 0 && (
+              <Button
+                variant="success"
+                size="sm"
+                onClick={() => controls.requestBulkApprove(selectedItems)}
+              >
+                Approve &amp; merge {selectedItems.length}
+              </Button>
+            )}
+            {selectedBlocked.length > 0 && (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => controls.requestBulkRetry(selectedBlocked)}
+              >
+                Retry {selectedBlocked.length}
+              </Button>
+            )}
             <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
               Clear
             </Button>
@@ -304,7 +334,7 @@ interface BoardCardViewProps {
   card: BoardCard;
   controls?: FleetControls;
   onOpenSession?: (task: Task) => void;
-  // selected/onToggleSelect drive the multi-select checkbox (held cards only).
+  // selected/onToggleSelect drive the multi-select checkbox (held → bulk approve, blocked → retry).
   selected?: boolean;
   onToggleSelect?: () => void;
 }
@@ -325,8 +355,9 @@ function BoardCardView({
   // the project, not the task.
   const projBusy = controls?.isProjectBusy(t.project_id) ?? false;
   const select = () => onOpenSession?.(t);
-  // Only held (approvable) cards can be multi-selected for a bulk approve.
-  const selectable = held && controls !== undefined && onToggleSelect !== undefined;
+  // Held (approvable) AND blocked (retryable) cards can be multi-selected — held → bulk approve,
+  // blocked → bulk retry. Other states carry no bulk action, so they are not selectable.
+  const selectable = (held || blocked) && controls !== undefined && onToggleSelect !== undefined;
 
   // The status accent rail follows the card's lifecycle: held → amber (warn),
   // blocked → red (danger), running (a leasing host) → blue (info), done → green
@@ -370,7 +401,7 @@ function BoardCardView({
               type="checkbox"
               checked={selected}
               onChange={onToggleSelect}
-              aria-label={`Select task ${t.id} for bulk approve`}
+              aria-label={`Select task ${t.id} for bulk ${held ? "approve" : "retry"}`}
             />
           </label>
         )}
