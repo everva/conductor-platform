@@ -43,7 +43,7 @@ import { InterventionNotifier, type Intervention } from "./notifier";
 import { DiffObserver, type TaskDiff } from "./diffObserver";
 import { reconstructDiffFiles } from "./diffReconstruct";
 import { DiffContentClient, type FullTaskDiff } from "./diffContentClient";
-import { FleetReadClient } from "./fleetReadClient";
+import { FleetReadClient, type UsageSnapshot } from "./fleetReadClient";
 import { SessionsTreeProvider, SESSIONS_VIEW_ID, nodeProjectId, nodeTaskRef, reviewBadgeValue } from "./sessionsTree";
 import { EventsWatcher } from "./eventsWatcher";
 import { ReconnectController } from "./reconnect";
@@ -625,6 +625,36 @@ export function fleetBarText(count: number): string {
     return "";
   }
   return `$(server) ${count} Conductor${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * Renders the native claude-usage status-bar text + tooltip from the GET /usage snapshot map
+ * (Faz-U). Compact text shows each subscription's 5-hour used %, e.g. "$(pulse) admin 42% ·
+ * vendor 16%"; the tooltip carries the 7-day window + reset times + any unavailable reason. Pure
+ * so a test asserts the renderings. Returns text:"" when there is nothing to show (the caller
+ * hides the item). Carries no token — only the percentages the gateway already exposes.
+ */
+export function usageBarText(usage: Record<string, UsageSnapshot>): { text: string; tooltip: string } {
+  const keys = Object.keys(usage).sort();
+  if (keys.length === 0) {
+    return { text: "", tooltip: "" };
+  }
+  const parts: string[] = [];
+  const tip: string[] = ["Claude subscription usage"];
+  const pct = (v: number | null | undefined): string => (v == null ? "—" : `${Math.round(v)}%`);
+  for (const k of keys) {
+    const s = usage[k] ?? {};
+    const name = s.label ?? k;
+    if (s.available === false) {
+      parts.push(`${k} —`);
+      tip.push(`• ${name}: unavailable${s.reason ? ` (${s.reason})` : ""}`);
+      continue;
+    }
+    parts.push(`${k} ${pct(s.five_hour?.used_pct)}`);
+    const r5 = s.five_hour?.resets_at ? `, resets ${s.five_hour.resets_at.slice(11, 16)}` : "";
+    tip.push(`• ${name}: 5h ${pct(s.five_hour?.used_pct)}${r5} · 7d ${pct(s.seven_day?.used_pct)}`);
+  }
+  return { text: `$(pulse) ${parts.join(" · ")}`, tooltip: tip.join("\n") };
 }
 
 /**
@@ -2215,6 +2245,12 @@ export function activate(context: vscode.ExtensionContext): void {
   fleetBar.command = REVEAL_CONTAINER_COMMAND;
   fleetBar.tooltip = "Conductor: open the Conductors view";
 
+  // Faz-U: native at-a-glance claude-subscription usage (GET /usage; populated by the davinci
+  // usage-probe from api.anthropic.com/api/oauth/usage). Compact 5-hour used % per subscription;
+  // hover for 7-day + reset times. Hidden until the probe reports (and while disconnected).
+  const usageBar = vscode.window.createStatusBarItem();
+  usageBar.command = REVEAL_CONTAINER_COMMAND;
+
   // 4C-3: the host's OWN intervention-filtered WS subscription. The 4B-2 HostBridge only
   // forwards events to the webview while it's OPEN; this fires native notifications even
   // when the Conductor view is closed. TokenProvider reads SecretStorage per start (never
@@ -2266,6 +2302,21 @@ export function activate(context: vscode.ExtensionContext): void {
       } else {
         fleetBar.text = label;
         fleetBar.show();
+      }
+    });
+  };
+
+  // Faz-U: refresh the native usage bar from the SAME authed read client. getUsage never throws
+  // (→ {} on any non-happy path), so an empty/failed read just hides the bar.
+  const updateUsageBar = (): void => {
+    void fleetReader.getUsage().then((usage) => {
+      const { text, tooltip } = usageBarText(usage);
+      if (text === "") {
+        usageBar.hide();
+      } else {
+        usageBar.text = text;
+        usageBar.tooltip = tooltip;
+        usageBar.show();
       }
     });
   };
@@ -2330,8 +2381,10 @@ export function activate(context: vscode.ExtensionContext): void {
       // it otherwise (a disconnected fleet has nothing to glance at).
       if (state === "connected") {
         updateFleetBar();
+        updateUsageBar();
       } else {
         fleetBar.hide();
+        usageBar.hide();
       }
       // PO: refresh the "needs your review" activity-bar badge on every link change — it lights up
       // when connected and CLEARS on disconnect (the read no-ops to [] without a token → count 0).
@@ -2430,6 +2483,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const refreshSessions = vscode.commands.registerCommand(REFRESH_SESSIONS_COMMAND, () => {
     sessionsProvider.refresh();
     updateFleetBar(); // Q4.2: keep the native fleet glance in step with a manual tree refresh.
+    updateUsageBar();
     updateReviewBadge();
   });
 
@@ -2526,8 +2580,11 @@ export function activate(context: vscode.ExtensionContext): void {
     if (livePollTick % 3 === 0) {
       diagnosticsProvider.refresh(); // ~15s: re-probe /healthz, /readyz, token + claude login
     }
+    if (livePollTick % 6 === 0) {
+      updateUsageBar(); // ~30s: claude usage windows move slowly; no need for the 5s cadence
+    }
   }, LIVE_POLL_MS);
-  context.subscriptions.push({ dispose: () => clearInterval(livePoll) });
+  context.subscriptions.push({ dispose: () => clearInterval(livePoll) }, usageBar);
 
   // Push the intervention + diff status-bar items + dispose-wrappers that stop the host WS
   // subscriptions on deactivate (so the host sockets are torn down with the extension), plus the

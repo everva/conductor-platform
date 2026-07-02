@@ -26,6 +26,24 @@ export interface FleetProject {
   readonly paused: boolean;
 }
 
+/** One rolling window of a claude subscription's utilization (from GET /usage; the davinci probe
+ * mirrors api.anthropic.com/api/oauth/usage). `used_pct` is 0-100; `resets_at` an ISO timestamp. */
+export interface UsageWindow {
+  readonly used_pct: number | null;
+  readonly resets_at: string | null;
+}
+
+/** A per-subscription usage snapshot (server.go GET /usage value). Tolerant projection: a
+ * subscription whose token lacks the profile scope reports `available:false` + a `reason`. */
+export interface UsageSnapshot {
+  readonly label?: string;
+  readonly available?: boolean;
+  readonly five_hour?: UsageWindow;
+  readonly seven_day?: UsageWindow;
+  readonly reason?: string;
+  readonly checked_at?: string;
+}
+
 /** A task (session) the tree renders — a tolerant projection of the gateway taskDTO
  * (server.go handleProjectTasks). Only the fields the tree shows. */
 export interface FleetTask {
@@ -62,6 +80,31 @@ export class FleetReadClient {
    * any non-happy path. */
   listTasks(projectId: string): Promise<FleetTask[]> {
     return this.#getList(`/projects/${encodeURIComponent(projectId)}/tasks`, toFleetTasks);
+  }
+
+  /** Fetches the live per-subscription claude usage: `GET {base}/usage` (authed). Returns `{}` on
+   * any non-happy path (no token, non-2xx, network/parse error) — the usage bar just hides. The
+   * token rides only in the Authorization header. */
+  async getUsage(): Promise<Record<string, UsageSnapshot>> {
+    const token = await this.#tokens.getToken();
+    if (token === undefined || token === "") {
+      return {};
+    }
+    try {
+      const res = await this.#fetch(`${this.#baseUrl}/usage`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        return {};
+      }
+      const body = (await res.json()) as unknown;
+      return body !== null && typeof body === "object" && !Array.isArray(body)
+        ? (body as Record<string, UsageSnapshot>)
+        : {};
+    } catch {
+      return {};
+    }
   }
 
   /**
