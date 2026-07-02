@@ -280,6 +280,32 @@ func TestPauseUnknownProject404(t *testing.T) {
 	}
 }
 
+// TestSetGovernance covers the API way to make a freshly-onboarded project autonomous: a valid policy
+// persists onto the project; a bad policy is rejected (400, never silently accepted); an unknown
+// project is 404.
+func TestSetGovernance(t *testing.T) {
+	s, store := emptyServer()
+	ctx := context.Background()
+	mustCreate(t, store.CreateProject(ctx, statestore.Project{ID: "proj-x", Repo: "owner/x", BaseBranch: "develop"}))
+
+	rec := doBody(t, s, http.MethodPost, "/projects/proj-x/governance", bearer(), `{"policy":"auto"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set governance status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	p, _ := store.GetProject(ctx, "proj-x")
+	if p.GovernancePolicy != "auto" {
+		t.Fatalf("GovernancePolicy = %q, want auto", p.GovernancePolicy)
+	}
+	// A bad policy is rejected, never silently accepted.
+	if rec := doBody(t, s, http.MethodPost, "/projects/proj-x/governance", bearer(), `{"policy":"yolo"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad policy status = %d, want 400", rec.Code)
+	}
+	// Unknown project → 404.
+	if rec := doBody(t, s, http.MethodPost, "/projects/nope/governance", bearer(), `{"policy":"auto"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown project status = %d, want 404", rec.Code)
+	}
+}
+
 func assertPaused(t *testing.T, store statestore.StateStore, id string, want bool) {
 	t.Helper()
 	p, err := store.GetProject(context.Background(), id)

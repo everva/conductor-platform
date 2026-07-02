@@ -138,6 +138,7 @@ func (s *apiServer) routes() http.Handler {
 	mux.Handle("GET /projects/{id}/enhance/{job}", s.requireAuth(http.HandlerFunc(s.handleEnhanceGet)))
 	mux.Handle("POST /projects/{id}/pause", s.requireAuth(http.HandlerFunc(s.handlePause)))
 	mux.Handle("POST /projects/{id}/resume", s.requireAuth(http.HandlerFunc(s.handleResume)))
+	mux.Handle("POST /projects/{id}/governance", s.requireAuth(http.HandlerFunc(s.handleSetGovernance)))
 	mux.Handle("POST /projects/{id}/abort", s.requireAuth(http.HandlerFunc(s.handleAbort)))
 	mux.Handle("POST /projects/{id}/approve", s.requireAuth(http.HandlerFunc(s.handleApprove)))
 	mux.Handle("POST /projects/{id}/reject", s.requireAuth(http.HandlerFunc(s.handleReject)))

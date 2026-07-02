@@ -479,6 +479,49 @@ func (s *apiServer) handleResume(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"project": id, "paused": false})
 }
 
+// governanceRequest is the body of POST /projects/{id}/governance.
+type governanceRequest struct {
+	Policy string `json:"policy"`
+}
+
+// handleSetGovernance: POST /projects/{id}/governance — set the project's merge
+// governance policy (the field policyForProject reads to decide auto-merge vs
+// hold-for-review). Additive control-plane mutation mirroring pause/resume; it is
+// the API way to make a freshly-onboarded project autonomous ("auto") instead of
+// hand-editing the DB. Validated against the known policy names so a typo cannot
+// silently disable auto-merge. Idempotent; unknown project → 404.
+func (s *apiServer) handleSetGovernance(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req governanceRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	policy := strings.ToLower(strings.TrimSpace(req.Policy))
+	switch policy {
+	case "auto", "auto-merge", "risk-layered", "hold", "":
+	default:
+		writeError(w, http.StatusBadRequest, `policy must be one of: "auto", "auto-merge", "risk-layered", "hold", ""`)
+		return
+	}
+	ctx := r.Context()
+	p, err := s.store.GetProject(ctx, id)
+	if err != nil {
+		if errors.Is(err, statestore.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		s.serverError(w, "governance: get project", err)
+		return
+	}
+	p.GovernancePolicy = policy
+	if err := s.store.UpdateProject(ctx, p); err != nil {
+		s.serverError(w, "governance: update project", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"project": id, "governance_policy": policy})
+}
+
 // handleAbort: POST /projects/{id}/abort — request cancellation of the project's
 // currently-running task via the SAME StoreAborter. Nothing running → 409
 // (well-formed request, nothing to act on). Unknown project also surfaces as
