@@ -43,6 +43,8 @@ type MemoryStore struct {
 	enhance   map[string]EnhanceJob // keyed by EnhanceJob.ID (intake enhance, agent-side)
 	// intakeSessions holds persisted intake conversations keyed by IntakeSession.ID (history).
 	intakeSessions map[string]IntakeSession
+	// usage holds the latest claude-subscription utilization snapshot per key (UsageStore seam).
+	usage map[string][]byte
 }
 
 // NewMemoryStore returns an empty, ready-to-use in-memory StateStore.
@@ -57,6 +59,7 @@ func NewMemoryStore() *MemoryStore {
 		creds:          make(map[string]Credential),
 		enhance:        make(map[string]EnhanceJob),
 		intakeSessions: make(map[string]IntakeSession),
+		usage:          make(map[string][]byte),
 	}
 }
 

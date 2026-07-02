@@ -19,7 +19,6 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/everva/conductor-platform/internal/credstore"
@@ -82,11 +81,6 @@ type apiServer struct {
 	// endpoints return 501. The holdout BODY is never logged (ADR-0018); it is repo-external by
 	// construction (the central Postgres).
 	holdouts holdoutStore
-	// usageMu guards usage: the LIVE claude-subscription utilization snapshots the davinci probe
-	// PUTs (per subscription key, e.g. "admin"/"vendor"). In-memory + ephemeral by design — the probe
-	// re-reports every cycle, so a gateway restart just repopulates; no store/migration needed.
-	usageMu sync.RWMutex
-	usage   map[string]json.RawMessage
 }
 
 // holdoutStore is the narrow read+write seam the holdout endpoints drive (Faz-S). It mirrors the
@@ -435,10 +429,18 @@ func (s *apiServer) handleHosts(w http.ResponseWriter, r *http.Request) {
 
 // handleStatus: GET /status → fleet summary aggregate (project/host counts +
 // active leases + generated_at). Distinct from the daemon's per-tick /status.
+// usageStore type-asserts the optional UsageStore seam, returning false (→ caller writes 501)
+// when the configured store has no usage persistence.
+func (s *apiServer) usageStore() (statestore.UsageStore, bool) {
+	us, ok := s.store.(statestore.UsageStore)
+	return us, ok
+}
+
 // handlePutUsage: PUT /usage/{key} — the davinci usage-probe reports a subscription's LIVE claude
-// utilization snapshot (opaque JSON body: 5h/7d utilization %, resets_at, status). Stored in-memory
-// keyed by subscription (e.g. "admin"/"vendor") and served by GET /usage for the editor. Additive;
-// the body is small + non-secret (percentages + reset times), so it is stored verbatim.
+// utilization snapshot (opaque JSON body: 5h/7d utilization %, resets_at, status). PERSISTED
+// (not in-memory) keyed by subscription (e.g. "admin"/"vendor") so ALL gateway replicas serve the
+// same data, and served by GET /usage for the editor. Additive; the body is small + non-secret
+// (percentages + reset times), so it is stored verbatim.
 func (s *apiServer) handlePutUsage(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	body, err := io.ReadAll(io.LimitReader(r.Body, 16*1024))
@@ -450,23 +452,35 @@ func (s *apiServer) handlePutUsage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "body must be JSON")
 		return
 	}
-	s.usageMu.Lock()
-	if s.usage == nil {
-		s.usage = map[string]json.RawMessage{}
+	us, ok := s.usageStore()
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "usage store not configured")
+		return
 	}
-	s.usage[key] = json.RawMessage(body)
-	s.usageMu.Unlock()
+	if err := us.PutUsage(r.Context(), key, body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid key")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"key": key, "ok": true})
 }
 
-// handleGetUsage: GET /usage — the latest per-subscription claude utilization snapshots for the editor.
+// handleGetUsage: GET /usage — the latest per-subscription claude utilization snapshots for the
+// editor, read from the shared store so every replica returns the same map.
 func (s *apiServer) handleGetUsage(w http.ResponseWriter, r *http.Request) {
-	s.usageMu.RLock()
-	out := make(map[string]json.RawMessage, len(s.usage))
-	for k, v := range s.usage {
-		out[k] = v
+	us, ok := s.usageStore()
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]json.RawMessage{})
+		return
 	}
-	s.usageMu.RUnlock()
+	stored, err := us.ListUsage(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "usage unavailable")
+		return
+	}
+	out := make(map[string]json.RawMessage, len(stored))
+	for k, v := range stored {
+		out[k] = json.RawMessage(v)
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 

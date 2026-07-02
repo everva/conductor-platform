@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -54,6 +55,7 @@ func runConformanceSuite(t *testing.T, newStore storeFactory) {
 		{"AcquireLeaseConcurrentOneWinner", confAcquireConcurrent},
 		{"TaskDiffStoreRoundTrip", confTaskDiffRoundTrip},
 		{"CredentialStoreRoundTrip", confCredentialRoundTrip},
+		{"UsageStoreRoundTrip", confUsageRoundTrip},
 		{"EnhanceProgressRoundTrip", confEnhanceProgressRoundTrip},
 		{"IntakeSessionRoundTrip", confIntakeSessionRoundTrip},
 	}
@@ -344,6 +346,60 @@ func confCredentialRoundTrip(t *testing.T, s StateStore) {
 	// Empty kind → ErrInvalid.
 	if err := cs.PutCredential(ctx, Credential{Kind: "", Ciphertext: []byte{0x01}}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("PutCredential(empty kind) err = %v, want ErrInvalid", err)
+	}
+}
+
+// confUsageRoundTrip exercises the ADDITIVE UsageStore seam: put→list round-trip of a subscription
+// snapshot, upsert (a second put for the same key overwrites), multi-key listing, and ErrInvalid on
+// an empty key — identically across MemoryStore and PostgresStore (which also proves migration
+// 00014 applies). This is the shared-across-replicas persistence that replaced the per-pod map.
+func confUsageRoundTrip(t *testing.T, s StateStore) {
+	t.Helper()
+	ctx := context.Background()
+	us, ok := s.(UsageStore)
+	if !ok {
+		t.Fatalf("%T does not implement UsageStore", s)
+	}
+
+	// Empty store → empty map (no error).
+	got, err := us.ListUsage(ctx)
+	if err != nil {
+		t.Fatalf("ListUsage(empty): %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ListUsage(empty) = %v, want empty", got)
+	}
+
+	// Put → List round-trip.
+	if err := us.PutUsage(ctx, "vendor", []byte(`{"five_hour":{"utilization":28}}`)); err != nil {
+		t.Fatalf("PutUsage(vendor): %v", err)
+	}
+	if err := us.PutUsage(ctx, "admin", []byte(`{"available":false}`)); err != nil {
+		t.Fatalf("PutUsage(admin): %v", err)
+	}
+	got, err = us.ListUsage(ctx)
+	if err != nil {
+		t.Fatalf("ListUsage: %v", err)
+	}
+	if len(got) != 2 || !strings.Contains(string(got["vendor"]), `"utilization":28`) || !strings.Contains(string(got["admin"]), `"available":false`) {
+		t.Fatalf("round-trip mismatch: %v", got)
+	}
+
+	// Upsert overwrites the same key.
+	if err := us.PutUsage(ctx, "vendor", []byte(`{"five_hour":{"utilization":31}}`)); err != nil {
+		t.Fatalf("PutUsage(upsert): %v", err)
+	}
+	got, err = us.ListUsage(ctx)
+	if err != nil {
+		t.Fatalf("ListUsage after upsert: %v", err)
+	}
+	if len(got) != 2 || !strings.Contains(string(got["vendor"]), `"utilization":31`) {
+		t.Fatalf("upsert did not overwrite: %v", got["vendor"])
+	}
+
+	// Empty key → ErrInvalid.
+	if err := us.PutUsage(ctx, "", []byte(`{}`)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("PutUsage(empty key) err = %v, want ErrInvalid", err)
 	}
 }
 
