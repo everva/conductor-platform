@@ -122,6 +122,7 @@ func (s *apiServer) routes() http.Handler {
 	mux.Handle("PUT /usage/{key}", s.requireAuth(http.HandlerFunc(s.handlePutUsage)))
 	mux.Handle("GET /accounts/usage", s.requireAuth(http.HandlerFunc(s.handleGetAccountUsage)))
 	mux.Handle("PUT /accounts/usage/{slug}", s.requireAuth(http.HandlerFunc(s.handlePutAccountUsage)))
+	mux.Handle("GET /fleet/status", s.requireAuth(http.HandlerFunc(s.handleFleetStatus)))
 
 	// Protected control endpoints (3A-3): POST mutations that reflect into the
 	// shared store; the daemon honors them on its next tick (no direct command).
