@@ -56,6 +56,7 @@ func runConformanceSuite(t *testing.T, newStore storeFactory) {
 		{"TaskDiffStoreRoundTrip", confTaskDiffRoundTrip},
 		{"CredentialStoreRoundTrip", confCredentialRoundTrip},
 		{"UsageStoreRoundTrip", confUsageRoundTrip},
+		{"AccountUsageStoreRoundTrip", confAccountUsageRoundTrip},
 		{"EnhanceProgressRoundTrip", confEnhanceProgressRoundTrip},
 		{"IntakeSessionRoundTrip", confIntakeSessionRoundTrip},
 	}
@@ -400,6 +401,55 @@ func confUsageRoundTrip(t *testing.T, s StateStore) {
 	// Empty key → ErrInvalid.
 	if err := us.PutUsage(ctx, "", []byte(`{}`)); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("PutUsage(empty key) err = %v, want ErrInvalid", err)
+	}
+}
+
+// confAccountUsageRoundTrip exercises the ADDITIVE AccountUsageStore seam (account-keyed usage for
+// the Pulse HUD): put→list round-trip, upsert, multi-slug listing, ErrInvalid on empty slug — across
+// MemoryStore and PostgresStore (proving migration 00015 applies). Separate table from usage_snapshots.
+func confAccountUsageRoundTrip(t *testing.T, s StateStore) {
+	t.Helper()
+	ctx := context.Background()
+	as, ok := s.(AccountUsageStore)
+	if !ok {
+		t.Fatalf("%T does not implement AccountUsageStore", s)
+	}
+
+	got, err := as.ListAccountUsage(ctx)
+	if err != nil {
+		t.Fatalf("ListAccountUsage(empty): %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ListAccountUsage(empty) = %v, want empty", got)
+	}
+
+	if err := as.PutAccountUsage(ctx, "everva", []byte(`{"email":"e@x.com","five_hour":{"utilization":41}}`)); err != nil {
+		t.Fatalf("PutAccountUsage(everva): %v", err)
+	}
+	if err := as.PutAccountUsage(ctx, "ati", []byte(`{"email":"a@x.com","available":false}`)); err != nil {
+		t.Fatalf("PutAccountUsage(ati): %v", err)
+	}
+	got, err = as.ListAccountUsage(ctx)
+	if err != nil {
+		t.Fatalf("ListAccountUsage: %v", err)
+	}
+	if len(got) != 2 || !strings.Contains(string(got["everva"]), `"utilization":41`) || !strings.Contains(string(got["ati"]), `"available":false`) {
+		t.Fatalf("round-trip mismatch: %v", got)
+	}
+
+	if err := as.PutAccountUsage(ctx, "everva", []byte(`{"five_hour":{"utilization":55}}`)); err != nil {
+		t.Fatalf("PutAccountUsage(upsert): %v", err)
+	}
+	got, err = as.ListAccountUsage(ctx)
+	if err != nil {
+		t.Fatalf("ListAccountUsage after upsert: %v", err)
+	}
+	if len(got) != 2 || !strings.Contains(string(got["everva"]), `"utilization":55`) {
+		t.Fatalf("upsert did not overwrite: %v", got["everva"])
+	}
+
+	if err := as.PutAccountUsage(ctx, "", []byte(`{}`)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("PutAccountUsage(empty slug) err = %v, want ErrInvalid", err)
 	}
 }
 

@@ -120,6 +120,8 @@ func (s *apiServer) routes() http.Handler {
 	mux.Handle("GET /status", s.requireAuth(http.HandlerFunc(s.handleStatus)))
 	mux.Handle("GET /usage", s.requireAuth(http.HandlerFunc(s.handleGetUsage)))
 	mux.Handle("PUT /usage/{key}", s.requireAuth(http.HandlerFunc(s.handlePutUsage)))
+	mux.Handle("GET /accounts/usage", s.requireAuth(http.HandlerFunc(s.handleGetAccountUsage)))
+	mux.Handle("PUT /accounts/usage/{slug}", s.requireAuth(http.HandlerFunc(s.handlePutAccountUsage)))
 
 	// Protected control endpoints (3A-3): POST mutations that reflect into the
 	// shared store; the daemon honors them on its next tick (no direct command).
@@ -475,6 +477,60 @@ func (s *apiServer) handleGetUsage(w http.ResponseWriter, r *http.Request) {
 	stored, err := us.ListUsage(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "usage unavailable")
+		return
+	}
+	out := make(map[string]json.RawMessage, len(stored))
+	for k, v := range stored {
+		out[k] = json.RawMessage(v)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// accountUsageStore type-asserts the optional AccountUsageStore seam, returning false (→ caller
+// writes 501 / empty) when the configured store has no account-usage persistence.
+func (s *apiServer) accountUsageStore() (statestore.AccountUsageStore, bool) {
+	as, ok := s.store.(statestore.AccountUsageStore)
+	return as, ok
+}
+
+// handlePutAccountUsage: PUT /accounts/usage/{slug} — the davinci account-usage-probe reports one
+// ACCOUNT's live utilization (opaque JSON: name/email + 5h/7d windows + reset times). Persisted by
+// slug so every replica agrees. Separate from /usage (role-keyed); this powers the account-grouped
+// Pulse HUD, including monitor-only accounts.
+func (s *apiServer) handlePutAccountUsage(w http.ResponseWriter, r *http.Request) {
+	slug := r.PathValue("slug")
+	body, err := io.ReadAll(io.LimitReader(r.Body, 16*1024))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if !json.Valid(body) {
+		writeError(w, http.StatusBadRequest, "body must be JSON")
+		return
+	}
+	as, ok := s.accountUsageStore()
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "account usage store not configured")
+		return
+	}
+	if err := as.PutAccountUsage(r.Context(), slug, body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid slug")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"slug": slug, "ok": true})
+}
+
+// handleGetAccountUsage: GET /accounts/usage — the latest per-account utilization snapshots for the
+// Pulse HUD, read from the shared store so every replica returns the same map.
+func (s *apiServer) handleGetAccountUsage(w http.ResponseWriter, r *http.Request) {
+	as, ok := s.accountUsageStore()
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]json.RawMessage{})
+		return
+	}
+	stored, err := as.ListAccountUsage(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "account usage unavailable")
 		return
 	}
 	out := make(map[string]json.RawMessage, len(stored))

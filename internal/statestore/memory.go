@@ -45,6 +45,8 @@ type MemoryStore struct {
 	intakeSessions map[string]IntakeSession
 	// usage holds the latest claude-subscription utilization snapshot per key (UsageStore seam).
 	usage map[string][]byte
+	// accountUsage holds the latest account-centric usage snapshot per slug (AccountUsageStore seam).
+	accountUsage map[string][]byte
 }
 
 // NewMemoryStore returns an empty, ready-to-use in-memory StateStore.
@@ -60,6 +62,7 @@ func NewMemoryStore() *MemoryStore {
 		enhance:        make(map[string]EnhanceJob),
 		intakeSessions: make(map[string]IntakeSession),
 		usage:          make(map[string][]byte),
+		accountUsage:   make(map[string][]byte),
 	}
 }
 
