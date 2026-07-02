@@ -48,6 +48,11 @@ type RunOutcome struct {
 	Summary string
 	// Checks are the individual gate checks (for the KindDecision event).
 	Checks []agentclient.Check
+	// Findings are the reviewer/gate's unresolved findings when the verdict is not pass. The gateway
+	// PERSISTS them onto the scenario's acceptance (deduped) so a later re-develop — a fresh worktree
+	// that loses .conductor/REVIEW.md — still addresses them and the reviewer re-checks them. This is
+	// what lets a dense screen converge across autoheal retries instead of cycling forever.
+	Findings []string
 	// Diff is the BOUNDED branch-vs-base summary (events.DiffSummary) the agent publishes as the
 	// KindDiff event so the director SEES the change in the Session view + board (review parity with
 	// the in-process daemon). nil when the diff couldn't be computed (observability-only — the run
@@ -212,7 +217,7 @@ func (r *Runner) RunOnce(ctx context.Context) (Outcome, error) {
 	}
 
 	decision, err := r.gw.Result(ctx, r.cfg.ProjectID, task.ID, agentclient.ResultReport{
-		Result: out.Result, Branch: out.Branch, Summary: out.Summary, Checks: out.Checks,
+		Result: out.Result, Branch: out.Branch, Summary: out.Summary, Checks: out.Checks, Findings: out.Findings,
 	})
 	if err != nil {
 		return "", fmt.Errorf("agent: report result: %w", err)

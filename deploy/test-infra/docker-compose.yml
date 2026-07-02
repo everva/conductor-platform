@@ -1,0 +1,149 @@
+# Optiway shared TEST-INFRA — the backing data plane both conductor agents (davinci +
+# everva) point their verify gate at, so optiway's tests run against REAL services
+# (Postgres+PostGIS+pgvector, Redis, EMQX/MQTT, RabbitMQ, Temporal) instead of the old
+# hermetic build-only gate.
+#
+# Runs on everva (Docker Desktop). All ports bind 0.0.0.0 so davinci reaches them over
+# tailscale (everva = 100.75.17.55). Service definitions mirror optiway docker-compose.qa.yml
+# (single source of truth) so the connection contract matches what the app expects.
+#
+# Bring up:   docker compose -p optiway-testinfra -f docker-compose.yml up -d
+# Tear down:  docker compose -p optiway-testinfra -f docker-compose.yml down       (keeps volumes)
+#             docker compose -p optiway-testinfra -f docker-compose.yml down -v    (wipes data)
+#
+# Connection contract (see test-infra.env) — from davinci use 100.75.17.55, from everva localhost:
+#   DATABASE_URL      postgresql://optiway:optiway_dev@HOST:5142/optiway_qa
+#   REDIS_URL         redis://HOST:6489
+#   MQTT_URL          mqtt://HOST:1883
+#   RABBITMQ_URL      amqp://optiway:optiway_dev@HOST:5772
+#   TEMPORAL_ADDRESS  HOST:7433   (namespace optiway-jobs)
+name: optiway-testinfra
+
+services:
+  postgres:
+    build: ./postgres
+    image: optiway-testinfra-postgres:latest
+    environment:
+      POSTGRES_USER: optiway
+      POSTGRES_PASSWORD: optiway_dev
+      POSTGRES_DB: optiway_qa
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init-extensions.sql:/docker-entrypoint-initdb.d/01-extensions.sql:ro
+    ports:
+      - "0.0.0.0:5142:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U optiway -d optiway_qa"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "0.0.0.0:6489:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  emqx:
+    image: emqx/emqx:5.8
+    environment:
+      EMQX_NAME: optiway-test
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: optiway_dev
+    ports:
+      - "0.0.0.0:1883:1883"    # MQTT
+      - "0.0.0.0:18083:18083"  # dashboard
+    healthcheck:
+      test: ["CMD", "emqx", "ctl", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    environment:
+      RABBITMQ_DEFAULT_USER: optiway
+      RABBITMQ_DEFAULT_PASS: optiway_dev
+    ports:
+      - "0.0.0.0:5772:5672"    # AMQP
+      - "0.0.0.0:15672:15672"  # management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  temporal-pg:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_DB: temporal
+    volumes:
+      - temporal_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  temporal:
+    image: temporalio/auto-setup:1.25.0
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: temporal-pg
+      DBNAME: temporal
+      VISIBILITY_DBNAME: temporal_visibility
+      NAMESPACES: optiway-jobs
+      SKIP_DEFAULT_NAMESPACE_CREATION: "false"
+    ports:
+      - "0.0.0.0:7433:7233"
+    depends_on:
+      temporal-pg:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "temporal operator namespace list --address temporal:7233 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 6s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  temporal-admin:
+    image: temporalio/auto-setup:1.25.0
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        ADDR=temporal:7233; NS=optiway-jobs
+        echo "[temporal-admin] creating namespace $$NS"
+        temporal operator namespace create --namespace $$NS --address $$ADDR --retention 72h || true
+        for i in $$(seq 1 30); do
+          if temporal operator namespace describe --namespace $$NS --address $$ADDR >/dev/null 2>&1; then break; fi
+          sleep 2
+        done
+        for a in OptiwayGroupId OptiwayFacilityId OptiwayOrganizationId OptiwayTenantSlug OptiwayCorrelationId OptiwayTriggeredBy OptiwayJobType OptiwayChannel OptiwayEndpointId OptiwayEventId; do
+          temporal operator search-attribute create --address $$ADDR --namespace $$NS --name $$a --type Keyword || true
+        done
+        temporal operator search-attribute create --address $$ADDR --namespace $$NS --name OptiwayBatchSize --type Int || true
+        echo "[temporal-admin] namespace + search attributes ready"
+    depends_on:
+      temporal:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  pgdata:
+  temporal_pgdata:

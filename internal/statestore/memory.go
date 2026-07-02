@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -364,6 +365,36 @@ func (s *MemoryStore) GetScenario(ctx context.Context, id string) (Scenario, err
 		return Scenario{}, fmt.Errorf("get scenario %q: %w", id, ErrNotFound)
 	}
 	return cloneScenario(sc), nil
+}
+
+// AppendScenarioAcceptance appends de-duplicated criteria to a scenario's acceptance list.
+func (s *MemoryStore) AppendScenarioAcceptance(ctx context.Context, id string, criteria []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(criteria) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sc, ok := s.scenarios[id]
+	if !ok {
+		return fmt.Errorf("append scenario acceptance %q: %w", id, ErrNotFound)
+	}
+	seen := make(map[string]bool, len(sc.Acceptance))
+	for _, a := range sc.Acceptance {
+		seen[a] = true
+	}
+	for _, c := range criteria {
+		c = strings.TrimSpace(c)
+		if c == "" || seen[c] {
+			continue
+		}
+		seen[c] = true
+		sc.Acceptance = append(sc.Acceptance, c)
+	}
+	s.scenarios[id] = sc
+	return nil
 }
 
 // ListScenarios returns all scenarios for the given project, ordered by ID.

@@ -265,10 +265,11 @@ type agentCheckDTO struct {
 // result, the verified per-task branch (recorded if the task is HELD for approval),
 // a summary, and the individual gate checks.
 type agentResultRequest struct {
-	Result  string          `json:"result"` // pass | changes-requested | blocked
-	Branch  string          `json:"branch"`
-	Summary string          `json:"summary"`
-	Checks  []agentCheckDTO `json:"checks"`
+	Result   string          `json:"result"` // pass | changes-requested | blocked
+	Branch   string          `json:"branch"`
+	Summary  string          `json:"summary"`
+	Checks   []agentCheckDTO `json:"checks"`
+	Findings []string        `json:"findings,omitempty"` // unresolved reviewer/gate findings to persist onto the scenario acceptance
 }
 
 // agentResultResponse tells the agent what to do next: merge (auto), hold (wait for
@@ -451,6 +452,22 @@ func (s *apiServer) handleAgentResult(w http.ResponseWriter, r *http.Request) {
 		if err := s.updateTask(ctx, taskID, func(t *statestore.Task) { t.Status = "blocked"; t.LastError = reason }); err != nil {
 			s.serverError(w, "agent result: mark blocked", err)
 			return
+		}
+		// PERSIST the unresolved findings onto the scenario's acceptance (deduped) so a later
+		// re-develop — a fresh worktree that loses .conductor/REVIEW.md — still addresses them and the
+		// reviewer re-checks them. This is what lets a DENSE screen CONVERGE across autoheal retries
+		// instead of cycling forever. Best-effort: a persist failure must NOT fail the block report.
+		if task.ScenarioID != "" && len(req.Findings) > 0 {
+			crit := make([]string, 0, len(req.Findings))
+			for _, f := range req.Findings {
+				if f = strings.TrimSpace(f); f != "" {
+					crit = append(crit, "Resolve this prior-review finding before merge: "+f)
+				}
+			}
+			if err := s.store.AppendScenarioAcceptance(ctx, task.ScenarioID, crit); err != nil && s.logger != nil {
+				s.logger.WarnContext(ctx, "agent result: persist review findings to acceptance failed",
+					"task", taskID, "scenario", task.ScenarioID, "err", err.Error())
+			}
 		}
 		writeJSON(w, http.StatusOK, agentResultResponse{Decision: "blocked"})
 		return

@@ -342,3 +342,40 @@ func idsOf(tasks []Task) []string {
 	}
 	return ids
 }
+
+// TestMemoryStore_AppendScenarioAcceptance covers the review-findings-persistence path: appended
+// criteria show up, duplicates (existing OR within the batch) are de-duplicated, an empty batch is a
+// no-op, and a missing scenario returns ErrNotFound. This is the seam that lets a dense screen
+// converge across autoheal retries (the findings survive the fresh worktree via the scenario).
+func TestMemoryStore_AppendScenarioAcceptance(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	if err := s.CreateScenario(ctx, Scenario{ID: "S-1", ProjectID: "p1", Title: "t", Acceptance: []string{"a"}}); err != nil {
+		t.Fatalf("CreateScenario: %v", err)
+	}
+	// append two new, one dup-of-existing, one dup-within-batch, one blank
+	if err := s.AppendScenarioAcceptance(ctx, "S-1", []string{"b", "a", " c ", "c", "  "}); err != nil {
+		t.Fatalf("AppendScenarioAcceptance: %v", err)
+	}
+	got, err := s.GetScenario(ctx, "S-1")
+	if err != nil {
+		t.Fatalf("GetScenario: %v", err)
+	}
+	want := []string{"a", "b", "c"}
+	if len(got.Acceptance) != len(want) {
+		t.Fatalf("acceptance = %v, want %v", got.Acceptance, want)
+	}
+	for i := range want {
+		if got.Acceptance[i] != want[i] {
+			t.Fatalf("acceptance[%d] = %q, want %q (full %v)", i, got.Acceptance[i], want[i], got.Acceptance)
+		}
+	}
+	// empty batch is a no-op
+	if err := s.AppendScenarioAcceptance(ctx, "S-1", nil); err != nil {
+		t.Fatalf("empty append must be a no-op, got %v", err)
+	}
+	// missing scenario -> ErrNotFound
+	if err := s.AppendScenarioAcceptance(ctx, "nope", []string{"x"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing scenario must be ErrNotFound, got %v", err)
+	}
+}

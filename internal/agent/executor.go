@@ -536,10 +536,11 @@ func (e *RealExecutor) gateCorrectLoop(ctx context.Context, project statestore.P
 // native side-by-side diff. Shared by the develop and the re-verify paths so both surface the change.
 func (e *RealExecutor) buildOutcome(ctx context.Context, project statestore.Project, ws engine.Workspace, review engine.ReviewResult, checks []engine.Check) RunOutcome {
 	out := RunOutcome{
-		Result:  review.Result,
-		Branch:  ws.Branch,
-		Summary: review.Summary,
-		Checks:  toChecks(checks),
+		Result:   review.Result,
+		Branch:   ws.Branch,
+		Summary:  review.Summary,
+		Checks:   toChecks(checks),
+		Findings: review.Findings,
 	}
 	differ := conductor.NewGitDiffer()
 	if summary, derr := differ.Diff(ctx, project, ws); derr == nil {

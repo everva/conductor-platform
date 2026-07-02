@@ -231,4 +231,12 @@ type StateStore interface {
 	GetScenario(ctx context.Context, id string) (Scenario, error)
 	// ListScenarios returns all scenarios for the given project.
 	ListScenarios(ctx context.Context, projectID string) ([]Scenario, error)
+	// AppendScenarioAcceptance appends criteria to a scenario's acceptance list,
+	// de-duplicating against the existing entries (idempotent). It lets the review
+	// pipeline PERSIST a task's unresolved review findings so a later re-develop (a
+	// fresh worktree, which loses .conductor/REVIEW.md) still addresses them and the
+	// reviewer re-checks them — the mechanism that lets a dense screen converge across
+	// autoheal retries instead of cycling forever. A no-op when criteria is empty or all
+	// already present; ErrNotFound when the scenario does not exist.
+	AppendScenarioAcceptance(ctx context.Context, id string, criteria []string) error
 }

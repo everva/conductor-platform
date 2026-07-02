@@ -437,3 +437,39 @@ func TestAgentReport(t *testing.T) {
 		t.Fatalf("invalid event status = %d, want 400", bad.Code)
 	}
 }
+
+// TestAgentResult_Blocked_PersistsFindingsToAcceptance verifies the review-convergence seam: when a
+// task blocks with unresolved findings, the gateway PERSISTS them (prefixed, deduped) onto the
+// task's scenario acceptance so a later re-develop addresses them and the reviewer re-checks them.
+func TestAgentResult_Blocked_PersistsFindingsToAcceptance(t *testing.T) {
+	s, store := agentServer(t)
+	ctx := context.Background()
+	mustCreate(t, store.CreateProject(ctx, statestore.Project{ID: "p", Repo: "o/p", BaseBranch: "main", Readiness: "ready"}))
+	mustCreate(t, store.CreateScenario(ctx, statestore.Scenario{ID: "S-1", ProjectID: "p", Title: "t", Acceptance: []string{"orig"}}))
+	mustCreate(t, store.CreateTask(ctx, statestore.Task{ID: "T-1", ProjectID: "p", Lane: "backend", Tier: "T2", Status: "running", ScenarioID: "S-1"}))
+
+	body := `{"result":"changes-requested","summary":"review unresolved","findings":["file.tsx:10 — fabricated count","file.tsx:20 — missing aria-checked"]}`
+	rec := doBody(t, s, http.MethodPost, "/projects/p/agent/tasks/T-1/result", bearer(), body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	sc, err := store.GetScenario(ctx, "S-1")
+	if err != nil {
+		t.Fatalf("GetScenario: %v", err)
+	}
+	if len(sc.Acceptance) != 3 {
+		t.Fatalf("acceptance = %v, want 3 (orig + 2 findings)", sc.Acceptance)
+	}
+	joined := strings.Join(sc.Acceptance, "\n")
+	if !strings.Contains(joined, "fabricated count") || !strings.Contains(joined, "missing aria-checked") {
+		t.Fatalf("findings not persisted onto acceptance: %v", sc.Acceptance)
+	}
+	// Idempotent: re-posting the SAME findings must NOT grow the acceptance (deduped).
+	if rec := doBody(t, s, http.MethodPost, "/projects/p/agent/tasks/T-1/result", bearer(), body); rec.Code != http.StatusOK {
+		t.Fatalf("re-post status=%d", rec.Code)
+	}
+	sc2, _ := store.GetScenario(ctx, "S-1")
+	if len(sc2.Acceptance) != 3 {
+		t.Fatalf("re-post must be idempotent (deduped), got %v", sc2.Acceptance)
+	}
+}

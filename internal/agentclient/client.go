@@ -99,10 +99,11 @@ type Check struct {
 
 // ResultReport is the agent's verdict for a task.
 type ResultReport struct {
-	Result  string  `json:"result"` // pass | changes-requested | blocked
-	Branch  string  `json:"branch"`
-	Summary string  `json:"summary"`
-	Checks  []Check `json:"checks"`
+	Result   string   `json:"result"` // pass | changes-requested | blocked
+	Branch   string   `json:"branch"`
+	Summary  string   `json:"summary"`
+	Checks   []Check  `json:"checks"`
+	Findings []string `json:"findings,omitempty"` // unresolved reviewer/gate findings, persisted onto the scenario acceptance
 }
 
 // --- requests ---
