@@ -312,8 +312,9 @@ func TestWriteGateFeedback_WritesFindingsAndDirective(t *testing.T) {
 	if !strings.Contains(s, "# The deterministic GATE FAILED — fix it before anything else") {
 		t.Fatalf("GATE.md missing the must-fix header:\n%s", s)
 	}
-	// The strong directive must be present verbatim in spirit (build + lint-strict shared).
-	if !strings.Contains(s, "pnpm build") || !strings.Contains(s, "packages/shared is lint-strict") {
+	// The strong directive must be present: re-run THIS repo's OWN build/lint and fix every error,
+	// project-generic (no hard-coded package manager / monorepo assumptions).
+	if !strings.Contains(s, "Re-run the project's build") || !strings.Contains(s, "do NOT assume a particular package manager") {
 		t.Fatalf("GATE.md missing the re-run-checks directive:\n%s", s)
 	}
 	for _, f := range r.Findings {

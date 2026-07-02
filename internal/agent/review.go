@@ -216,13 +216,13 @@ func writeGateFeedback(wsPath string, r engine.ReviewResult) error {
 	}
 	var b strings.Builder
 	b.WriteString("# The deterministic GATE FAILED — fix it before anything else\n\n")
-	b.WriteString("The build/lint/parity gate rejected your previous attempt. You MUST re-run the project's checks ")
-	b.WriteString("YOURSELF and FIX EVERY error, then verify they are clean:\n")
-	b.WriteString("- Run the full build: `pnpm build` (turbo, all packages) — it must exit 0.\n")
-	b.WriteString("- The gate diff-lints your changed .ts/.tsx files; **packages/shared is lint-strict (--max-warnings 0)** ")
-	b.WriteString("and requires **explicit function return types** and **forbids unsafe returns** and non-null assertions. ")
-	b.WriteString("Run eslint on your changed files and get to ZERO problems.\n")
-	b.WriteString("- Do not finish until `pnpm build` is clean AND your changed files have zero lint errors.\n\n")
+	b.WriteString("The project's build/typecheck/lint/parity gate rejected your previous attempt. You MUST re-run ")
+	b.WriteString("THIS repository's OWN checks YOURSELF and FIX EVERY error listed below before you finish:\n")
+	b.WriteString("- Re-run the project's build and get it to exit 0. Use whatever build tooling THIS repo actually uses ")
+	b.WriteString("(check package.json scripts and/or the recipe's verify command — e.g. `npm run build`, `pnpm build`, `make`, etc.); ")
+	b.WriteString("do NOT assume a particular package manager or monorepo layout.\n")
+	b.WriteString("- Fix any type errors, and lint the files YOU changed to ZERO problems using the repo's own lint config.\n")
+	b.WriteString("- Do not finish until the build and typecheck are clean AND your changed files have zero lint errors.\n\n")
 	b.WriteString("## Gate findings\n")
 	if len(r.Findings) == 0 {
 		b.WriteString("- (no specific findings were enumerated — re-run the build/lint yourself and fix every error)\n")
