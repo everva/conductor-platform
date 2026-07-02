@@ -1483,9 +1483,9 @@ describe("activate", () => {
     await Promise.resolve();
 
     // 4C-3 adds the intervention status-bar item; 4C-1b adds the diff one; Q4.2 adds the native
-    // fleet-glance one; the "Now" activity adds one — so five are created (connection +
-    // intervention + diff + fleet + now).
-    expect(window.createStatusBarItem).toHaveBeenCalledTimes(5);
+    // fleet-glance one; the "Now" activity adds one; the usage feature adds the claude-subscription
+    // usage bar — so six are created (connection + intervention + diff + fleet + now + usage).
+    expect(window.createStatusBarItem).toHaveBeenCalledTimes(6);
     const statusBar = window.createStatusBarItem.mock.results[0]?.value as {
       text: string;
       show: () => void;
@@ -1552,8 +1552,9 @@ describe("activate", () => {
     // + the M2 auto-reconnect controller's dispose = 37, + the A/B Stream commands
     // (showEventJson + retryTask) = 39, + the openTour command = 40, + the Faz-R dispatch command = 41,
     // + the live-polling backbone's clearInterval dispose = 42, + B's openBoard/openFleet/openEvents
-    // commands (3) + their SurfacePanels disposed (3, fleetConfig present here) = 48.
-    expect(subscriptions).toHaveLength(48);
+    // commands (3) + their SurfacePanels disposed (3, fleetConfig present here) = 48, + the usage
+    // status-bar item = 49.
+    expect(subscriptions).toHaveLength(49);
   });
 
   it("does NOT re-reveal the activity bar after the first launch (N5)", async () => {
