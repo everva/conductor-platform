@@ -15,9 +15,11 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/everva/conductor-platform/internal/credstore"
@@ -80,6 +82,11 @@ type apiServer struct {
 	// endpoints return 501. The holdout BODY is never logged (ADR-0018); it is repo-external by
 	// construction (the central Postgres).
 	holdouts holdoutStore
+	// usageMu guards usage: the LIVE claude-subscription utilization snapshots the davinci probe
+	// PUTs (per subscription key, e.g. "admin"/"vendor"). In-memory + ephemeral by design — the probe
+	// re-reports every cycle, so a gateway restart just repopulates; no store/migration needed.
+	usageMu sync.RWMutex
+	usage   map[string]json.RawMessage
 }
 
 // holdoutStore is the narrow read+write seam the holdout endpoints drive (Faz-S). It mirrors the
@@ -117,6 +124,8 @@ func (s *apiServer) routes() http.Handler {
 	mux.Handle("GET /projects/{id}/scenarios", s.requireAuth(http.HandlerFunc(s.handleProjectScenarios)))
 	mux.Handle("GET /hosts", s.requireAuth(http.HandlerFunc(s.handleHosts)))
 	mux.Handle("GET /status", s.requireAuth(http.HandlerFunc(s.handleStatus)))
+	mux.Handle("GET /usage", s.requireAuth(http.HandlerFunc(s.handleGetUsage)))
+	mux.Handle("PUT /usage/{key}", s.requireAuth(http.HandlerFunc(s.handlePutUsage)))
 
 	// Protected control endpoints (3A-3): POST mutations that reflect into the
 	// shared store; the daemon honors them on its next tick (no direct command).
@@ -426,6 +435,41 @@ func (s *apiServer) handleHosts(w http.ResponseWriter, r *http.Request) {
 
 // handleStatus: GET /status → fleet summary aggregate (project/host counts +
 // active leases + generated_at). Distinct from the daemon's per-tick /status.
+// handlePutUsage: PUT /usage/{key} — the davinci usage-probe reports a subscription's LIVE claude
+// utilization snapshot (opaque JSON body: 5h/7d utilization %, resets_at, status). Stored in-memory
+// keyed by subscription (e.g. "admin"/"vendor") and served by GET /usage for the editor. Additive;
+// the body is small + non-secret (percentages + reset times), so it is stored verbatim.
+func (s *apiServer) handlePutUsage(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	body, err := io.ReadAll(io.LimitReader(r.Body, 16*1024))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if !json.Valid(body) {
+		writeError(w, http.StatusBadRequest, "body must be JSON")
+		return
+	}
+	s.usageMu.Lock()
+	if s.usage == nil {
+		s.usage = map[string]json.RawMessage{}
+	}
+	s.usage[key] = json.RawMessage(body)
+	s.usageMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"key": key, "ok": true})
+}
+
+// handleGetUsage: GET /usage — the latest per-subscription claude utilization snapshots for the editor.
+func (s *apiServer) handleGetUsage(w http.ResponseWriter, r *http.Request) {
+	s.usageMu.RLock()
+	out := make(map[string]json.RawMessage, len(s.usage))
+	for k, v := range s.usage {
+		out[k] = v
+	}
+	s.usageMu.RUnlock()
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *apiServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	projects, err := s.store.ListProjects(r.Context())
 	if err != nil {
