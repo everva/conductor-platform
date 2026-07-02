@@ -37,42 +37,44 @@ func main() {
 }
 
 type config struct {
-	gateway      string
-	project      string
-	hostID       string
-	capabilities []string
-	root         string
-	repo         string
-	base         string
-	recipeDir    string
-	developCmd   []string
-	holdoutCmd   []string
-	timeout      time.Duration
-	interval     time.Duration
-	poll         time.Duration
-	noPush       bool
-	pushRemote   string
-	review       bool
+	gateway         string
+	project         string
+	hostID          string
+	capabilities    []string
+	root            string
+	repo            string
+	base            string
+	recipeDir       string
+	developCmd      []string
+	holdoutCmd      []string
+	timeout         time.Duration
+	interval        time.Duration
+	poll            time.Duration
+	noPush          bool
+	pushRemote      string
+	review          bool
+	skipGatewayCred bool
 }
 
 func run() error {
 	var (
-		gateway    = flag.String("gateway", "", "conductor-api gateway base URL (required), e.g. http://conductor-api:8080")
-		project    = flag.String("project", "", "project ID to work (required)")
-		hostID     = flag.String("host-id", defaultHostID(), "stable host identifier")
-		caps       = flag.String("capabilities", "", "comma-separated host capabilities for routing (e.g. linux,backend)")
-		root       = flag.String("root", defaultRoot(), "writable workspace root (clones + worktrees)")
-		repo       = flag.String("repo", "", "git remote URL of the project (required), e.g. https://github.com/everva/optiway.git")
-		base       = flag.String("base", "", "base branch conductor work merges onto (required), e.g. conductor/optiway")
-		recipeDir  = flag.String("recipe-dir", "", "directory containing .conductor/config.yaml (develop cmd + verify gates)")
-		developCmd = flag.String("develop-cmd", "", "override the performer argv (default from recipe, else 'claude -p')")
-		holdoutCmd = flag.String("holdout-cmd", firstEnv("CONDUCTOR_HOLDOUT_CMD"), "argv to run the injected hidden holdout in the verify-worktree, e.g. 'pnpm exec playwright test' (Faz-S; required only when a scenario has a stored holdout)")
-		timeout    = flag.Duration("timeout", 30*time.Minute, "per-develop subprocess timeout")
-		interval   = flag.Duration("interval", 10*time.Second, "idle poll interval when there is no work")
-		poll       = flag.Duration("poll", 15*time.Second, "held-task approval poll interval")
-		noPush     = flag.Bool("no-push", false, "do NOT push the merged base to the remote (local-only)")
-		pushRemote = flag.String("push-remote", "origin", "git remote to push the merged base to")
-		review     = flag.Bool("review", envBool("CONDUCTOR_REVIEW", true), "run the STRICT third-eye LLM review that GATES the auto-merge after the deterministic gate passes (env CONDUCTOR_REVIEW)")
+		gateway         = flag.String("gateway", "", "conductor-api gateway base URL (required), e.g. http://conductor-api:8080")
+		project         = flag.String("project", "", "project ID to work (required)")
+		hostID          = flag.String("host-id", defaultHostID(), "stable host identifier")
+		caps            = flag.String("capabilities", "", "comma-separated host capabilities for routing (e.g. linux,backend)")
+		root            = flag.String("root", defaultRoot(), "writable workspace root (clones + worktrees)")
+		repo            = flag.String("repo", "", "git remote URL of the project (required), e.g. https://github.com/everva/optiway.git")
+		base            = flag.String("base", "", "base branch conductor work merges onto (required), e.g. conductor/optiway")
+		recipeDir       = flag.String("recipe-dir", "", "directory containing .conductor/config.yaml (develop cmd + verify gates)")
+		developCmd      = flag.String("develop-cmd", "", "override the performer argv (default from recipe, else 'claude -p')")
+		holdoutCmd      = flag.String("holdout-cmd", firstEnv("CONDUCTOR_HOLDOUT_CMD"), "argv to run the injected hidden holdout in the verify-worktree, e.g. 'pnpm exec playwright test' (Faz-S; required only when a scenario has a stored holdout)")
+		timeout         = flag.Duration("timeout", 30*time.Minute, "per-develop subprocess timeout")
+		interval        = flag.Duration("interval", 10*time.Second, "idle poll interval when there is no work")
+		poll            = flag.Duration("poll", 15*time.Second, "held-task approval poll interval")
+		noPush          = flag.Bool("no-push", false, "do NOT push the merged base to the remote (local-only)")
+		pushRemote      = flag.String("push-remote", "origin", "git remote to push the merged base to")
+		review          = flag.Bool("review", envBool("CONDUCTOR_REVIEW", true), "run the STRICT third-eye LLM review that GATES the auto-merge after the deterministic gate passes (env CONDUCTOR_REVIEW)")
+		skipGatewayCred = flag.Bool("skip-gateway-credential", envBool("CONDUCTOR_SKIP_GATEWAY_CREDENTIAL", false), "do NOT fetch the shared claude credential from the gateway; rely on this host's own CLAUDE_CODE_OAUTH_TOKEN env or interactive `claude login` (env CONDUCTOR_SKIP_GATEWAY_CREDENTIAL). Use to run a project on a SEPARATE claude subscription from the shared one.")
 	)
 	flag.Parse()
 
@@ -82,7 +84,7 @@ func run() error {
 		root: *root, repo: strings.TrimSpace(*repo), base: strings.TrimSpace(*base),
 		recipeDir: *recipeDir, developCmd: splitFields(*developCmd), holdoutCmd: splitFields(*holdoutCmd),
 		timeout: *timeout, interval: *interval, poll: *poll, noPush: *noPush, pushRemote: *pushRemote,
-		review: *review,
+		review: *review, skipGatewayCred: *skipGatewayCred,
 	}
 	if cfg.gateway == "" || cfg.project == "" || cfg.repo == "" || cfg.base == "" {
 		return errors.New("-gateway, -project, -repo and -base are required")
@@ -111,7 +113,7 @@ func run() error {
 	// editor-uploaded token from the gateway's encrypted credential store (L3) and inject it
 	// into this process's env so the develop subprocess inherits it (envsafe KEEPS it). If
 	// neither is available, warn (non-fatal: the host may have an interactive claude login).
-	ensureClaudeAuth(context.Background(), client, devArgv, logger)
+	ensureClaudeAuth(context.Background(), client, devArgv, logger, cfg.skipGatewayCred)
 
 	exec, err := agent.NewRealExecutor(agent.ExecutorConfig{
 		RootDir:    cfg.root,
@@ -229,12 +231,17 @@ type credentialFetcher interface {
 // It is a no-op for a non-claude performer. The token VALUE is never logged (account-level
 // secret) — only presence/outcome. A fetch error is logged shape-only (the client's *Error is
 // secret-free) and is non-fatal: the agent still starts and may use an interactive login.
-func ensureClaudeAuth(ctx context.Context, f credentialFetcher, developCmd []string, logger *slog.Logger) {
+func ensureClaudeAuth(ctx context.Context, f credentialFetcher, developCmd []string, logger *slog.Logger, skipGateway bool) {
 	if !usesClaudePerformer(developCmd) {
 		return
 	}
 	if os.Getenv(claudeCredentialKind) != "" {
 		logger.Info("conductor-agent: using CLAUDE_CODE_OAUTH_TOKEN from the environment")
+		return
+	}
+	if skipGateway {
+		logger.Info("conductor-agent: -skip-gateway-credential set; NOT fetching the shared gateway credential — " +
+			"relying on this host's own CLAUDE_CODE_OAUTH_TOKEN env or interactive `claude login` (separate subscription)")
 		return
 	}
 	token, found, err := f.GetCredential(ctx, claudeCredentialKind)

@@ -54,7 +54,7 @@ func quietLogger() *slog.Logger {
 func TestEnsureClaudeAuth_EnvWinsNoFetch(t *testing.T) {
 	t.Setenv(claudeCredentialKind, "sk-ant-oat-from-env")
 	f := &fakeFetcher{}
-	ensureClaudeAuth(context.Background(), f, []string{"claude", "-p"}, quietLogger())
+	ensureClaudeAuth(context.Background(), f, []string{"claude", "-p"}, quietLogger(), false)
 	if f.called {
 		t.Fatalf("must NOT fetch when the env var is already set")
 	}
@@ -66,7 +66,7 @@ func TestEnsureClaudeAuth_EnvWinsNoFetch(t *testing.T) {
 func TestEnsureClaudeAuth_FetchFoundSetsEnv(t *testing.T) {
 	t.Setenv(claudeCredentialKind, "") // baseline empty (+ cleanup restores after the test)
 	f := &fakeFetcher{token: "sk-ant-oat-from-gateway", found: true}
-	ensureClaudeAuth(context.Background(), f, []string{"claude", "-p"}, quietLogger())
+	ensureClaudeAuth(context.Background(), f, []string{"claude", "-p"}, quietLogger(), false)
 	if !f.called || f.gotKind != claudeCredentialKind {
 		t.Fatalf("must fetch the claude credential kind; called=%v kind=%q", f.called, f.gotKind)
 	}
@@ -78,7 +78,7 @@ func TestEnsureClaudeAuth_FetchFoundSetsEnv(t *testing.T) {
 func TestEnsureClaudeAuth_FetchNotFoundLeavesEnvEmpty(t *testing.T) {
 	t.Setenv(claudeCredentialKind, "")
 	f := &fakeFetcher{found: false}
-	ensureClaudeAuth(context.Background(), f, []string{"claude", "-p"}, quietLogger())
+	ensureClaudeAuth(context.Background(), f, []string{"claude", "-p"}, quietLogger(), false)
 	if got := os.Getenv(claudeCredentialKind); got != "" {
 		t.Fatalf("env var must stay empty when nothing is stored, got %q", got)
 	}
@@ -87,7 +87,7 @@ func TestEnsureClaudeAuth_FetchNotFoundLeavesEnvEmpty(t *testing.T) {
 func TestEnsureClaudeAuth_FetchErrorIsNonFatal(t *testing.T) {
 	t.Setenv(claudeCredentialKind, "")
 	f := &fakeFetcher{err: errors.New("gateway 503")}
-	ensureClaudeAuth(context.Background(), f, []string{"claude", "-p"}, quietLogger())
+	ensureClaudeAuth(context.Background(), f, []string{"claude", "-p"}, quietLogger(), false)
 	if got := os.Getenv(claudeCredentialKind); got != "" {
 		t.Fatalf("env var must stay empty on fetch error, got %q", got)
 	}
@@ -96,8 +96,23 @@ func TestEnsureClaudeAuth_FetchErrorIsNonFatal(t *testing.T) {
 func TestEnsureClaudeAuth_NonClaudePerformerNoOp(t *testing.T) {
 	t.Setenv(claudeCredentialKind, "")
 	f := &fakeFetcher{token: "x", found: true}
-	ensureClaudeAuth(context.Background(), f, []string{"pnpm", "build"}, quietLogger())
+	ensureClaudeAuth(context.Background(), f, []string{"pnpm", "build"}, quietLogger(), false)
 	if f.called {
 		t.Fatalf("must NOT fetch for a non-claude performer")
+	}
+}
+
+// -skip-gateway-credential: with the env empty and skip=true, the agent must NOT fetch the shared
+// gateway credential — it relies on the host's own CLAUDE_CODE_OAUTH_TOKEN / interactive login. This
+// is how a project runs on a SEPARATE claude subscription from the shared gateway one.
+func TestEnsureClaudeAuth_SkipGatewaySkipsFetch(t *testing.T) {
+	t.Setenv(claudeCredentialKind, "")
+	f := &fakeFetcher{token: "sk-ant-oat-shared", found: true}
+	ensureClaudeAuth(context.Background(), f, []string{"claude", "-p"}, quietLogger(), true)
+	if f.called {
+		t.Fatalf("skip-gateway-credential must NOT fetch the shared gateway credential")
+	}
+	if got := os.Getenv(claudeCredentialKind); got != "" {
+		t.Fatalf("env must stay empty (rely on interactive login), got %q", got)
 	}
 }
