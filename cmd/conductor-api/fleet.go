@@ -24,6 +24,7 @@ type fleetTaskDTO struct {
 	ID     string `json:"id"`
 	Lane   string `json:"lane,omitempty"`
 	Tier   string `json:"tier,omitempty"`
+	Host   string `json:"host,omitempty"` // which host/server is running it (from the lease)
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -56,6 +57,16 @@ func (s *apiServer) handleFleetStatus(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "fleet: list hosts", err)
 		return
 	}
+	leases, err := s.store.ListLeases(ctx)
+	if err != nil {
+		s.serverError(w, "fleet: list leases", err)
+		return
+	}
+	// project → host currently holding its lease (which server is running its task).
+	leaseHost := make(map[string]string, len(leases))
+	for _, l := range leases {
+		leaseHost[l.ProjectID] = l.HostID
+	}
 	now := s.now()
 
 	hostDTOs := make([]fleetHostDTO, 0, len(hosts))
@@ -84,7 +95,7 @@ func (s *apiServer) handleFleetStatus(w http.ResponseWriter, r *http.Request) {
 			counts[t.Status]++
 			switch t.Status {
 			case "running":
-				running = append(running, fleetTaskDTO{ID: t.ID, Lane: t.Lane, Tier: t.Tier})
+				running = append(running, fleetTaskDTO{ID: t.ID, Lane: t.Lane, Tier: t.Tier, Host: leaseHost[p.ID]})
 			case "blocked":
 				blocked = append(blocked, fleetTaskDTO{ID: t.ID, Lane: t.Lane, Tier: t.Tier, Reason: t.LastError})
 			}
