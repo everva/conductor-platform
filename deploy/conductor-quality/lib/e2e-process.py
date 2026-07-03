@@ -71,24 +71,37 @@ if mode != "--file":
     print("  (report mode — not filing fix-tasks)")
     sys.exit(0)
 
-# --file: fresh failures → fix-tasks
+# --file: only file failures CONFIRMED across TWO consecutive runs. A flaky or staging-
+# DATA-dependent failure (e.g. a row that isn't seeded this run) doesn't reproduce, so it
+# never becomes a fix-task the agent can't fix — this kills the A-E2E block-storm. A genuine
+# code defect fails every run and gets filed on the 2nd sighting. (cron cadence = 6h, so
+# confirmation latency is ~6h — an acceptable trade for precision.)
 open(state_f, "a").close()
-seen = set(open(state_f).read().split())
+seen = set(open(state_f).read().split())          # already-filed fids
+pending_f = os.path.expanduser(f"~/conductor-agent/e2e-pending-{project}.txt")
+open(pending_f, "a").close()
+pending = set(open(pending_f).read().split())     # fids that FAILED the previous run
 def fid(fd):
     return hashlib.sha1(f"{fd['file']}|{fd['title']}".encode()).hexdigest()[:10]
-# dedup WITHIN this batch too: the same spec+title fails once per browser project
-# (chromium + mobile-chrome) → identical fid → duplicate task id → intake 400.
-fresh, batch_seen = [], set()
+# this run's failures (dict dedups the chromium+mobile-chrome double-fail by fid)
+cur_fail = {}
 for fd in fails:
-    h = fid(fd)
-    if h in seen or h in batch_seen:
-        continue
-    batch_seen.add(h)
-    fresh.append((h, fd))
-    if len(fresh) >= CAP:
-        break
+    cur_fail[fid(fd)] = fd
+# next run's pending baseline = this run's failures (a failure must RECUR to be confirmed)
+with open(pending_f, "w") as f:
+    for h in cur_fail:
+        f.write(h + "\n")
+# confirmed = failed BOTH this run and last run, not already filed
+confirmed = [(h, fd) for h, fd in cur_fail.items() if h in pending and h not in seen]
+observed_new = [h for h in cur_fail if h not in pending and h not in seen]
+if observed_new:
+    log(f"observed {len(observed_new)} NEW failure(s) — awaiting 2nd-run confirmation, NOT filed (flaky-guard): {observed_new}")
+    print(f"  {len(observed_new)} new failure(s) observed — awaiting confirmation (flaky/data-dependent guard)")
+fresh = confirmed[:CAP]
 if not fresh:
-    print("  no fresh failures to file (all already filed)"); sys.exit(0)
+    print("  no CONFIRMED (2-run reproducible) failures to file")
+    sys.exit(0)
+print(f"  {len(fresh)} CONFIRMED reproducible failure(s) → filing")
 
 import re
 _ANSI = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
