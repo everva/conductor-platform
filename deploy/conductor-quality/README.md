@@ -59,13 +59,15 @@ binding) is versioned **in the target repos**, not here.
 This kit **fully solves format-recovery for the current host (davinci)**: after a wipe,
 `git pull && ./install.sh` restores the entire quality layer to the same paths.
 
-Two follow-ups make it portable to an **arbitrary** host/user (not required for recovery):
+It is also portable to an **arbitrary** host/user:
 
-1. **Hardcoded `/home/davinci` paths** in ~6 lib scripts (e.g. `CLAUDE_CONFIG_DIR`,
-   artifact roots) should read `$HOME`/`$CONDUCTOR_AGENT_HOME`. `install.sh` itself is
-   already `$AGENT_HOME`-relative — only the lib bodies need the sweep.
-2. **Project list** (`xirigo-admin`, `xirigo-vendor`) is inline in `auditor-cron.sh` /
-   `e2e-cron.sh`; moving it to a `projects.conf` makes the crons project-agnostic.
+1. **No hardcoded paths** — every lib script derives from `$HOME` (bash) /
+   `os.path.expanduser("~")` (python); `install.sh` is `$AGENT_HOME`-relative. Runs
+   under any user whose home holds the `conductor-agent/` tree.
+2. **Config-driven targets** — `lib/projects.conf` (`<project> <base> <e2e-glob>`) lists
+   the panels the auditor + E2E loops cover. Add a line to onboard a new panel; the crons
+   read it, no code change.
 
-Both are mechanical passes; the capability-gated framework (add a capability → add a
-feature: `e2e`, `ios`, …) is already in place and proven.
+The capability-gated framework (add a capability → add a feature: `e2e`, `ios`, …) is in
+place and proven. `<project>-e2e.env` secrets remain host-local (seeded from
+`env-templates/*.example`).

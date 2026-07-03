@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Periodic real-backend E2E + visual verification for both panels. Real staging auth
-# (admin: authed suite; vendor: unauthenticated redirect specs + empty auth-state).
-# Screenshot per screen kept under e2e-artifacts/. Failures -> deduped/capped fix-tasks.
-# No claude -> no rate concern. Manual re-run: call e2e-runner.sh directly.
+# Real-backend E2E + visual verification over each configured panel → screenshots + fix-tasks.
 export PATH=/usr/bin:/bin:/usr/local/bin
-LIB=/home/davinci/conductor-agent/lib
-bash "$LIB/e2e-runner.sh" xirigo-admin  conductor/admin-redesign  e2e/smoke  --file
-bash "$LIB/e2e-runner.sh" xirigo-vendor conductor/vendor-redesign e2e/vendor --file
+LIB="$HOME/conductor-agent/lib"
+CONF="$LIB/projects.conf"
+grep -vE '^\s*#|^\s*$' "$CONF" 2>/dev/null | while read -r proj base glob _; do
+  [ -n "$proj" ] || continue
+  bash "$LIB/e2e-runner.sh" "$proj" "$base" "$glob" --file
+done

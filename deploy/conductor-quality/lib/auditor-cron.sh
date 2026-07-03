@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Periodic independent-auditor for both panels. Runs the semantic auditor (monitor
-# account) over the last-N landed screens and files deduped, capped fix-tasks for the
-# defect classes the per-commit gates miss. Safe: read-only review, cap+dedup guards.
+# Semantic auditor over each configured panel's recent lands → deduped/capped fix-tasks.
 export PATH=/usr/bin:/bin:/usr/local/bin
-LIB=/home/davinci/conductor-agent/lib
-bash "$LIB/auditor.sh" xirigo-admin  conductor/admin-redesign  5 --file
-bash "$LIB/auditor.sh" xirigo-vendor conductor/vendor-redesign 5 --file
+LIB="$HOME/conductor-agent/lib"
+CONF="$LIB/projects.conf"
+grep -vE '^\s*#|^\s*$' "$CONF" 2>/dev/null | while read -r proj base glob _; do
+  [ -n "$proj" ] || continue
+  bash "$LIB/auditor.sh" "$proj" "$base" 5 --file
+done

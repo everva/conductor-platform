@@ -4,7 +4,7 @@
   stdin: raw claude output
   argv:  <project> <state_file> <log_file> <mode:report|--file> <cap> <ts> <base>
 """
-import sys, re, json, hashlib, subprocess, urllib.request
+import sys, re, os, json, hashlib, subprocess, urllib.request
 
 project, state_f, log_f, mode, cap, ts, base = sys.argv[1:8]
 cap = int(cap)
@@ -84,7 +84,7 @@ yaml = "\n---\n".join(docs)
 
 # gateway token
 tok = ""
-for line in open("/home/davinci/conductor-agent/conductor-agent.env"):
+for line in open(os.path.expanduser("~/conductor-agent/conductor-agent.env")):
     if line.startswith("CONDUCTOR_AGENT_TOKEN="):
         tok = line.split("=", 1)[1].strip()
 req = urllib.request.Request(

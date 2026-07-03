@@ -8,13 +8,13 @@
 #   Usage: auditor.sh <project> <base_branch> [K_landed=4] [--file]
 set -uo pipefail
 PROJECT="${1:?project}"; BASE="${2:?base}"; K="${3:-4}"; MODE="${4:-report}"
-CLONE=/home/davinci/.conductor-agent/clones/$PROJECT
-WT=/home/davinci/conductor-agent/auditor/wt-$PROJECT
-LOG=/home/davinci/conductor-agent/auditor.log
-STATE=/home/davinci/conductor-agent/auditor-filed-$PROJECT.txt
-PROMPT=/home/davinci/conductor-agent/lib/audit-prompt.txt
+CLONE=$HOME/.conductor-agent/clones/$PROJECT
+WT=$HOME/conductor-agent/auditor/wt-$PROJECT
+LOG=$HOME/conductor-agent/auditor.log
+STATE=$HOME/conductor-agent/auditor-filed-$PROJECT.txt
+PROMPT=$HOME/conductor-agent/lib/audit-prompt.txt
 CAP=5                       # max fix-tasks filed per run (flood guard)
-export CLAUDE_CONFIG_DIR=/home/davinci/.claude-acct3
+export CLAUDE_CONFIG_DIR=$HOME/.claude-acct3
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 touch "$STATE"
 
@@ -33,7 +33,7 @@ git worktree add -q --detach "$WT" "origin/$BASE" 2>/dev/null || { echo "$(ts) a
 # assemble prompt safely (placeholder replace via helper)
 FILES_FILE=$(mktemp); printf '%s\n' "$files" > "$FILES_FILE"
 PROMPT_FILE=$(mktemp)
-python3 /home/davinci/conductor-agent/lib/auditor-assemble.py "$PROMPT" "$PROJECT" "$FILES_FILE" "$PROMPT_FILE"
+python3 $HOME/conductor-agent/lib/auditor-assemble.py "$PROMPT" "$PROJECT" "$FILES_FILE" "$PROMPT_FILE"
 rm -f "$FILES_FILE"
 
 cd "$WT"
@@ -42,4 +42,4 @@ rm -f "$PROMPT_FILE"
 cd "$CLONE"; git worktree remove --force "$WT" 2>/dev/null; rm -rf "$WT"; git worktree prune 2>/dev/null
 
 # extract + process findings (python: parse, log, dedup, optional file)
-printf '%s' "$RAW" | python3 /home/davinci/conductor-agent/lib/auditor-process.py "$PROJECT" "$STATE" "$LOG" "$MODE" "$CAP" "$(ts)" "$BASE"
+printf '%s' "$RAW" | python3 $HOME/conductor-agent/lib/auditor-process.py "$PROJECT" "$STATE" "$LOG" "$MODE" "$CAP" "$(ts)" "$BASE"

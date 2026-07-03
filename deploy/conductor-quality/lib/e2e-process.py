@@ -3,11 +3,11 @@
 mode) convert fresh failures to intake fix-tasks (deduped + capped).
   argv: <project> <results.json> <log_file> <mode:report|--file> <artifact_dir>
 """
-import sys, json, hashlib, urllib.request
+import sys, os, json, hashlib, urllib.request
 
 project, results_f, log_f, mode, artdir = sys.argv[1:6]
 CAP = 5
-state_f = f"/home/davinci/conductor-agent/e2e-filed-{project}.txt"
+state_f = os.path.expanduser(f"~/conductor-agent/e2e-filed-{project}.txt")
 
 def log(msg):
     with open(log_f, "a") as f:
@@ -113,7 +113,7 @@ for h, fd in fresh:
     )
 yaml = "\n---\n".join(docs)
 tok = ""
-for line in open("/home/davinci/conductor-agent/conductor-agent.env"):
+for line in open(os.path.expanduser("~/conductor-agent/conductor-agent.env")):
     if line.startswith("CONDUCTOR_AGENT_TOKEN="):
         tok = line.split("=", 1)[1].strip()
 req = urllib.request.Request(

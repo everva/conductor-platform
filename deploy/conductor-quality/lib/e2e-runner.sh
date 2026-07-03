@@ -7,13 +7,13 @@
 #   Usage: e2e-runner.sh <project> <base> [spec_glob] [--file]
 set -uo pipefail
 PROJECT="${1:?project}"; BASE="${2:?base}"; GLOB="${3:-e2e/smoke}"; MODE="${4:-report}"
-CLONE=/home/davinci/.conductor-agent/clones/$PROJECT
-E2E=/home/davinci/conductor-agent/e2e/$PROJECT
-ENV=/home/davinci/conductor-agent/$PROJECT-e2e.env
-ARTROOT=/home/davinci/conductor-agent/e2e-artifacts/$PROJECT
-LOG=/home/davinci/conductor-agent/e2e-runner.log
-LOCKHASH=/home/davinci/conductor-agent/e2e/$PROJECT.lockhash
-TSFILE=/home/davinci/conductor-agent/e2e/$PROJECT.ts   # stamp dir name (no Date in-band)
+CLONE=$HOME/.conductor-agent/clones/$PROJECT
+E2E=$HOME/conductor-agent/e2e/$PROJECT
+ENV=$HOME/conductor-agent/$PROJECT-e2e.env
+ARTROOT=$HOME/conductor-agent/e2e-artifacts/$PROJECT
+LOG=$HOME/conductor-agent/e2e-runner.log
+LOCKHASH=$HOME/conductor-agent/e2e/$PROJECT.lockhash
+TSFILE=$HOME/conductor-agent/e2e/$PROJECT.ts   # stamp dir name (no Date in-band)
 ts() { date -u +%Y%m%dT%H%M%SZ; }
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) e2e[$PROJECT]: $*" >> "$LOG"; }
 
@@ -69,4 +69,4 @@ log "artifacts: $shots screenshot(s) in $ART"
 cd "$CLONE"; git worktree remove --force "$E2E" 2>/dev/null; git worktree prune 2>/dev/null
 
 # process results → summary + (—file) fix-tasks
-python3 /home/davinci/conductor-agent/lib/e2e-process.py "$PROJECT" "$ART/results.json" "$LOG" "$MODE" "$ART"
+python3 $HOME/conductor-agent/lib/e2e-process.py "$PROJECT" "$ART/results.json" "$LOG" "$MODE" "$ART"
