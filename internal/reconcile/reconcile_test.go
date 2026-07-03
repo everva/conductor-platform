@@ -119,6 +119,61 @@ func TestReconciler_NoTrailer_NoChange(t *testing.T) {
 	}
 }
 
+func TestReconciler_RetryTransientBlocked(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	// A: no-output verdict, below cap -> re-queued (blocked->ready, retry++, err cleared).
+	seedTask(t, s, statestore.Task{ID: "T-noout", ProjectID: proj, Status: "blocked",
+		LastError: "develop: engine: malformed verdict: no result-keyed JSON object in output", RetryCount: 0})
+	// B: EMPTY LastError -> transient (a real failure always carries a reason) -> re-queued.
+	seedTask(t, s, statestore.Task{ID: "T-empty", ProjectID: proj, Status: "blocked", LastError: "", RetryCount: 1})
+	// C: real gate failure -> NOT auto-retried (stays blocked for a human).
+	seedTask(t, s, statestore.Task{ID: "T-gate", ProjectID: proj, Status: "blocked",
+		LastError: "i18n parity failed: tr missing 3 keys", RetryCount: 0})
+	// D: transient but AT the cap -> loop-breaker leaves it blocked.
+	seedTask(t, s, statestore.Task{ID: "T-cap", ProjectID: proj, Status: "blocked",
+		LastError: "developer made no change", RetryCount: 3})
+	// E: not blocked -> untouched.
+	seedTask(t, s, statestore.Task{ID: "T-run", ProjectID: proj, Status: "running", RetryCount: 0})
+
+	r := New(s, fakeGitLog{}, Config{})
+	p, _ := s.GetProject(ctx, proj)
+	n, err := r.RetryTransientBlocked(ctx, p, 3)
+	if err != nil {
+		t.Fatalf("RetryTransientBlocked: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("expected 2 re-queued (T-noout, T-empty), got %d", n)
+	}
+	if g, _ := s.GetTask(ctx, "T-noout"); g.Status != "ready" || g.RetryCount != 1 || g.LastError != "" {
+		t.Fatalf("T-noout: want ready/retry=1/err='', got %q/%d/%q", g.Status, g.RetryCount, g.LastError)
+	}
+	if g, _ := s.GetTask(ctx, "T-empty"); g.Status != "ready" || g.RetryCount != 2 {
+		t.Fatalf("T-empty: want ready/retry=2, got %q/%d", g.Status, g.RetryCount)
+	}
+	if g, _ := s.GetTask(ctx, "T-gate"); g.Status != "blocked" || g.RetryCount != 0 {
+		t.Fatalf("T-gate (real failure) must stay blocked untouched, got %q/%d", g.Status, g.RetryCount)
+	}
+	if g, _ := s.GetTask(ctx, "T-cap"); g.Status != "blocked" {
+		t.Fatalf("T-cap at retry cap must stay blocked (loop-breaker), got %q", g.Status)
+	}
+	if g, _ := s.GetTask(ctx, "T-run"); g.Status != "running" {
+		t.Fatalf("T-run (not blocked) must be untouched, got %q", g.Status)
+	}
+
+	// max<=0 disables auto-retry entirely (no-op).
+	s2 := newStore(t)
+	seedTask(t, s2, statestore.Task{ID: "T-x", ProjectID: proj, Status: "blocked", LastError: "", RetryCount: 0})
+	r2 := New(s2, fakeGitLog{}, Config{})
+	p2, _ := s2.GetProject(ctx, proj)
+	if n, err := r2.RetryTransientBlocked(ctx, p2, 0); err != nil || n != 0 {
+		t.Fatalf("max=0 must disable auto-retry (n=0), got n=%d err=%v", n, err)
+	}
+	if g, _ := s2.GetTask(ctx, "T-x"); g.Status != "blocked" {
+		t.Fatalf("max=0: task must stay blocked, got %q", g.Status)
+	}
+}
+
 func TestReconciler_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)

@@ -109,6 +109,12 @@ const (
 	// its lease reapable. Several heartbeat intervals so a single missed beat does
 	// not free a live host's repo; override via -host-stale / CONDUCTOR_HOST_STALE.
 	defaultHostStale = 2 * time.Minute
+	// defaultTransientRetryMax is how many times -reconcile auto-re-queues a task that
+	// blocked for a TRANSIENT / no-output reason (claude produced no diff/verdict, or
+	// an infra abort) before leaving it blocked for a human (ADR-0004 §max-retries).
+	// Small so a genuinely unbuildable task cannot cycle: after this many auto-retries
+	// it stays blocked. Override via -transient-retry-max / CONDUCTOR_TRANSIENT_RETRY_MAX.
+	defaultTransientRetryMax = 3
 )
 
 func main() {
@@ -190,6 +196,10 @@ type config struct {
 	// hostStale is the host-heartbeat age past which -reconcile's host-heartbeat
 	// OwnerLive treats the owning host as dead and its lease reapable (ADR-0024, 2B-3).
 	hostStale time.Duration
+	// transientRetryMax is the cap on how many times -reconcile auto-re-queues a task
+	// that blocked for a TRANSIENT / no-output reason (a claude hiccup) before leaving
+	// it blocked for a human (ADR-0004 §max-retries). 0 disables the auto-retry.
+	transientRetryMax int
 	// httpAddr is the listen address for the OPTIONAL health/observability HTTP
 	// server (k8s-style probes: /healthz /readyz /status). Empty (the DEFAULT)
 	// DISABLES the server entirely, so the daemon's behavior is unchanged unless an
@@ -430,10 +440,31 @@ func reconcileRun(ctx context.Context, store statestore.StateStore, git reconcil
 		}
 	}
 
+	// Transient-block auto-retry (ADR-0004 §max-retries): re-queue tasks that blocked
+	// for a no-output / infra-abort reason (a claude hiccup) so the fleet self-heals
+	// instead of stalling until a human hits /retry. Bounded by cfg.transientRetryMax
+	// so a genuinely unbuildable task stays blocked after N tries. A per-project error
+	// is fatal to the pass (fail-loud), mirroring ReconcileTasks.
+	requeued := 0
+	for _, p := range projects {
+		n, err := rec.RetryTransientBlocked(ctx, p, cfg.transientRetryMax)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			logger.Info("reconcile: re-queued transient-blocked task(s) (ADR-0004 auto-retry)",
+				slog.String("project", p.ID),
+				slog.Int("requeued", n),
+				slog.Int("retry_cap", cfg.transientRetryMax))
+		}
+		requeued += n
+	}
+
 	logger.Info("reconcile pass complete (ADR-0016 independent recovery job)",
 		slog.Int("leases_reaped", reaped),
 		slog.Int("leases_remaining", len(after)),
 		slog.Int("projects_reconciled", len(projects)),
+		slog.Int("transient_requeued", requeued),
 		slog.Duration("lease_ttl", cfg.leaseTTL),
 		slog.Duration("host_stale", cfg.hostStale))
 	return nil
@@ -480,6 +511,8 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 		"independent -reconcile: lease age past which the TTL backstop reaps a stale lease (ADR-0016)")
 	hostStale := fs.Duration("host-stale", envDurationOr("CONDUCTOR_HOST_STALE", defaultHostStale),
 		"independent -reconcile: host-heartbeat age past which the owning host is treated DEAD and its lease reapable (ADR-0024, 2B-3)")
+	transientRetryMax := fs.Int("transient-retry-max", envIntOr("CONDUCTOR_TRANSIENT_RETRY_MAX", defaultTransientRetryMax),
+		"independent -reconcile: max auto-re-queues of a task blocked for a TRANSIENT/no-output reason (claude hiccup) before it stays blocked for a human (ADR-0004); 0 disables")
 	httpAddr := fs.String("http-addr", envOr("CONDUCTOR_HTTP_ADDR", ""),
 		"listen address for the OPTIONAL health HTTP server (/healthz /readyz /status), e.g. :8080; empty = disabled")
 	governance := fs.Bool("governance", envBoolOr("CONDUCTOR_GOVERNANCE", true),
@@ -558,13 +591,14 @@ func parseConfig(argv []string, stderr io.Writer) (config, error) {
 			}
 		}
 		return config{
-			reconcile:  true,
-			dsn:        *dsn,
-			hostID:     host,
-			baseBranch: *baseBranch,
-			rootDir:    *rootDir,
-			leaseTTL:   *leaseTTL,
-			hostStale:  *hostStale,
+			reconcile:         true,
+			dsn:               *dsn,
+			hostID:            host,
+			baseBranch:        *baseBranch,
+			rootDir:           *rootDir,
+			leaseTTL:          *leaseTTL,
+			hostStale:         *hostStale,
+			transientRetryMax: *transientRetryMax,
 		}, nil
 	}
 

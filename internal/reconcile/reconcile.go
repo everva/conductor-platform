@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/everva/conductor-platform/internal/statestore"
@@ -26,6 +27,49 @@ import (
 // matches the registry's canonical value (ADR-0004) without importing the
 // registry package, keeping the backstop decoupled (ADR-0016).
 const statusDone = "done"
+
+// statusBlocked and statusReady are the canonical registry values (ADR-0004) the
+// transient-block auto-retry transitions between (blocked→ready). Inlined here —
+// like statusDone — to keep the backstop decoupled from the registry package.
+const (
+	statusBlocked = "blocked"
+	statusReady   = "ready"
+)
+
+// transientBlockSignatures are the (lower-cased) LastError substrings that mark a
+// block as TRANSIENT: the developer produced no usable diff/verdict (a claude
+// hiccup) or the run was aborted by infra, NOT a real gate/review failure. Only
+// these are auto-retried by RetryTransientBlocked; a descriptive gate failure
+// (e.g. "i18n parity failed…") is deliberately left blocked for a human. Keep this
+// list conservative — matching too broadly would re-run expensive develops on real
+// failures that genuinely need attention.
+var transientBlockSignatures = []string{
+	"no result-keyed json",
+	"malformed verdict",
+	"made no change",
+	"no change was made",
+	"developer made no change",
+	"signal: terminated",
+	"terminated signal",
+	"context deadline exceeded",
+}
+
+// isTransientBlock reports whether a blocked task's LastError marks a no-output /
+// infra-abort block that is safe to auto-retry. An EMPTY LastError counts as
+// transient: a real gate/review failure always carries a reason, so a blocked task
+// with no reason is a no-output hiccup.
+func isTransientBlock(lastError string) bool {
+	le := strings.ToLower(strings.TrimSpace(lastError))
+	if le == "" {
+		return true
+	}
+	for _, sig := range transientBlockSignatures {
+		if strings.Contains(le, sig) {
+			return true
+		}
+	}
+	return false
+}
 
 // Commit is one base-branch commit as seen by the git reader. Trailers are the
 // parsed git trailer lines (e.g. "[task:B-3]"); the reconciler matches them
@@ -156,6 +200,51 @@ func (r *Reconciler) ReconcileTasks(ctx context.Context, project statestore.Proj
 		}
 	}
 	return nil
+}
+
+// RetryTransientBlocked is the third reconcile operation (after ReapLeases and
+// ReconcileTasks): it re-queues tasks that blocked for a TRANSIENT / no-output
+// reason so the fleet self-heals a claude hiccup instead of stalling until a human
+// hits /retry (ADR-0004 §max-retries, operationalized for the gateway-mediated
+// path where handleAgentResult persists blocked but never auto-retries). For each
+// task of the project that is `blocked` with a transient LastError
+// (isTransientBlock) AND whose RetryCount is below max, it transitions
+// blocked→ready and increments RetryCount. The cap is the loop-breaker: once
+// RetryCount reaches max the task stays blocked for a human, so a genuinely
+// unbuildable task cannot cycle forever. It is deterministic and idempotent — a
+// task at the cap, or blocked for a real gate/review reason, is left untouched —
+// and returns the number of tasks re-queued. A max <= 0 disables auto-retry.
+func (r *Reconciler) RetryTransientBlocked(ctx context.Context, project statestore.Project, max int) (int, error) {
+	if project.ID == "" {
+		return 0, fmt.Errorf("reconcile: %w", errors.New("project ID is required"))
+	}
+	if max <= 0 {
+		return 0, nil // auto-retry disabled
+	}
+	tasks, err := r.store.ListTasks(ctx, project.ID)
+	if err != nil {
+		return 0, fmt.Errorf("reconcile: list tasks for %q: %w", project.ID, err)
+	}
+	retried := 0
+	for _, t := range tasks {
+		if t.Status != statusBlocked {
+			continue
+		}
+		if t.RetryCount >= max {
+			continue // cap reached — leave blocked for a human (loop-breaker)
+		}
+		if !isTransientBlock(t.LastError) {
+			continue // real gate/review failure — not auto-retryable
+		}
+		t.Status = statusReady
+		t.RetryCount++
+		t.LastError = "" // clear so the board shows it retrying clean (mirrors handleRetry)
+		if err := r.store.UpdateTask(ctx, t); err != nil {
+			return retried, fmt.Errorf("reconcile: re-queue transient-blocked task %q: %w", t.ID, err)
+		}
+		retried++
+	}
+	return retried, nil
 }
 
 // HostHeartbeatOwnerLive builds an OwnerLive predicate for Config.OwnerLive that
