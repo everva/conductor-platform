@@ -1,0 +1,2 @@
+20 */3 * * * /home/davinci/conductor-agent/lib/auditor-cron.sh >> /home/davinci/conductor-agent/auditor-cron.log 2>&1
+40 */6 * * * /home/davinci/conductor-agent/lib/e2e-cron.sh >> /home/davinci/conductor-agent/e2e-cron.log 2>&1
