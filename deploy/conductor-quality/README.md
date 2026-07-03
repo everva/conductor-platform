@@ -31,6 +31,7 @@ format: reinstall the agent, then `git pull && ./install.sh` restores the qualit
 | **i18n merge-driver** (kills merge-hotspot) | `lib/json-merge-driver.py` + git config | `messages/*.json` additive deep-merge (repos' `.gitattributes` reference it) |
 | **Semantic auditor loop** | `lib/auditor*.{sh,py,txt}` + `auditor-cron.sh` | cap `quality-audit`/`web`; every 3h → fix-tasks |
 | **E2E + visual runner** | `lib/e2e-*.{sh,py}` + `e2e-cron.sh` | cap `e2e`; every 6h → screenshots + fix-tasks |
+| **i18n-debt drain** | `lib/i18n-debt-sweep.sh` + `i18n-debt-cron.sh` | cap `quality-audit`/`web`; every 4h → capped `A-FIX-i18n-*` remediation tasks for pre-gate hardcoded-string debt |
 
 ## Capability model
 

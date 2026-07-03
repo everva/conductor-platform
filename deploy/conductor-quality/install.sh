@@ -53,12 +53,13 @@ done
 echo "install: gate-verify wired into $wired recipe(s)"
 
 # ── 4. crons — CAPABILITY-GATED ──────────────────────────────────────────────
-CT="$(mktemp)"; crontab -l 2>/dev/null | grep -vE "auditor-cron.sh|e2e-cron.sh" > "$CT" || true
+CT="$(mktemp)"; crontab -l 2>/dev/null | grep -vE "auditor-cron.sh|e2e-cron.sh|i18n-debt-cron.sh" > "$CT" || true
 if has quality-audit || has web; then
   echo "20 */3 * * * $LIB/auditor-cron.sh >> $AGENT_HOME/auditor-cron.log 2>&1" >> "$CT"
-  echo "install: [cap] auditor cron ENABLED (every 3h)"
+  echo "50 */4 * * * $LIB/i18n-debt-cron.sh >> $AGENT_HOME/i18n-debt.log 2>&1" >> "$CT"
+  echo "install: [cap] auditor cron (3h) + i18n-debt drain (4h) ENABLED"
 else
-  echo "install: auditor cron skipped (needs 'quality-audit' or 'web')"
+  echo "install: auditor + i18n-debt crons skipped (needs 'quality-audit' or 'web')"
 fi
 if has e2e; then
   echo "40 */6 * * * $LIB/e2e-cron.sh >> $AGENT_HOME/e2e-cron.log 2>&1" >> "$CT"
