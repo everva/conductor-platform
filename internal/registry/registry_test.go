@@ -103,6 +103,33 @@ func TestRegistry_PickReady_LowestOrderWins(t *testing.T) {
 	}
 }
 
+func TestRegistry_PickReady_RemediationFirst(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	// Feature tasks (lower raw ID) alongside remediation fix-tasks: the fix-tasks must be
+	// picked FIRST despite sorting after the feature IDs alphabetically ('4' < 'A').
+	seedTasks(t, s,
+		statestore.Task{ID: "A-40-promotions", Status: "todo"},
+		statestore.Task{ID: "A-41-more", Status: "ready"},
+		statestore.Task{ID: "A-FIX-05-order-print-tax", Status: "todo"},
+		statestore.Task{ID: "A-AUDIT-inventory", Status: "ready"},
+		statestore.Task{ID: "A-E2E-locations", Status: "todo"},
+	)
+	r := NewRegistry(s)
+
+	got, err := r.PickReady(ctx, testProject)
+	if err != nil {
+		t.Fatalf("PickReady: %v", err)
+	}
+	// Among the three remediation tasks, lowest ID wins: A-AUDIT-* < A-E2E-* < A-FIX-*.
+	if got.ID != "A-AUDIT-inventory" {
+		t.Fatalf("expected a remediation task first (A-AUDIT-inventory), got %q", got.ID)
+	}
+	if remediationRank("A-FIX-05") != 0 || remediationRank("A-40-x") != 1 {
+		t.Fatalf("remediationRank convention broken")
+	}
+}
+
 func TestRegistry_PickReady_NoneReady_ReturnsErrNotFound(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)

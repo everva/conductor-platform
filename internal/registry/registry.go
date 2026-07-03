@@ -168,8 +168,31 @@ func (r *Registry) PickReady(ctx context.Context, projectID string) (statestore.
 		return statestore.Task{}, fmt.Errorf("pick ready for project %q: %w", projectID, statestore.ErrNotFound)
 	}
 
-	slices.SortFunc(pickable, func(a, b statestore.Task) int { return cmpString(a.ID, b.ID) })
+	// REMEDIATION-FIRST ordering: fix-tasks (fabrication/audit/E2E-failure remediation of
+	// ALREADY-SHIPPED screens) outrank new feature work — a known defect in production is
+	// worth more than the next new screen. Within each rank, lowest ID wins (stable,
+	// deterministic, deps already gated above). Feature tasks keep their exact prior order.
+	slices.SortFunc(pickable, func(a, b statestore.Task) int {
+		if ra, rb := remediationRank(a.ID), remediationRank(b.ID); ra != rb {
+			return ra - rb
+		}
+		return cmpString(a.ID, b.ID)
+	})
 	return pickable[0], nil
+}
+
+// remediationRank returns 0 for a remediation/fix task (so it is picked before feature
+// work) and 1 otherwise. Remediation tasks are filed by the quality loops with a stable
+// ID prefix: A-FIX-* (director/honesty fixes), A-AUDIT-* (semantic auditor findings),
+// A-E2E-* (failing real-backend E2E). The convention keeps this a pure, allocation-free
+// string check with no schema change.
+func remediationRank(id string) int {
+	for _, p := range []string{"A-FIX-", "A-AUDIT-", "A-E2E-"} {
+		if strings.HasPrefix(id, p) {
+			return 0
+		}
+	}
+	return 1
 }
 
 // AcquireLease takes the repo-scoped lease for the task via the store, enforcing
