@@ -126,6 +126,48 @@ func TestIntake_DepOnExistingTask_Resolves(t *testing.T) {
 	}
 }
 
+func TestIntake_CrossProjectDep_Resolves(t *testing.T) {
+	ctx := context.Background()
+	// Frontend project + a SEPARATE backend project holding the dep task.
+	store := newStoreWithProject(t, "proj-fe")
+	if err := store.CreateProject(ctx, statestore.Project{ID: "proj-be", Repo: "owner/proj-be", BaseBranch: "develop"}); err != nil {
+		t.Fatalf("seed backend project: %v", err)
+	}
+	if err := store.CreateTask(ctx, statestore.Task{ID: "B-endpoint-1", ProjectID: "proj-be", Status: StatusTodo}); err != nil {
+		t.Fatalf("seed backend task: %v", err)
+	}
+
+	// A frontend F-wire scenario depending on the backend task (cross-project).
+	s := validScenario()
+	s.ID = "A-9-fwire"
+	s.Deps = []string{"B-endpoint-1"}
+	res, err := Intake(ctx, store, "proj-fe", []Scenario{s})
+	if err != nil {
+		t.Fatalf("cross-project dep must be admitted (backend task exists globally): %v", err)
+	}
+	if len(res.Created) != 1 || res.Created[0] != "A-9-fwire" {
+		t.Fatalf("unexpected created: %+v", res.Created)
+	}
+	got, err := store.GetTask(ctx, "A-9-fwire")
+	if err != nil {
+		t.Fatalf("get created task: %v", err)
+	}
+	if len(got.Deps) != 1 || got.Deps[0] != "B-endpoint-1" {
+		t.Fatalf("cross-project dep not persisted: %+v", got.Deps)
+	}
+
+	// A dep that exists in NO project is still a dangling typo → rejected, no write.
+	bad := validScenario()
+	bad.ID = "A-10-bad"
+	bad.Deps = []string{"B-does-not-exist"}
+	if _, err := Intake(ctx, store, "proj-fe", []Scenario{bad}); err == nil {
+		t.Fatal("a globally-nonexistent dep must still be rejected as dangling")
+	}
+	if _, gerr := store.GetTask(ctx, "A-10-bad"); gerr == nil {
+		t.Fatal("task must not be written on dangling-dep refusal")
+	}
+}
+
 func TestIntake_UnknownProject_Errors(t *testing.T) {
 	ctx := context.Background()
 	store := statestore.NewMemoryStore() // no project registered.

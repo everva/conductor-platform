@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/everva/conductor-platform/internal/statestore"
 	"gopkg.in/yaml.v3"
@@ -103,6 +104,16 @@ func Intake(ctx context.Context, store statestore.StateStore, projectID string, 
 	if err != nil {
 		return IntakeResult{}, err
 	}
+	// Cross-project deps (Phase A — FE↔BE coordination): a scenario may depend on a task in
+	// ANOTHER project (e.g. a frontend "F-wire" task gating on a backend endpoint task). Admit
+	// any dep that is neither intra-project nor intra-batch but DOES exist globally — task IDs
+	// are globally unique and runtime depsDone resolves a cross-project dep's done-state via a
+	// global GetTask. A dep that exists nowhere is left out so ValidateSet still rejects it as a
+	// dangling typo. Scheduling is unchanged: an unmet cross-project dep is skipped by PickReady
+	// (task stays todo, lease free — no head-of-line blocking).
+	if err := admitCrossProjectDeps(ctx, store, scenarios, known); err != nil {
+		return IntakeResult{}, err
+	}
 	if err := ValidateSet(scenarios, known); err != nil {
 		return IntakeResult{}, fmt.Errorf("intake: %w", err)
 	}
@@ -153,6 +164,49 @@ func existingTaskIDs(ctx context.Context, store statestore.StateStore, projectID
 		set[t.ID] = struct{}{}
 	}
 	return set, nil
+}
+
+// admitCrossProjectDeps lets a scenario depend on a task in ANOTHER project (Phase A
+// cross-repo sequencing). For each dep that is neither in `known` (this project's tasks)
+// nor in this batch, it consults the GLOBAL store: if a task with that ID exists in ANY
+// project it is added to `known` (admitted), because task IDs are globally unique and the
+// runtime depsDone resolves a cross-project dep's done-state via a global GetTask. A dep
+// that exists nowhere is left out, so ValidateSet still rejects it as a dangling typo. This
+// is the ONLY intake seam cross-project dependency needs; lease/scheduling/reconcile are
+// untouched. It mutates `known` in place; a store error other than ErrNotFound is fatal.
+func admitCrossProjectDeps(ctx context.Context, store statestore.StateStore, scenarios []Scenario, known map[string]struct{}) error {
+	batch := make(map[string]struct{}, len(scenarios))
+	for _, s := range scenarios {
+		batch[s.ID] = struct{}{}
+	}
+	checked := make(map[string]struct{})
+	for _, s := range scenarios {
+		for _, dep := range s.Deps {
+			dep = strings.TrimSpace(dep)
+			if dep == "" {
+				continue
+			}
+			if _, ok := known[dep]; ok {
+				continue
+			}
+			if _, ok := batch[dep]; ok {
+				continue
+			}
+			if _, ok := checked[dep]; ok {
+				continue
+			}
+			checked[dep] = struct{}{}
+			switch _, err := store.GetTask(ctx, dep); {
+			case err == nil:
+				known[dep] = struct{}{} // exists in another project → valid cross-project dep
+			case errors.Is(err, statestore.ErrNotFound):
+				// leave out of known → ValidateSet rejects as dangling (real typo caught)
+			default:
+				return fmt.Errorf("intake: resolve cross-project dep %q: %w", dep, err)
+			}
+		}
+	}
+	return nil
 }
 
 // scenarioExists reports whether a scenario with id is already persisted,
