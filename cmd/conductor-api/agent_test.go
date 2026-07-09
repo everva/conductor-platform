@@ -91,6 +91,35 @@ func TestAgentLease_NoWork204_StillRegisters(t *testing.T) {
 	}
 }
 
+func TestAgentLease_PausedProject_204_NoLease(t *testing.T) {
+	s, store := agentServer(t)
+	ctx := context.Background()
+	// A PAUSED project WITH a ready task: the agent must get 204 (no work) and acquire NO
+	// lease — /pause must actually stop the fleet on the host-agent path, not just the daemon.
+	if err := store.CreateProject(ctx, statestore.Project{ID: "p", Repo: "o/p", BaseBranch: "develop", Paused: true}); err != nil {
+		t.Fatalf("seed paused project: %v", err)
+	}
+	seedTodoTask(t, store, "p", "T-1", nil)
+
+	rec := doBody(t, s, http.MethodPost, "/projects/p/agent/lease", bearer(),
+		`{"host_id":"davinci","capabilities":["backend"]}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("paused project must lease nothing (204); got %d body=%s", rec.Code, rec.Body.String())
+	}
+	// No lease despite a ready task.
+	if _, err := store.GetLease(ctx, "p"); err == nil {
+		t.Fatal("paused project must NOT hold a lease")
+	}
+	// The task is left untouched (still todo, not flipped to running).
+	if got, _ := store.GetTask(ctx, "T-1"); got.Status != "todo" {
+		t.Fatalf("paused project task must stay todo, got %q", got.Status)
+	}
+	// Host liveness is still registered while paused (so it is not reaped as dead).
+	if _, err := store.GetHost(ctx, "davinci"); err != nil {
+		t.Fatalf("host should still register while paused: %v", err)
+	}
+}
+
 func TestAgentLease_CapabilityRouting(t *testing.T) {
 	s, store := agentServer(t)
 	seedProject(t, store, "p")

@@ -104,7 +104,8 @@ func (s *apiServer) handleAgentLease(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if _, err := s.store.GetProject(ctx, id); err != nil {
+	proj, err := s.store.GetProject(ctx, id)
+	if err != nil {
 		if errors.Is(err, statestore.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "project not found")
 			return
@@ -121,6 +122,18 @@ func (s *apiServer) handleAgentLease(w http.ResponseWriter, r *http.Request) {
 		LastHeartbeat: s.now(),
 	}); err != nil {
 		s.serverError(w, "agent lease: register host", err)
+		return
+	}
+
+	// Honor Project.Paused on the host-agent lease path (ADR-0003): a paused project leases
+	// NO task — the agent gets 204 "no work" and idles until /resume, WITHOUT a manual drain.
+	// Placed AFTER host registration so the host's liveness heartbeat still updates while
+	// paused (it is not reaped as dead). Without this the pause was cosmetic on the gateway-
+	// mediated path — the agent kept leasing and a "paused" project kept building (observed:
+	// a project built for days through a pause because only the in-process daemon Tick, which
+	// this deployment does not run, honored the flag).
+	if proj.Paused {
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
