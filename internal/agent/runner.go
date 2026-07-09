@@ -14,11 +14,13 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/everva/conductor-platform/internal/agentclient"
+	"github.com/everva/conductor-platform/internal/engine"
 	"github.com/everva/conductor-platform/internal/events"
 )
 
@@ -131,17 +133,21 @@ type Config struct {
 	PollInterval time.Duration
 	// ProgressInterval is how often the develop/verify "Now" pulse is emitted. Defaults to 20s.
 	ProgressInterval time.Duration
+	// RateLimitBackoff is how long the loop sleeps after the performer hits its rolling
+	// usage limit (ErrRateLimited) before attempting the next lease. Defaults to 10m.
+	RateLimitBackoff time.Duration
 	Logger           *slog.Logger
 }
 
 // Runner is the host-agent's one-task orchestrator.
 type Runner struct {
-	gw       Gateway
-	ex       Executor
-	cfg      Config
-	log      *slog.Logger
-	poll     time.Duration
-	progress time.Duration
+	gw          Gateway
+	ex          Executor
+	cfg         Config
+	log         *slog.Logger
+	poll        time.Duration
+	progress    time.Duration
+	rateBackoff time.Duration
 }
 
 // Outcome classifies what RunOnce did, for the loop + logging.
@@ -153,6 +159,10 @@ const (
 	OutcomeHeld    Outcome = "held" // returned only when the held poll is interrupted (ctx done)
 	OutcomeBlocked Outcome = "blocked"
 	OutcomeAborted Outcome = "aborted"
+	// OutcomeRateLimited: the performer's account hit its rolling usage limit. The task was
+	// released WITHOUT a verdict (reverts running→ready, gateway M1) so it is re-picked after
+	// the window resets; the Loop backs off (RateLimitBackoff) before the next lease.
+	OutcomeRateLimited Outcome = "rate-limited"
 )
 
 // New returns a Runner over the gateway + executor.
@@ -169,7 +179,11 @@ func New(gw Gateway, ex Executor, cfg Config) *Runner {
 	if prog <= 0 {
 		prog = progressInterval
 	}
-	return &Runner{gw: gw, ex: ex, cfg: cfg, log: log, poll: poll, progress: prog}
+	rateBackoff := cfg.RateLimitBackoff
+	if rateBackoff <= 0 {
+		rateBackoff = 10 * time.Minute
+	}
+	return &Runner{gw: gw, ex: ex, cfg: cfg, log: log, poll: poll, progress: prog, rateBackoff: rateBackoff}
 }
 
 // RunOnce leases at most one task and drives it to a terminal outcome (merged,
@@ -198,6 +212,16 @@ func (r *Runner) RunOnce(ctx context.Context) (Outcome, error) {
 
 	out, err := r.runWithProgress(ctx, task, scenario)
 	if err != nil {
+		if errors.Is(err, engine.ErrRateLimited) {
+			// The performer's Claude account hit its rolling usage limit — a wall only TIME clears.
+			// Return WITHOUT reporting a verdict: the deferred lease-release then reverts the task
+			// running→ready (gateway M1), so it is re-picked after the window resets WITHOUT churning
+			// it into blocked or burning the transient-retry budget. The Loop backs off before the
+			// next lease. Best-effort observability so the board/journal shows why the agent idled.
+			r.log.Warn("agent: performer rate-limited; releasing lease (task→ready), backing off", "task", task.ID, "err", err)
+			r.report(ctx, task.ID, "develop", "rate-limited", map[string]any{"task": task.ID, "error": err.Error()})
+			return OutcomeRateLimited, nil
+		}
 		// An infra failure (provision/develop/verify error) is reported as blocked —
 		// never fake-green — so the task is re-runnable, not silently lost.
 		r.log.Warn("agent: run failed; reporting blocked", "task", task.ID, "err", err)
@@ -361,13 +385,24 @@ func (r *Runner) Loop(ctx context.Context, idle time.Duration) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// Only idle-sleep when there was nothing to do; otherwise loop straight to the
-		// next lease (there may be more ready work).
-		if outcome == OutcomeNoWork {
+		// Sleep only when there is a reason to; otherwise loop straight to the next lease
+		// (there may be more ready work). No-work idles briefly; a rate-limit backs off longer
+		// so we don't churn provision+lease cycles against a wall only time clears (the task
+		// already reverted to ready and is re-picked once the window resets; heartbeat continues
+		// on its own goroutine).
+		var pause time.Duration
+		switch outcome {
+		case OutcomeNoWork:
+			pause = idle
+		case OutcomeRateLimited:
+			r.log.Warn("agent: rate-limited; backing off before next lease", "backoff", r.rateBackoff.String())
+			pause = r.rateBackoff
+		}
+		if pause > 0 {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(idle):
+			case <-time.After(pause):
 			}
 		}
 	}

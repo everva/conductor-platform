@@ -3,11 +3,13 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/everva/conductor-platform/internal/agentclient"
+	"github.com/everva/conductor-platform/internal/engine"
 	"github.com/everva/conductor-platform/internal/events"
 )
 
@@ -238,6 +240,34 @@ func TestRunOnce_RunError_ReportsBlocked(t *testing.T) {
 	}
 	if !gw.released {
 		t.Fatalf("run error must still release the lease")
+	}
+}
+
+// TestRunOnce_RateLimited_ReleasesWithoutBlocking: when the performer hits its rolling usage
+// limit (ErrRateLimited), the runner must NOT report a verdict — so the gateway reverts the task
+// running→ready and it is re-picked after the window resets — must release the lease + clean the
+// worktree, and must return OutcomeRateLimited so the loop backs off. NO resultDecision is set on
+// the fake, so any stray Result() call would surface as an unknown-decision error and fail here.
+func TestRunOnce_RateLimited_ReleasesWithoutBlocking(t *testing.T) {
+	gw := &fakeGateway{leaseTask: leased()}
+	ex := &fakeExecutor{runErr: fmt.Errorf("develop: %w: usage limit reached", engine.ErrRateLimited)}
+	out, err := newRunner(gw, ex).RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if out != OutcomeRateLimited {
+		t.Fatalf("out=%q, want %q", out, OutcomeRateLimited)
+	}
+	// A rate limit must NOT report a verdict: a blocked report would churn the task + burn its
+	// transient-retry budget. An empty resultReport.Result proves Result() was never called.
+	if gw.resultReport.Result != "" {
+		t.Fatalf("rate-limit reported verdict %q; must report NONE so the task reverts to ready", gw.resultReport.Result)
+	}
+	if !gw.released {
+		t.Fatalf("rate-limit must still release the lease (task reverts running→ready)")
+	}
+	if !ex.cleaned {
+		t.Fatalf("rate-limit must still clean the worktree")
 	}
 }
 

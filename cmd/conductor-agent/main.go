@@ -50,6 +50,7 @@ type config struct {
 	timeout         time.Duration
 	interval        time.Duration
 	poll            time.Duration
+	rateBackoff     time.Duration
 	noPush          bool
 	pushRemote      string
 	review          bool
@@ -71,6 +72,7 @@ func run() error {
 		timeout         = flag.Duration("timeout", 30*time.Minute, "per-develop subprocess timeout")
 		interval        = flag.Duration("interval", 10*time.Second, "idle poll interval when there is no work")
 		poll            = flag.Duration("poll", 15*time.Second, "held-task approval poll interval")
+		rateBackoff     = flag.Duration("rate-limit-backoff", 10*time.Minute, "how long to back off after the performer hits its rolling Claude usage limit (the 5-hour window) before the next lease; the task reverts to ready and is re-picked when the window resets")
 		noPush          = flag.Bool("no-push", false, "do NOT push the merged base to the remote (local-only)")
 		pushRemote      = flag.String("push-remote", "origin", "git remote to push the merged base to")
 		review          = flag.Bool("review", envBool("CONDUCTOR_REVIEW", true), "run the STRICT third-eye LLM review that GATES the auto-merge after the deterministic gate passes (env CONDUCTOR_REVIEW)")
@@ -83,7 +85,7 @@ func run() error {
 		hostID: strings.TrimSpace(*hostID), capabilities: splitCSV(*caps),
 		root: *root, repo: strings.TrimSpace(*repo), base: strings.TrimSpace(*base),
 		recipeDir: *recipeDir, developCmd: splitFields(*developCmd), holdoutCmd: splitFields(*holdoutCmd),
-		timeout: *timeout, interval: *interval, poll: *poll, noPush: *noPush, pushRemote: *pushRemote,
+		timeout: *timeout, interval: *interval, poll: *poll, rateBackoff: *rateBackoff, noPush: *noPush, pushRemote: *pushRemote,
 		review: *review, skipGatewayCred: *skipGatewayCred,
 	}
 	if cfg.gateway == "" || cfg.project == "" || cfg.repo == "" || cfg.base == "" {
@@ -139,7 +141,7 @@ func run() error {
 
 	runner := agent.New(client, exec, agent.Config{
 		ProjectID: cfg.project, HostID: cfg.hostID, Capabilities: cfg.capabilities,
-		PollInterval: cfg.poll, Logger: logger,
+		PollInterval: cfg.poll, RateLimitBackoff: cfg.rateBackoff, Logger: logger,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

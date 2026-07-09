@@ -255,6 +255,8 @@ func (e *CommandEngine) Control(ctx context.Context, cmd Command) error {
 //
 //   - an auth-wall marker anywhere in the output -> ErrAuthExpired (the whole
 //     tick must stop; retrying would just hit the wall again);
+//   - a NON-ZERO exit plus a usage/rate-limit marker -> ErrRateLimited (a wall
+//     only TIME clears; the caller backs off and leaves the task re-pickable);
 //   - a timeout/cancellation or empty output -> ErrNoVerdict;
 //   - any other run error with no usable output -> ErrNoVerdict.
 //
@@ -262,6 +264,16 @@ func (e *CommandEngine) Control(ctx context.Context, cmd Command) error {
 func classifyOutput(stdout []byte, runErr error) error {
 	if marker := detectAuthMarker(stdout); marker != "" {
 		return fmt.Errorf("%w: %s", ErrAuthExpired, marker)
+	}
+	// A performer that EXITED NON-ZERO and printed a usage/rate-limit marker hit its rolling
+	// account limit (a wall only time clears), not a code failure. Surface ErrRateLimited so the
+	// runner backs off and leaves the task re-pickable instead of blocking it. GATED on runErr so a
+	// SUCCESSFUL run that merely NARRATED "usage limit" (e.g. read a doc/source about it) is never
+	// misread as a limit.
+	if runErr != nil {
+		if marker := detectRateLimitMarker(stdout); marker != "" {
+			return fmt.Errorf("%w: %s", ErrRateLimited, marker)
+		}
 	}
 	if runErr != nil {
 		if errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled) {
@@ -293,6 +305,32 @@ var authMarkers = []string{
 func detectAuthMarker(out []byte) string {
 	lower := strings.ToLower(string(out))
 	for _, m := range authMarkers {
+		if strings.Contains(lower, m) {
+			return m
+		}
+	}
+	return ""
+}
+
+// rateLimitMarkers are the usage/rate-limit signatures that mean the performer's
+// Claude account hit its rolling window (the 5-hour limit) rather than a code
+// failure. Matched case-insensitively, and ONLY consulted when the run also errored
+// (see classifyOutput) so a successful run that merely narrates the phrase is not
+// misread as a limit. Kept Claude-specific (no bare "429"/"rate limit"/"too many
+// requests") so unrelated build/source output can't false-trigger a backoff.
+var rateLimitMarkers = []string{
+	"usage limit reached",
+	"reached your usage limit",
+	"your limit will reset",
+	"claude usage limit",
+	"5-hour limit",
+	"rate_limit_error",
+}
+
+// detectRateLimitMarker returns the first usage/rate-limit marker found in out, or "".
+func detectRateLimitMarker(out []byte) string {
+	lower := strings.ToLower(string(out))
+	for _, m := range rateLimitMarkers {
 		if strings.Contains(lower, m) {
 			return m
 		}

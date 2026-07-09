@@ -150,6 +150,49 @@ func TestCommandEngine_Develop_AuthMarker_ReturnsErrAuthExpired(t *testing.T) {
 	}
 }
 
+// TestCommandEngine_Develop_RateLimit_ReturnsErrRateLimited: a non-zero exit plus a
+// usage/rate-limit marker means the performer's account hit its rolling window (a wall
+// only time clears) → ErrRateLimited, so the caller backs off instead of blocking the task.
+func TestCommandEngine_Develop_RateLimit_ReturnsErrRateLimited(t *testing.T) {
+	cases := []string{
+		"Claude usage limit reached. Your limit will reset at 3pm.",
+		`{"type":"error","error":{"type":"rate_limit_error","message":"..."}}`,
+		"You've reached your usage limit — upgrade to increase it.",
+		"Approaching your 5-hour limit",
+	}
+	for _, stdout := range cases {
+		t.Run(stdout[:min(len(stdout), 20)], func(t *testing.T) {
+			e := devEngine(fakePerformer(stdout, errors.New("exit status 1")))
+			v, err := e.Develop(context.Background(), sampleTask, sampleWS)
+			if !errors.Is(err, ErrRateLimited) {
+				t.Fatalf("err = %v, want ErrRateLimited", err)
+			}
+			if !isZeroVerdict(v) {
+				t.Fatalf("verdict not zero on rate limit: %+v", v)
+			}
+		})
+	}
+}
+
+// TestClassifyOutput_RateLimitPhraseButSuccess_NotLimited: a SUCCESSFUL run (nil error)
+// that merely NARRATES "usage limit" must NOT be misread as a limit — it parses normally,
+// so good committed work is never discarded by a false backoff.
+func TestClassifyOutput_RateLimitPhraseButSuccess_NotLimited(t *testing.T) {
+	out := []byte(`I reviewed the usage limit reached policy doc. {"result":"pass","summary":"done"}`)
+	if err := classifyOutput(out, nil); err != nil {
+		t.Fatalf("successful run narrating 'usage limit' misclassified: %v", err)
+	}
+}
+
+// TestClassifyOutput_AuthBeatsRateLimit: if both an auth wall and a limit phrase are
+// present, auth wins (the more fundamental human-gate that time alone cannot clear).
+func TestClassifyOutput_AuthBeatsRateLimit(t *testing.T) {
+	err := classifyOutput([]byte("Not logged in. usage limit reached"), errors.New("exit 1"))
+	if !errors.Is(err, ErrAuthExpired) {
+		t.Fatalf("err = %v, want ErrAuthExpired (auth precedence)", err)
+	}
+}
+
 // TestCommandEngine_Develop_LastValidBlockWins exercises the holdout-style cases:
 // multiple result-keyed blocks (the LAST wins), a result-less block before the
 // real one (ignored), and JSON inside a markdown fence.

@@ -34,6 +34,12 @@ var (
 	// ErrAuthExpired means the performer hit an auth wall ("Not logged in" /
 	// token expiry); the whole tick must stop and notify rather than retry.
 	ErrAuthExpired = errors.New("engine: auth expired")
+	// ErrRateLimited means the performer's Claude account hit its rolling usage
+	// limit (the 5-hour window). Unlike a code failure it is cleared only by TIME,
+	// so callers must BACK OFF and leave the task re-pickable rather than block it —
+	// blocking would churn every ready task into blocked AND burn the transient-retry
+	// budget against a wall no retry can clear.
+	ErrRateLimited = errors.New("engine: rate limited")
 )
 
 // Workspace is the isolated checkout a performer operates in: a per-task git
