@@ -63,6 +63,10 @@ type TaskInfo struct {
 	Deps       []string `json:"deps"`
 	Branch     string   `json:"branch"`
 	ScenarioID string   `json:"scenario_id"`
+	// Approved is the director's durable merge authorization for a held task. When it is set
+	// on a leased awaiting-approval task the agent MERGES the preserved branch instead of
+	// developing (runner.RunOnce), so an approval outlives the agent process that polled for it.
+	Approved bool `json:"approved"`
 }
 
 // LeaseInfo is the acquired lease record.

@@ -42,8 +42,9 @@ import (
 // parked in after a green gate (governance N-10): the work is VERIFIED and merge-
 // ready but a human must approve it first. It is intentionally NOT "blocked" so it
 // is unambiguously an awaiting-human state a UI surfaces as "onay bekliyor" rather
-// than a generic failure, AND so registry PickReady (which only picks todo/ready)
-// never re-develops it. The conductor writes it as a raw status string through the
+// than a generic failure, AND so registry PickReady never RE-DEVELOPS it: it is picked
+// only once Approved is set, and then solely to MERGE the preserved branch. The conductor
+// writes it as a raw status string through the
 // store (Status is an opaque string at the store seam, ADR-0010); it is an additive
 // lifecycle value, not a frozen-signature change.
 const StatusAwaitingApproval = "awaiting-approval"

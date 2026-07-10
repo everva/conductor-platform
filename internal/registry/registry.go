@@ -36,6 +36,11 @@ const (
 	// an auditor false-positive). Terminal like done, but distinct so it never reads as "landed";
 	// PickReady never selects it (only todo/ready are pickable).
 	StatusCancelled = "cancelled"
+	// StatusAwaitingApproval parks a task whose gate PASSED but whose merge a human must
+	// approve (governance held-for-review); the verified branch is preserved on the task.
+	// PickReady selects it ONLY once Approved is set — never to re-develop it, but so an
+	// agent can finish the merge (see mergeable-first ordering in PickReady).
+	StatusAwaitingApproval = "awaiting-approval"
 )
 
 // ErrIllegalTransition is returned by Transition when the requested
@@ -152,7 +157,7 @@ func (r *Registry) PickReady(ctx context.Context, projectID string) (statestore.
 
 	pickable := make([]statestore.Task, 0, len(tasks))
 	for _, t := range tasks {
-		if t.Status != StatusTodo && t.Status != StatusReady {
+		if !isPickable(t) {
 			continue
 		}
 		// Capability-routing gate (2B-2): skip a task this host cannot run, leaving
@@ -172,17 +177,47 @@ func (r *Registry) PickReady(ctx context.Context, projectID string) (statestore.
 		return statestore.Task{}, fmt.Errorf("pick ready for project %q: %w", projectID, statestore.ErrNotFound)
 	}
 
-	// REMEDIATION-FIRST ordering: fix-tasks (fabrication/audit/E2E-failure remediation of
-	// ALREADY-SHIPPED screens) outrank new feature work — a known defect in production is
-	// worth more than the next new screen. Within each rank, lowest ID wins (stable,
-	// deterministic, deps already gated above). Feature tasks keep their exact prior order.
+	// MERGEABLE-FIRST, then REMEDIATION-FIRST ordering. An approved held task is FINISHED,
+	// VERIFIED work waiting only for a squash-merge, so it lands before anything new starts.
+	// Then fix-tasks (fabrication/audit/E2E-failure remediation of ALREADY-SHIPPED screens)
+	// outrank new feature work — a known defect in production is worth more than the next new
+	// screen. Within each rank, lowest ID wins (stable, deterministic, deps already gated
+	// above). Feature tasks keep their exact prior order relative to one another.
 	slices.SortFunc(pickable, func(a, b statestore.Task) int {
-		if ra, rb := remediationRank(a.ID), remediationRank(b.ID); ra != rb {
+		if ra, rb := pickRank(a), pickRank(b); ra != rb {
 			return ra - rb
 		}
 		return cmpString(a.ID, b.ID)
 	})
 	return pickable[0], nil
+}
+
+// isPickable reports whether a task may be leased.
+//
+// todo/ready are the ordinary develop candidates. An APPROVED awaiting-approval task with a
+// preserved branch is ALSO pickable — not to re-develop it, but so an agent can perform the
+// squash-merge the director authorized. Without this, approval is only ever observed by the
+// ONE agent process still polling /decision for that task: if that process restarts, hits its
+// usage limit, or crashes before the human approves, the approval flag is set on a task that
+// no PickReady will ever hand out again — verified, gate-passing work stranded forever with
+// no API able to recover it. The flag is durable state; make it actionable by any agent.
+func isPickable(t statestore.Task) bool {
+	switch t.Status {
+	case StatusTodo, StatusReady:
+		return true
+	case StatusAwaitingApproval:
+		return t.Approved && t.Branch != ""
+	default:
+		return false
+	}
+}
+
+// pickRank orders pickable tasks: 0 = approved-and-waiting-to-merge, 1 = remediation, 2 = feature.
+func pickRank(t statestore.Task) int {
+	if t.Status == StatusAwaitingApproval {
+		return 0
+	}
+	return 1 + remediationRank(t.ID)
 }
 
 // remediationRank returns 0 for a remediation/fix task (so it is picked before feature

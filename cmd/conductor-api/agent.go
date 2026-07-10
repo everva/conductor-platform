@@ -168,12 +168,20 @@ func (s *apiServer) handleAgentLease(w http.ResponseWriter, r *http.Request) {
 	// task rather than fabricating a 500 the agent can't act on.
 	// A fresh attempt clears any stale LastError from a prior block, so the board shows the task
 	// running clean rather than "running" next to a now-irrelevant failure reason.
-	if err := s.updateTask(ctx, task.ID, func(t *statestore.Task) { t.Status = registry.StatusRunning; t.LastError = "" }); err != nil {
-		s.serverError(w, "agent lease: mark task running", err)
-		return
+	//
+	// EXCEPTION: an APPROVED awaiting-approval task keeps its status. PickReady hands it back so
+	// a NEW agent process can finish the merge its predecessor was polling for (the approval is a
+	// durable flag, not a message), and the agent decides "merge, don't develop" from exactly that
+	// status. Overwriting it with "running" would erase the only signal distinguishing verified
+	// work awaiting a merge from work that still needs developing.
+	if task.Status != registry.StatusAwaitingApproval {
+		if err := s.updateTask(ctx, task.ID, func(t *statestore.Task) { t.Status = registry.StatusRunning; t.LastError = "" }); err != nil {
+			s.serverError(w, "agent lease: mark task running", err)
+			return
+		}
+		task.Status = registry.StatusRunning
+		task.LastError = ""
 	}
-	task.Status = registry.StatusRunning
-	task.LastError = ""
 
 	writeJSON(w, http.StatusOK, agentLeaseResponse{
 		Task:  toTaskDTO(task),
@@ -227,9 +235,21 @@ func (s *apiServer) handleAgentReleaseLease(w http.ResponseWriter, r *http.Reque
 	// Capture ownership BEFORE releasing: only the lease OWNER should revert the task's
 	// running status. A non-owner release is an idempotent no-op (the lease stays), so it
 	// must NOT touch the status of a task another host is actively running.
-	owned := false
+	//
+	// A MISSING lease ALSO authorizes the revert. The reaper TTL (ADR-0016) is measured on
+	// AcquiredAt — the age of the WORK, not of any liveness signal — so a develop that runs
+	// longer than the TTL (host-agents use -timeout 45m/60m against the 30m default) has its
+	// lease reaped out from under a perfectly healthy agent. When that agent later releases
+	// without a verdict, the ownership check fails, the revert below is skipped, and the task
+	// is stranded "running" forever: no holder, and no API can recover it (/retry takes only
+	// blocked, /abort needs a lease). Observed live as 4 phantom tasks across three projects.
+	// With NO lease present nobody owns the repo, so a still-running task can only belong to
+	// the releasing host — reverting is strictly safer than stranding it.
+	owned, leaseMissing := false, false
 	if l, err := s.store.GetLease(r.Context(), id); err == nil {
 		owned = l.HostID == req.HostID && l.TaskID == req.TaskID
+	} else if errors.Is(err, statestore.ErrNotFound) {
+		leaseMissing = true
 	}
 
 	if err := reg.ReleaseLeaseOwned(r.Context(), id, req.HostID, req.TaskID); err != nil {
@@ -237,13 +257,13 @@ func (s *apiServer) handleAgentReleaseLease(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Revert the task to "ready" ONLY if the owner released it while it was still "running"
-	// (M1): the agent released without a terminal verdict — a crash, merge conflict, or
-	// abandon — so the lease→running flip would otherwise strand it as permanently "running"
-	// with no holder. A task already moved to blocked / awaiting-approval / done by the
-	// result/merge path is left untouched. A missing task (idempotent release after the task
-	// was deleted) is a clean no-op.
-	if owned {
+	// Revert the task to "ready" when the releaser could legitimately have been running it
+	// (M1): it released without a terminal verdict — a crash, merge conflict, or abandon — so
+	// the lease→running flip would otherwise strand it as permanently "running" with no holder.
+	// A task already moved to blocked / awaiting-approval / done by the result/merge path is
+	// left untouched. A missing task (idempotent release after the task was deleted) is a
+	// clean no-op.
+	if owned || leaseMissing {
 		if err := s.updateTask(r.Context(), req.TaskID, func(t *statestore.Task) {
 			if t.Status == registry.StatusRunning {
 				t.Status = registry.StatusReady

@@ -140,6 +140,11 @@ type Config struct {
 	Logger           *slog.Logger
 }
 
+// statusAwaitingApproval is the held-for-review task status as it crosses the gateway HTTP
+// seam (registry.StatusAwaitingApproval). The agent compares the string rather than importing
+// the store-side registry package: it never touches Postgres (ADR-0048).
+const statusAwaitingApproval = "awaiting-approval"
+
 // MaxMergeAttempts caps how many CONSECUTIVE times one task may fail its squash-merge
 // before the agent stops retrying and reports it blocked (with the git error as the
 // board's LastError).
@@ -230,6 +235,19 @@ func (r *Runner) RunOnce(ctx context.Context) (Outcome, error) {
 	}()
 
 	scenario := r.scenarioFor(ctx, task)
+
+	// RESUME AN APPROVED MERGE. The gateway hands back an awaiting-approval task only once the
+	// director approved it (registry.isPickable). Its work is already developed and gate-verified
+	// and its branch is preserved, so merge it — do NOT re-develop, which would cut a fresh branch
+	// from the base and discard the verified commit. This is what makes an approval durable: the
+	// fast path is the agent still polling /decision, but if that process restarted, hit its usage
+	// limit, or crashed, ANY later agent finishes the merge instead of the task being stranded.
+	if task.Status == statusAwaitingApproval && task.Approved && task.Branch != "" {
+		r.log.Info("agent: resuming approved merge for a previously held task", "task", task.ID, "branch", task.Branch)
+		r.report(ctx, task.ID, "review", "approved-merge-resume", map[string]any{"task": task.ID, "branch": task.Branch})
+		return r.merge(ctx, task, scenario, task.Branch, true)
+	}
+
 	r.report(ctx, task.ID, "develop", "started", map[string]any{"task": task.ID})
 
 	out, err := r.runWithProgress(ctx, task, scenario)
