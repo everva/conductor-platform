@@ -130,6 +130,35 @@ func TestRegistry_PickReady_RemediationFirst(t *testing.T) {
 	}
 }
 
+// TestRegistry_PickReady_WireBackIsRemediationPriority proves a backend-gap wire-back task
+// (A-WIRE-/F-WIRE-/V-WIRE-) outranks feature work exactly like the fix loops: closing a KNOWN
+// gap on an already-shipped screen beats starting the next new screen, and stops the wire tasks
+// from sinking below a long feature backlog by ID sort.
+func TestRegistry_PickReady_WireBackIsRemediationPriority(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedTasks(t, s,
+		statestore.Task{ID: "A-05-feature", Status: "todo"}, // low ID feature
+		statestore.Task{ID: "A-WIRE-brand-export", Status: "todo"},
+	)
+	got, err := NewRegistry(s).PickReady(ctx, testProject)
+	if err != nil {
+		t.Fatalf("PickReady: %v", err)
+	}
+	if got.ID != "A-WIRE-brand-export" {
+		t.Fatalf("wire-back must be picked before a lower-ID feature, got %q", got.ID)
+	}
+	for _, id := range []string{"A-WIRE-x", "F-WIRE-x", "V-WIRE-x"} {
+		if remediationRank(id) != 0 {
+			t.Fatalf("%s must rank as remediation (0)", id)
+		}
+	}
+	// A feature that merely CONTAINS "wire" without the -WIRE- token must stay a feature.
+	if remediationRank("A-42-rewire-nav") != 1 {
+		t.Fatalf("a non-wire-back id must stay feature-ranked")
+	}
+}
+
 func TestRegistry_PickReady_NoneReady_ReturnsErrNotFound(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)

@@ -222,10 +222,22 @@ func pickRank(t statestore.Task) int {
 
 // remediationRank returns 0 for a remediation/fix task (so it is picked before feature
 // work) and 1 otherwise. Remediation tasks are filed by the quality loops with a stable
-// ID prefix: A-FIX-* (director/honesty fixes), A-AUDIT-* (semantic auditor findings),
-// A-E2E-* (failing real-backend E2E). The convention keeps this a pure, allocation-free
-// string check with no schema change.
+// ID prefix:
+//   - A-FIX-*   director / honesty fixes
+//   - A-AUDIT-* semantic auditor findings
+//   - A-E2E-*   failing real-backend E2E
+//   - *-WIRE-*  backend-gap wire-back: enable a control that shipped honestly GATED once its
+//     backend endpoint lands. Closing a KNOWN gap on an already-shipped screen is worth
+//     more than the next new screen — the same rationale that ranks the fix loops first —
+//     and it lets the FE↔BE loop converge instead of the wire tasks sinking below a long
+//     feature backlog by ID sort. Matched by "-WIRE-" so A-WIRE-/F-WIRE-/V-WIRE- all
+//     qualify across the admin/landing/vendor panels.
+//
+// The convention keeps this a pure, allocation-free string check with no schema change.
 func remediationRank(id string) int {
+	if strings.Contains(id, "-WIRE-") {
+		return 0
+	}
 	for _, p := range []string{"A-FIX-", "A-AUDIT-", "A-E2E-"} {
 		if strings.HasPrefix(id, p) {
 			return 0
