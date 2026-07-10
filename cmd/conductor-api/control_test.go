@@ -548,6 +548,43 @@ func TestRetryBlockedTask200(t *testing.T) {
 	}
 }
 
+func TestCancelTodoTask200(t *testing.T) {
+	s, store := emptyServer()
+	ctx := context.Background()
+	mustCreate(t, store.CreateProject(ctx, statestore.Project{ID: "proj-x", Repo: "owner/x", BaseBranch: "develop"}))
+	mustCreate(t, store.CreateTask(ctx, statestore.Task{ID: "T-1", ProjectID: "proj-x", Status: "todo"}))
+
+	rec := doBody(t, s, http.MethodPost, "/projects/proj-x/tasks/T-1/cancel", bearer(), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	got, _ := store.GetTask(ctx, "T-1")
+	if got.Status != "cancelled" {
+		t.Fatalf("status = %q, want cancelled", got.Status)
+	}
+	// Idempotent: cancelling again stays 200.
+	if rec := doBody(t, s, http.MethodPost, "/projects/proj-x/tasks/T-1/cancel", bearer(), ""); rec.Code != http.StatusOK {
+		t.Fatalf("idempotent cancel: status = %d, want 200", rec.Code)
+	}
+}
+
+func TestCancelRunning409(t *testing.T) {
+	s, store := emptyServer()
+	ctx := context.Background()
+	mustCreate(t, store.CreateProject(ctx, statestore.Project{ID: "proj-x", Repo: "owner/x", BaseBranch: "develop"}))
+	// A running task must be aborted, not cancelled (never strand a live agent).
+	mustCreate(t, store.CreateTask(ctx, statestore.Task{ID: "T-1", ProjectID: "proj-x", Status: "running"}))
+
+	rec := doBody(t, s, http.MethodPost, "/projects/proj-x/tasks/T-1/cancel", bearer(), "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (running must be aborted); body=%s", rec.Code, rec.Body.String())
+	}
+	got, _ := store.GetTask(ctx, "T-1")
+	if got.Status != "running" {
+		t.Fatalf("running task must be untouched, got %q", got.Status)
+	}
+}
+
 func TestRetryNonBlocked409(t *testing.T) {
 	s, store := emptyServer()
 	ctx := context.Background()

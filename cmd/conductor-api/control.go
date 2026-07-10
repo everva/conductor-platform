@@ -27,6 +27,7 @@ import (
 	"github.com/everva/conductor-platform/internal/conductor"
 	"github.com/everva/conductor-platform/internal/gitsafe"
 	"github.com/everva/conductor-platform/internal/intake"
+	"github.com/everva/conductor-platform/internal/registry"
 	"github.com/everva/conductor-platform/internal/statestore"
 	"gopkg.in/yaml.v3"
 )
@@ -673,6 +674,57 @@ func (s *apiServer) handleRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"project": id, "task": taskID, "status": "ready"})
+}
+
+// handleCancelTask: POST /projects/{id}/tasks/{task}/cancel — terminally cancel a task that was
+// filed by mistake (e.g. an auditor false-positive) so it leaves the queue WITHOUT implying it was
+// done. Only a NON-running task can be cancelled (todo / ready / blocked); a RUNNING task must be
+// aborted (409) so a live agent is never stranded. Sets Status="cancelled" — a terminal status
+// PickReady never selects (it only takes todo/ready). Store-reflection only (updateTask, like
+// retry); idempotent (already cancelled/done → 200). Bearer-authed.
+func (s *apiServer) handleCancelTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	taskID := r.PathValue("task")
+	ctx := r.Context()
+
+	if _, err := s.store.GetProject(ctx, id); err != nil {
+		if errors.Is(err, statestore.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		s.serverError(w, "cancel: get project", err)
+		return
+	}
+	task, err := s.store.GetTask(ctx, taskID)
+	if err != nil {
+		if errors.Is(err, statestore.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		s.serverError(w, "cancel: get task", err)
+		return
+	}
+	if task.ProjectID != id {
+		writeError(w, http.StatusNotFound, "task not found in project")
+		return
+	}
+	if task.Status == registry.StatusRunning {
+		writeError(w, http.StatusConflict, "a running task must be aborted, not cancelled")
+		return
+	}
+	if task.Status == registry.StatusCancelled || task.Status == registry.StatusDone {
+		writeJSON(w, http.StatusOK, map[string]any{"project": id, "task": taskID, "status": task.Status}) // idempotent
+		return
+	}
+	if err := s.updateTask(ctx, taskID, func(t *statestore.Task) {
+		t.Status = registry.StatusCancelled
+		t.AbortRequested = false
+		t.LastError = ""
+	}); err != nil {
+		s.serverError(w, "cancel: update task", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"project": id, "task": taskID, "status": registry.StatusCancelled})
 }
 
 // --- control DTO + helpers ---

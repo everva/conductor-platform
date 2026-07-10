@@ -149,6 +149,7 @@ func (s *apiServer) routes() http.Handler {
 	mux.Handle("POST /projects/{id}/approve", s.requireAuth(http.HandlerFunc(s.handleApprove)))
 	mux.Handle("POST /projects/{id}/reject", s.requireAuth(http.HandlerFunc(s.handleReject)))
 	mux.Handle("POST /projects/{id}/tasks/{task}/retry", s.requireAuth(http.HandlerFunc(s.handleRetry)))
+	mux.Handle("POST /projects/{id}/tasks/{task}/cancel", s.requireAuth(http.HandlerFunc(s.handleCancelTask)))
 
 	// Gateway-mediated host-agent API (ADR-0048, Faz G): a performer host leases work
 	// and (Faz G2) reports results over HTTP, NEVER touching Postgres — the gateway

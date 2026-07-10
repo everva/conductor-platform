@@ -32,6 +32,10 @@ const (
 	StatusDone = "done"
 	// StatusBlocked marks a task that failed and is awaiting retry/recovery.
 	StatusBlocked = "blocked"
+	// StatusCancelled marks a task terminally cancelled by an operator (e.g. filed by mistake /
+	// an auditor false-positive). Terminal like done, but distinct so it never reads as "landed";
+	// PickReady never selects it (only todo/ready are pickable).
+	StatusCancelled = "cancelled"
 )
 
 // ErrIllegalTransition is returned by Transition when the requested
