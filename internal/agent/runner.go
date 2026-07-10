@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/everva/conductor-platform/internal/agentclient"
@@ -139,6 +140,20 @@ type Config struct {
 	Logger           *slog.Logger
 }
 
+// MaxMergeAttempts caps how many CONSECUTIVE times one task may fail its squash-merge
+// before the agent stops retrying and reports it blocked (with the git error as the
+// board's LastError).
+//
+// A merge failure reports no verdict, so the deferred lease-release reverts the task
+// running→ready (gateway M1) and the next tick picks it straight back up. That is
+// deliberate — the usual cause is that the base advanced under the branch, and one
+// re-cut-from-base + re-develop resolves it. But when the conflict is INHERENT to the
+// branch (e.g. its merge-base tracks a file the base later deleted) every retry repeats
+// it identically: xirigo-vendor's V-44 failed the same `CONFLICT (modify/delete)` four
+// times in 50 minutes and would have looped forever, burning a shared host's CPU on a
+// wall no retry can clear. One free self-heal retry, then block for the director.
+const MaxMergeAttempts = 2
+
 // Runner is the host-agent's one-task orchestrator.
 type Runner struct {
 	gw          Gateway
@@ -148,6 +163,12 @@ type Runner struct {
 	poll        time.Duration
 	progress    time.Duration
 	rateBackoff time.Duration
+
+	// mergeFails counts CONSECUTIVE merge failures per task ID (reset on success).
+	// Guarded because a Runner may legitimately be shared across goroutines even though
+	// Loop drives RunOnce sequentially.
+	mu         sync.Mutex
+	mergeFails map[string]int
 }
 
 // Outcome classifies what RunOnce did, for the loop + logging.
@@ -183,7 +204,8 @@ func New(gw Gateway, ex Executor, cfg Config) *Runner {
 	if rateBackoff <= 0 {
 		rateBackoff = 10 * time.Minute
 	}
-	return &Runner{gw: gw, ex: ex, cfg: cfg, log: log, poll: poll, progress: prog, rateBackoff: rateBackoff}
+	return &Runner{gw: gw, ex: ex, cfg: cfg, log: log, poll: poll, progress: prog, rateBackoff: rateBackoff,
+		mergeFails: map[string]int{}}
 }
 
 // RunOnce leases at most one task and drives it to a terminal outcome (merged,
@@ -259,12 +281,42 @@ func (r *Runner) RunOnce(ctx context.Context) (Outcome, error) {
 	}
 }
 
+// countMergeFailure records a consecutive merge failure for taskID and reports the new count.
+func (r *Runner) countMergeFailure(taskID string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.mergeFails[taskID]++
+	return r.mergeFails[taskID]
+}
+
+// clearMergeFailures forgets a task's failure streak (it merged, or it was blocked).
+func (r *Runner) clearMergeFailures(taskID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.mergeFails, taskID)
+}
+
 // merge squash-merges the verified branch and reports it merged → task done.
 func (r *Runner) merge(ctx context.Context, task agentclient.TaskInfo, scenario agentclient.ScenarioInfo, branch string, approved bool) (Outcome, error) {
 	res, err := r.ex.Merge(ctx, task, scenario, branch, approved)
 	if err != nil {
+		// Bound the retry loop: after MaxMergeAttempts consecutive failures the conflict is
+		// inherent to the branch, so report it blocked (a verdict) instead of erroring out and
+		// letting the lease-release bounce the task back to ready for an identical retry.
+		if n := r.countMergeFailure(task.ID); n >= MaxMergeAttempts {
+			r.clearMergeFailures(task.ID)
+			reason := fmt.Sprintf("merge failed %d consecutive times; not retrying: %v", n, err)
+			r.log.Warn("agent: merge failed repeatedly; reporting blocked", "task", task.ID, "attempts", n, "err", err)
+			if _, rerr := r.gw.Result(ctx, r.cfg.ProjectID, task.ID, agentclient.ResultReport{
+				Result: "blocked", Branch: branch, Summary: reason,
+			}); rerr != nil {
+				return "", fmt.Errorf("agent: report merge-blocked %q: %w", task.ID, rerr)
+			}
+			return OutcomeBlocked, nil
+		}
 		return "", fmt.Errorf("agent: merge %q: %w", task.ID, err)
 	}
+	r.clearMergeFailures(task.ID)
 	// P2b: persist the full diff from the verified worktree on EVERY merge path (auto + approved-held)
 	// so GET .../diff always serves a full-file native diff. The once-per-Run early emit misses the
 	// held→approved→merge and re-verify paths — exactly the big multi-file tasks. Best-effort.

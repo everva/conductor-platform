@@ -170,8 +170,12 @@ func (m *GitMerger) SquashMerge(ctx context.Context, project statestore.Project,
 	baseRef = strings.TrimSpace(baseRef)
 
 	if err := git(ctx, repo, "merge", "--squash", ws.Branch); err != nil {
-		m.restoreBase(ctx, repo, baseRef)
-		return "", fmt.Errorf("git merger: squash %q: %w", ws.Branch, err)
+		// A squash conflict confined to CONDUCTOR'S OWN control files is not a product
+		// conflict — drop those paths and carry on. See dropControlArtifactConflicts.
+		if dropped, derr := m.dropControlArtifactConflicts(ctx, repo); derr != nil || !dropped {
+			m.restoreBase(ctx, repo, baseRef)
+			return "", fmt.Errorf("git merger: squash %q: %w", ws.Branch, err)
+		}
 	}
 	msg := fmt.Sprintf("%s\n\n[task:%s]", commitSubject(task), task.ID)
 	if err := git(ctx, repo, "commit", "--allow-empty", "-m", msg); err != nil {
@@ -234,6 +238,77 @@ func (m *GitMerger) redactPush(err error) error {
 		return err
 	}
 	return errors.New(strings.ReplaceAll(err.Error(), tok, "x-access-token:REDACTED"))
+}
+
+// controlArtifacts are the files CONDUCTOR ITSELF writes into a task worktree to
+// steer the performer: the task brief, the performer's own plan, and the gate /
+// strict-reviewer feedback it must fix. They are control metadata, never product
+// content, and every recipe unstages them before committing. `.conductor/config.yaml`
+// (ADR-0009, a repo's OWN recipe) is deliberately ABSENT — that IS product content.
+var controlArtifacts = map[string]bool{
+	".conductor/TASK.md":   true,
+	".conductor/PLAN.md":   true,
+	".conductor/GATE.md":   true,
+	".conductor/REVIEW.md": true,
+}
+
+// dropControlArtifactConflicts resolves a squash conflict whose unmerged paths are
+// ALL conductor control artifacts, by removing them from the index+worktree. It
+// reports whether the conflict was fully resolved (the caller may then commit).
+//
+// Why this exists: a performer that disobeys its recipe and commits, say,
+// .conductor/REVIEW.md lands it on the base branch. A later task's fresh worktree
+// does not have that file, so ITS commit records the DELETION. Any branch cut in
+// between — whose merge-base still tracks the file, and whose own review round
+// rewrote it — then hits `CONFLICT (modify/delete): .conductor/REVIEW.md deleted in
+// HEAD and modified in <branch>` on EVERY squash, forever (observed: V-44 on
+// xirigo-vendor, 4 identical merge failures). Retrying cannot clear it. Since these
+// files are conductor's own scratch, dropping them is always the right resolution —
+// so the fix is deterministic here rather than trusting the develop prompt.
+//
+// A conflict touching ANY other path is a REAL product conflict: it returns false
+// and the caller restores the base and fails, exactly as before.
+func (m *GitMerger) dropControlArtifactConflicts(ctx context.Context, repo string) (bool, error) {
+	paths, err := unmergedPaths(ctx, repo)
+	if err != nil {
+		return false, err
+	}
+	if len(paths) == 0 {
+		return false, nil // not a conflict (or nothing unmerged) — caller fails as before.
+	}
+	for _, p := range paths {
+		if !controlArtifacts[p] {
+			return false, nil // a real product conflict; do not touch it.
+		}
+	}
+	for _, p := range paths {
+		// -f because the path is unmerged; --ignore-unmatch because a modify/delete
+		// conflict may already have no worktree file on one side.
+		if err := git(ctx, repo, "rm", "-q", "-f", "--ignore-unmatch", "--", p); err != nil {
+			return false, fmt.Errorf("git merger: drop control artifact %q: %w", p, err)
+		}
+	}
+	// Prove the index is clean before telling the caller it may commit.
+	remaining, err := unmergedPaths(ctx, repo)
+	if err != nil {
+		return false, err
+	}
+	return len(remaining) == 0, nil
+}
+
+// unmergedPaths lists the conflicted (stage>0) paths in repo's index.
+func unmergedPaths(ctx context.Context, repo string) ([]string, error) {
+	out, err := gitOut(ctx, repo, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, fmt.Errorf("git merger: list unmerged paths: %w", err)
+	}
+	var paths []string
+	for _, l := range strings.Split(out, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			paths = append(paths, l)
+		}
+	}
+	return paths, nil
 }
 
 // restoreBase returns the base checkout to baseRef with a CLEAN worktree+index
