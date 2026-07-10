@@ -178,9 +178,34 @@ func (p *Provisioner) fetchBase(ctx context.Context, clone, base string) error {
 	if err := runGit(ctx, clone, p.gitEnv(), "fetch", "--prune", "origin", base); err != nil {
 		return fmt.Errorf("provisioner: fetch base %q: %w", base, err)
 	}
-	// Fast-forward the local base ref to the freshly fetched origin tip so a
-	// worktree cut from <base> is genuinely current rather than a cached tip.
-	if err := runGit(ctx, clone, p.gitEnv(), "update-ref", "refs/heads/"+base, "refs/remotes/origin/"+base); err != nil {
+	local, remote := "refs/heads/"+base, "refs/remotes/origin/"+base
+
+	// A clone whose DEFAULT branch is not <base> has no local <base> ref yet; create it at the
+	// fetched tip. Nothing can be discarded, so no guard is needed.
+	if err := runGit(ctx, clone, p.gitEnv(), "rev-parse", "--verify", "--quiet", local); err != nil {
+		if uerr := runGit(ctx, clone, p.gitEnv(), "update-ref", local, remote); uerr != nil {
+			return fmt.Errorf("provisioner: create base ref %q: %w", base, uerr)
+		}
+		return nil
+	}
+
+	// FAST-FORWARD ONLY. Advancing the local base ref to the origin tip keeps worktrees cut from
+	// a current base (ADR-0004) — but only when the local ref is an ANCESTOR of that tip. When it
+	// is not, the local base carries commit(s) origin has never seen, and a blind update-ref
+	// DELETES them without a trace.
+	//
+	// That is not hypothetical. An agent running with -no-push squash-merges a verified task
+	// branch into its LOCAL base and reports the merge SHA, so the gateway marks the task done —
+	// and then the next task's EnsureClone force-moved the base ref back to origin's tip and
+	// orphaned the land commit. Two ecommerce-backend endpoints read "done" with zero code on the
+	// base branch and no error anywhere. Fail LOUDLY instead: a wedged agent an operator can see
+	// beats silent data loss they cannot.
+	if err := runGit(ctx, clone, p.gitEnv(), "merge-base", "--is-ancestor", local, remote); err != nil {
+		return fmt.Errorf("provisioner: refusing to fast-forward base %q: the local ref holds commit(s) origin/%s does not "+
+			"(an un-pushed squash-merge — is the agent running with -no-push, or did its push fail?); "+
+			"push or drop them before provisioning again: %w", base, base, err)
+	}
+	if err := runGit(ctx, clone, p.gitEnv(), "update-ref", local, remote); err != nil {
 		return fmt.Errorf("provisioner: update base ref %q: %w", base, err)
 	}
 	return nil
