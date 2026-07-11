@@ -373,23 +373,37 @@ func (s *MemoryStore) GetScenario(ctx context.Context, id string) (Scenario, err
 	return cloneScenario(sc), nil
 }
 
-// AppendScenarioAcceptance appends de-duplicated criteria to a scenario's acceptance list.
-func (s *MemoryStore) AppendScenarioAcceptance(ctx context.Context, id string, criteria []string) error {
+// ReplaceScenarioFindings swaps the prefix-carrying acceptance lines for criteria.
+func (s *MemoryStore) ReplaceScenarioFindings(ctx context.Context, id, prefix string, criteria []string) error {
 	if err := ctx.Err(); err != nil {
 		return err
-	}
-	if len(criteria) == 0 {
-		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sc, ok := s.scenarios[id]
 	if !ok {
-		return fmt.Errorf("append scenario acceptance %q: %w", id, ErrNotFound)
+		return fmt.Errorf("replace scenario findings %q: %w", id, ErrNotFound)
 	}
-	seen := make(map[string]bool, len(sc.Acceptance))
-	for _, a := range sc.Acceptance {
+	sc.Acceptance = replaceFindings(sc.Acceptance, prefix, criteria)
+	s.scenarios[id] = sc
+	return nil
+}
+
+// replaceFindings drops every acceptance line carrying prefix and appends the
+// de-duplicated criteria in its place, preserving the scenario's own spec lines and their
+// order. Shared by both stores so memory and Postgres cannot drift.
+func replaceFindings(acceptance []string, prefix string, criteria []string) []string {
+	kept := make([]string, 0, len(acceptance)+len(criteria))
+	seen := make(map[string]bool, len(acceptance)+len(criteria))
+	for _, a := range acceptance {
+		if prefix != "" && strings.HasPrefix(a, prefix) {
+			continue // a finding from an earlier gate run — superseded
+		}
+		if seen[a] {
+			continue
+		}
 		seen[a] = true
+		kept = append(kept, a)
 	}
 	for _, c := range criteria {
 		c = strings.TrimSpace(c)
@@ -397,10 +411,9 @@ func (s *MemoryStore) AppendScenarioAcceptance(ctx context.Context, id string, c
 			continue
 		}
 		seen[c] = true
-		sc.Acceptance = append(sc.Acceptance, c)
+		kept = append(kept, c)
 	}
-	s.scenarios[id] = sc
-	return nil
+	return kept
 }
 
 // ListScenarios returns all scenarios for the given project, ordered by ID.

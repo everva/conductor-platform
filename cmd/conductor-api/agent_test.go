@@ -502,3 +502,64 @@ func TestAgentResult_Blocked_PersistsFindingsToAcceptance(t *testing.T) {
 		t.Fatalf("re-post must be idempotent (deduped), got %v", sc2.Acceptance)
 	}
 }
+
+// TestAgentResult_Blocked_SupersedesTheEarlierRoundsFindings is the fix for the fleet-wide stall:
+// findings were APPENDED, so a single bad one stuck to the scenario forever. And a bad one did
+// stick — the gate reported its own banner ("verify: node v22.23.0 / npm 10.9.8") as the failure,
+// leaving 30 scenarios ordering the developer to "resolve" a version string. With nothing actionable
+// to do it changed nothing, and the task blocked as "developer made no change" — for weeks, across
+// A-31/V-11/V-14 and the rest. Each report now REPLACES the findings block: the stale line is gone
+// the moment a real one arrives, while the scenario's own spec is never touched.
+func TestAgentResult_Blocked_SupersedesTheEarlierRoundsFindings(t *testing.T) {
+	s, store := agentServer(t)
+	ctx := context.Background()
+	mustCreate(t, store.CreateProject(ctx, statestore.Project{ID: "p", Repo: "o/p", BaseBranch: "main", Readiness: "ready"}))
+	mustCreate(t, store.CreateScenario(ctx, statestore.Scenario{
+		ID: "S-1", ProjectID: "p", Title: "t",
+		Acceptance: []string{"DEFECT: order-print.ts hardcodes a 19% tax", "FIX: read the real tax field"},
+	}))
+	mustCreate(t, store.CreateTask(ctx, statestore.Task{ID: "T-1", ProjectID: "p", Lane: "backend", Tier: "T2", Status: "running", ScenarioID: "S-1"}))
+
+	// Round 1: the gate reports the useless banner.
+	rec := doBody(t, s, http.MethodPost, "/projects/p/agent/tasks/T-1/result", bearer(),
+		`{"result":"changes-requested","summary":"gate unresolved","findings":["gate \"build\" failed: verify: node v22.23.0 / npm 10.9.8"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("round 1 status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Round 2: the gate reports the REAL error.
+	rec = doBody(t, s, http.MethodPost, "/projects/p/agent/tasks/T-1/result", bearer(),
+		`{"result":"changes-requested","summary":"gate unresolved","findings":["gate \"build\" failed: error TS2551: Property 'tax' does not exist"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("round 2 status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	sc, err := store.GetScenario(ctx, "S-1")
+	if err != nil {
+		t.Fatalf("GetScenario: %v", err)
+	}
+	joined := strings.Join(sc.Acceptance, "\n")
+	if strings.Contains(joined, "node v22.23.0") {
+		t.Fatalf("the superseded banner finding still poisons the acceptance: %v", sc.Acceptance)
+	}
+	if !strings.Contains(joined, "error TS2551") {
+		t.Fatalf("the current finding was not persisted: %v", sc.Acceptance)
+	}
+	// The scenario's own spec must survive the turnover untouched.
+	if !strings.Contains(joined, "hardcodes a 19% tax") || !strings.Contains(joined, "read the real tax field") {
+		t.Fatalf("replacing findings destroyed the scenario's own spec: %v", sc.Acceptance)
+	}
+	if len(sc.Acceptance) != 3 {
+		t.Fatalf("acceptance = %v, want 3 (2 spec + 1 current finding)", sc.Acceptance)
+	}
+
+	// A now-green gate carries no findings: the block CLEARS, leaving the bare spec.
+	if rec := doBody(t, s, http.MethodPost, "/projects/p/agent/tasks/T-1/result", bearer(),
+		`{"result":"changes-requested","summary":"gate unresolved","findings":[]}`); rec.Code != http.StatusOK {
+		t.Fatalf("clear status=%d", rec.Code)
+	}
+	sc2, _ := store.GetScenario(ctx, "S-1")
+	if len(sc2.Acceptance) != 2 {
+		t.Fatalf("acceptance = %v, want the bare 2-line spec once no findings remain", sc2.Acceptance)
+	}
+}

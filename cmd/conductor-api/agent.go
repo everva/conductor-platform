@@ -23,6 +23,12 @@ import (
 	"github.com/everva/conductor-platform/internal/statestore"
 )
 
+// reviewFindingPrefix marks the acceptance lines that carry a gate's unresolved findings
+// rather than the scenario's own spec. It is BOTH the text handed to the developer and the
+// key the store matches on to supersede the previous round's findings — one const so the
+// writer and the pruner can never drift apart and orphan a line forever.
+const reviewFindingPrefix = "Resolve this prior-review finding before merge: "
+
 // agentLeaseRequest is the body of POST /projects/{id}/agent/lease: the host's stable
 // id and its capability set (for capability-routing, ADR-0024/2B-2). An empty
 // capabilities set means UNCONSTRAINED routing (picks regardless of Task.Requires).
@@ -486,18 +492,27 @@ func (s *apiServer) handleAgentResult(w http.ResponseWriter, r *http.Request) {
 			s.serverError(w, "agent result: mark blocked", err)
 			return
 		}
-		// PERSIST the unresolved findings onto the scenario's acceptance (deduped) so a later
-		// re-develop — a fresh worktree that loses .conductor/REVIEW.md — still addresses them and the
-		// reviewer re-checks them. This is what lets a DENSE screen CONVERGE across autoheal retries
-		// instead of cycling forever. Best-effort: a persist failure must NOT fail the block report.
-		if task.ScenarioID != "" && len(req.Findings) > 0 {
+		// PERSIST the unresolved findings onto the scenario's acceptance so a later re-develop —
+		// a fresh worktree that loses .conductor/REVIEW.md — still addresses them and the reviewer
+		// re-checks them. This is what lets a DENSE screen CONVERGE across autoheal retries instead
+		// of cycling forever.
+		//
+		// REPLACE, never append: findings describe the LATEST gate run. Appending accumulated every
+		// round forever, so one bad finding stuck to the scenario permanently — and a bad one DID
+		// stick (the gate reported its banner, "verify: node v22.23.0 / npm 10.9.8", as the failure),
+		// leaving 30 scenarios ordering the developer to "resolve" a version string. With nothing
+		// actionable to do it changed nothing and the task blocked as "developer made no change".
+		// Replacing supersedes such a line on the next report instead of carrying it for life.
+		//
+		// Best-effort: a persist failure must NOT fail the block report.
+		if task.ScenarioID != "" {
 			crit := make([]string, 0, len(req.Findings))
 			for _, f := range req.Findings {
 				if f = strings.TrimSpace(f); f != "" {
-					crit = append(crit, "Resolve this prior-review finding before merge: "+f)
+					crit = append(crit, reviewFindingPrefix+f)
 				}
 			}
-			if err := s.store.AppendScenarioAcceptance(ctx, task.ScenarioID, crit); err != nil && s.logger != nil {
+			if err := s.store.ReplaceScenarioFindings(ctx, task.ScenarioID, reviewFindingPrefix, crit); err != nil && s.logger != nil {
 				s.logger.WarnContext(ctx, "agent result: persist review findings to acceptance failed",
 					"task", taskID, "scenario", task.ScenarioID, "err", err.Error())
 			}

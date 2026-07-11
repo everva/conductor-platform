@@ -231,12 +231,18 @@ type StateStore interface {
 	GetScenario(ctx context.Context, id string) (Scenario, error)
 	// ListScenarios returns all scenarios for the given project.
 	ListScenarios(ctx context.Context, projectID string) ([]Scenario, error)
-	// AppendScenarioAcceptance appends criteria to a scenario's acceptance list,
-	// de-duplicating against the existing entries (idempotent). It lets the review
-	// pipeline PERSIST a task's unresolved review findings so a later re-develop (a
-	// fresh worktree, which loses .conductor/REVIEW.md) still addresses them and the
-	// reviewer re-checks them — the mechanism that lets a dense screen converge across
-	// autoheal retries instead of cycling forever. A no-op when criteria is empty or all
-	// already present; ErrNotFound when the scenario does not exist.
-	AppendScenarioAcceptance(ctx context.Context, id string, criteria []string) error
+	// ReplaceScenarioFindings swaps the scenario's persisted review findings — every
+	// acceptance line carrying prefix — for criteria (de-duplicated). It lets the review
+	// pipeline PERSIST a task's unresolved findings so a later re-develop (a fresh
+	// worktree, which loses .conductor/REVIEW.md) still addresses them and the reviewer
+	// re-checks them — the mechanism that lets a dense screen converge across autoheal
+	// retries instead of cycling forever.
+	//
+	// It REPLACES rather than appends: findings describe the LATEST gate run, so carrying
+	// earlier rounds forever both grows the acceptance without bound and — once a round
+	// persists a bad finding — poisons every future attempt with an instruction the
+	// developer cannot act on. Only lines with prefix are touched; the scenario's own spec
+	// is never disturbed. Passing empty criteria CLEARS the findings block. ErrNotFound
+	// when the scenario does not exist.
+	ReplaceScenarioFindings(ctx context.Context, id, prefix string, criteria []string) error
 }

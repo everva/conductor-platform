@@ -155,7 +155,7 @@ func runGate(ctx context.Context, dir string, g Gate) engine.Check {
 		// Surface that error as the Evidence so the failure is a clear, deterministic
 		// "binary missing" signal rather than an opaque "no output" — the gate FAILS,
 		// it is never silently skipped (Rule#9, no fake-green).
-		evidence := firstLine(buf.Bytes())
+		evidence := failureEvidence(buf.Bytes())
 		if buf.Len() == 0 {
 			evidence = firstLine([]byte(err.Error()))
 		}
@@ -271,6 +271,50 @@ func nonRevealing(name, ref string) string {
 // read once per gate command; it is not mutated.
 func sanitizedEnv() []string {
 	return envsafe.Sanitize(os.Environ())
+}
+
+// evidenceLines is how many trailing output lines a failed gate reports, and
+// evidenceMax bounds the whole Evidence string.
+const (
+	evidenceLines = 5
+	evidenceMax   = 600
+)
+
+// failureEvidence returns the most diagnostic slice of a FAILED gate's output: its
+// TAIL.
+//
+// A recipe gate is a multi-step shell script under `set -e`, so it dies AT the step
+// that failed and the error is the LAST thing it wrote. Its FIRST line is a banner
+// ("verify: node v22.23.0 / npm 10.9.8"). Reporting the head therefore replaced every
+// real failure with a version string — and that string is what the self-correction
+// rounds and the next attempt's injected acceptance ("Resolve this prior-review
+// finding: …") were told to fix. Given nothing actionable, the developer changed
+// nothing and the task blocked as "developer made no change". Head-evidence blindfolded
+// the whole loop; the tail is where the error actually is.
+func failureEvidence(out []byte) string {
+	var tail []string
+	for _, line := range bytes.Split(out, []byte("\n")) {
+		t := strings.TrimSpace(string(line))
+		if t == "" {
+			continue
+		}
+		if len(t) > 200 {
+			t = t[:200]
+		}
+		tail = append(tail, t)
+		if len(tail) > evidenceLines {
+			tail = tail[1:]
+		}
+	}
+	if len(tail) == 0 {
+		return "exit non-zero (no output)"
+	}
+	ev := strings.Join(tail, " | ")
+	// Keep the END: the final line is the closest to the failure.
+	if len(ev) > evidenceMax {
+		ev = "…" + ev[len(ev)-evidenceMax:]
+	}
+	return ev
 }
 
 // firstLine returns the first non-empty trimmed line of out, capped, as factual

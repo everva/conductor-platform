@@ -513,7 +513,7 @@ func (failingStore) CreateScenario(context.Context, statestore.Scenario) error {
 func (failingStore) GetScenario(context.Context, string) (statestore.Scenario, error) {
 	return statestore.Scenario{}, errBoom
 }
-func (failingStore) AppendScenarioAcceptance(context.Context, string, []string) error {
+func (failingStore) ReplaceScenarioFindings(context.Context, string, string, []string) error {
 	return errBoom
 }
 func (failingStore) ListScenarios(context.Context, string) ([]statestore.Scenario, error) {

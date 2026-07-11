@@ -3,6 +3,7 @@ package statestore
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -343,39 +344,77 @@ func idsOf(tasks []Task) []string {
 	return ids
 }
 
-// TestMemoryStore_AppendScenarioAcceptance covers the review-findings-persistence path: appended
-// criteria show up, duplicates (existing OR within the batch) are de-duplicated, an empty batch is a
-// no-op, and a missing scenario returns ErrNotFound. This is the seam that lets a dense screen
-// converge across autoheal retries (the findings survive the fresh worktree via the scenario).
-func TestMemoryStore_AppendScenarioAcceptance(t *testing.T) {
+// TestMemoryStore_ReplaceScenarioFindings covers the review-findings-persistence path: new criteria
+// show up, duplicates (existing OR within the batch) are de-duplicated, blanks are dropped, and a
+// missing scenario returns ErrNotFound. This is the seam that lets a dense screen converge across
+// autoheal retries (the findings survive the fresh worktree via the scenario).
+func TestMemoryStore_ReplaceScenarioFindings(t *testing.T) {
 	ctx := context.Background()
+	const pfx = "FINDING: "
 	s := NewMemoryStore()
 	if err := s.CreateScenario(ctx, Scenario{ID: "S-1", ProjectID: "p1", Title: "t", Acceptance: []string{"a"}}); err != nil {
 		t.Fatalf("CreateScenario: %v", err)
 	}
-	// append two new, one dup-of-existing, one dup-within-batch, one blank
-	if err := s.AppendScenarioAcceptance(ctx, "S-1", []string{"b", "a", " c ", "c", "  "}); err != nil {
-		t.Fatalf("AppendScenarioAcceptance: %v", err)
+	// two new, one dup-within-batch, one blank
+	if err := s.ReplaceScenarioFindings(ctx, "S-1", pfx, []string{pfx + "b", " " + pfx + "c ", pfx + "c", "  "}); err != nil {
+		t.Fatalf("ReplaceScenarioFindings: %v", err)
 	}
 	got, err := s.GetScenario(ctx, "S-1")
 	if err != nil {
 		t.Fatalf("GetScenario: %v", err)
 	}
-	want := []string{"a", "b", "c"}
-	if len(got.Acceptance) != len(want) {
+	if want := []string{"a", pfx + "b", pfx + "c"}; !slices.Equal(got.Acceptance, want) {
 		t.Fatalf("acceptance = %v, want %v", got.Acceptance, want)
 	}
-	for i := range want {
-		if got.Acceptance[i] != want[i] {
-			t.Fatalf("acceptance[%d] = %q, want %q (full %v)", i, got.Acceptance[i], want[i], got.Acceptance)
-		}
-	}
-	// empty batch is a no-op
-	if err := s.AppendScenarioAcceptance(ctx, "S-1", nil); err != nil {
-		t.Fatalf("empty append must be a no-op, got %v", err)
-	}
 	// missing scenario -> ErrNotFound
-	if err := s.AppendScenarioAcceptance(ctx, "nope", []string{"x"}); !errors.Is(err, ErrNotFound) {
+	if err := s.ReplaceScenarioFindings(ctx, "nope", pfx, []string{pfx + "x"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing scenario must be ErrNotFound, got %v", err)
+	}
+}
+
+// A finding persisted by an EARLIER gate run must be SUPERSEDED by the next run's findings, never
+// carried alongside them. Appending is what let a single bad finding — the gate reporting its own
+// banner, "verify: node v22.23.0 / npm 10.9.8" — stick to 30 scenarios permanently, ordering the
+// developer to "resolve" a version string on every future attempt. The scenario's OWN spec lines
+// must survive untouched; only the findings block turns over. Clearing (empty criteria) is what a
+// now-passing gate leaves behind.
+func TestMemoryStore_ReplaceScenarioFindings_SupersedesTheEarlierRound(t *testing.T) {
+	ctx := context.Background()
+	const pfx = "Resolve this prior-review finding before merge: "
+	s := NewMemoryStore()
+	spec := []string{"DEFECT: order-print.ts hardcodes a 19% tax", "FIX: read the real tax field"}
+	if err := s.CreateScenario(ctx, Scenario{ID: "S-1", ProjectID: "p1", Title: "t", Acceptance: spec}); err != nil {
+		t.Fatalf("CreateScenario: %v", err)
+	}
+	// Round 1 persists the USELESS banner finding.
+	poison := pfx + `gate "build" failed: verify: node v22.23.0 / npm 10.9.8`
+	if err := s.ReplaceScenarioFindings(ctx, "S-1", pfx, []string{poison}); err != nil {
+		t.Fatalf("round 1: %v", err)
+	}
+	// Round 2 reports the REAL error. The banner line must be gone, not accumulated beside it.
+	real := pfx + `gate "build" failed: error TS2551: Property 'tax' does not exist`
+	if err := s.ReplaceScenarioFindings(ctx, "S-1", pfx, []string{real}); err != nil {
+		t.Fatalf("round 2: %v", err)
+	}
+	got, err := s.GetScenario(ctx, "S-1")
+	if err != nil {
+		t.Fatalf("GetScenario: %v", err)
+	}
+	if slices.Contains(got.Acceptance, poison) {
+		t.Fatalf("the superseded banner finding is still poisoning the acceptance: %v", got.Acceptance)
+	}
+	if want := append(slices.Clone(spec), real); !slices.Equal(got.Acceptance, want) {
+		t.Fatalf("acceptance = %v, want %v (spec preserved, findings turned over)", got.Acceptance, want)
+	}
+	// A now-green gate reports no findings: the block CLEARS, leaving only the scenario's spec.
+	if err := s.ReplaceScenarioFindings(ctx, "S-1", pfx, nil); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	got, err = s.GetScenario(ctx, "S-1")
+	if err != nil {
+		t.Fatalf("GetScenario: %v", err)
+	}
+	if !slices.Equal(got.Acceptance, spec) {
+		t.Fatalf("acceptance = %v, want the bare spec %v", got.Acceptance, spec)
 	}
 }

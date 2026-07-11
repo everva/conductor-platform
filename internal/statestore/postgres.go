@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"strings"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -510,43 +510,27 @@ FROM scenarios WHERE id = $1`
 	return sc, nil
 }
 
-// AppendScenarioAcceptance appends de-duplicated criteria to a scenario's acceptance list.
-func (s *PostgresStore) AppendScenarioAcceptance(ctx context.Context, id string, criteria []string) error {
-	if len(criteria) == 0 {
-		return nil
-	}
+// ReplaceScenarioFindings swaps the prefix-carrying acceptance lines for criteria.
+func (s *PostgresStore) ReplaceScenarioFindings(ctx context.Context, id, prefix string, criteria []string) error {
 	sc, err := s.GetScenario(ctx, id)
 	if err != nil {
 		return err // already wraps ErrNotFound
 	}
-	seen := make(map[string]bool, len(sc.Acceptance))
-	for _, a := range sc.Acceptance {
-		seen[a] = true
+	next := replaceFindings(sc.Acceptance, prefix, criteria)
+	if slices.Equal(next, sc.Acceptance) {
+		return nil // nothing to supersede and nothing new — idempotent no-op
 	}
-	added := false
-	for _, c := range criteria {
-		c = strings.TrimSpace(c)
-		if c == "" || seen[c] {
-			continue
-		}
-		seen[c] = true
-		sc.Acceptance = append(sc.Acceptance, c)
-		added = true
-	}
-	if !added {
-		return nil // all already present — idempotent no-op
-	}
-	acceptance, err := marshalStrings(sc.Acceptance)
+	acceptance, err := marshalStrings(next)
 	if err != nil {
-		return fmt.Errorf("append scenario acceptance %q: %w", id, err)
+		return fmt.Errorf("replace scenario findings %q: %w", id, err)
 	}
 	const q = `UPDATE scenarios SET acceptance = $2 WHERE id = $1`
 	tag, err := s.pool.Exec(ctx, q, id, acceptance)
 	if err != nil {
-		return fmt.Errorf("append scenario acceptance %q: %w", id, err)
+		return fmt.Errorf("replace scenario findings %q: %w", id, err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("append scenario acceptance %q: %w", id, ErrNotFound)
+		return fmt.Errorf("replace scenario findings %q: %w", id, ErrNotFound)
 	}
 	return nil
 }
