@@ -238,7 +238,10 @@ func remediationRank(id string) int {
 	if strings.Contains(id, "-WIRE-") {
 		return 0
 	}
-	for _, p := range []string{"A-FIX-", "A-AUDIT-", "A-E2E-"} {
+	// "A-REG-" is the defect REGISTER: verified, operator-deceiving defects (a fabricated 19% VAT on a
+	// printed invoice; a payout wizard that shows "18 payouts queued" having called nothing). They are
+	// the highest-value work in the queue and must not sort behind 75 not-yet-built screens.
+	for _, p := range []string{"A-FIX-", "A-AUDIT-", "A-E2E-", "A-REG-"} {
 		if strings.HasPrefix(id, p) {
 			return 0
 		}

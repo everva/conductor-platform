@@ -456,3 +456,26 @@ func TestRegistry_Transition_MissingTaskIsErrNotFound(t *testing.T) {
 		t.Fatalf("transition on missing task must wrap ErrNotFound, got %v", err)
 	}
 }
+
+// A register task (A-REG-*) is a VERIFIED, operator-deceiving defect already shipped to production —
+// a fabricated 19% VAT on a printed invoice; a payout wizard reporting "18 payouts queued" having
+// called nothing. A live lie outranks an unbuilt screen, so it must not sink below a 75-screen
+// backlog by ID sort.
+func TestRegistry_PickReady_DefectRegisterIsRemediationPriority(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedTasks(t, s,
+		statestore.Task{ID: "A-05-feature", Status: "todo"},
+		statestore.Task{ID: "A-REG-actionoverlays-honesty", Status: "todo"},
+	)
+	got, err := NewRegistry(s).PickReady(ctx, testProject)
+	if err != nil {
+		t.Fatalf("PickReady: %v", err)
+	}
+	if got.ID != "A-REG-actionoverlays-honesty" {
+		t.Fatalf("a shipped lie must be picked before an unbuilt screen, got %q", got.ID)
+	}
+	if remediationRank("A-REG-inspector-fabricated-vat") != 0 {
+		t.Fatal("A-REG- must rank as remediation (0)")
+	}
+}
