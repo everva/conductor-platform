@@ -10,10 +10,10 @@
 // no new gateway surface (B3). A card click focuses its project (the E1 drill-in;
 // E2 replaces this with a full session view). Awaiting-approval cards get the same
 // confirm-gated Approve the TasksView uses; blocked cards offer Review.
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Event, Host, Lease, Project, Task } from "../api/types.ts";
 import { buildBoard, BOARD_COLUMNS } from "./board.ts";
-import type { BoardCard } from "./board.ts";
+import type { BoardCard, BoardColumnKey } from "./board.ts";
 import { isAwaitingApproval } from "./controls.ts";
 import type { FleetControls } from "./useFleetControls.ts";
 import { Plus, ChevronRight, CircleDashed, Pause, Play } from "lucide-react";
@@ -36,6 +36,12 @@ function SkeletonCard() {
 function selKey(projectId: string, taskId: string): string {
   return `${projectId}:${taskId}`;
 }
+
+// BOARD_PAGE is how many cards a column shows before it asks. A column is a queue, not an archive:
+// Done alone runs past a hundred cards on a mature project, which buries the columns a director
+// actually acts on (Needs Review, Running) under a wall of finished work. The head of each queue is
+// what matters; the tail is available on request.
+const BOARD_PAGE = 20;
 
 export interface CommandCenterProps {
   tasksByProject: Record<string, Task[]>;
@@ -97,6 +103,17 @@ export function CommandCenter({
   // Show placeholders only on the very first load (still fetching, nothing yet).
   const boardEmpty = BOARD_COLUMNS.every((c) => board.columns[c.key].length === 0);
   const showSkeleton = loading && boardEmpty;
+
+  // How many cards each column has been asked to reveal. Every column starts at one page and grows
+  // only when the director asks for more. Changing the project scope is a new board, so the columns
+  // collapse back to their first page rather than carrying the previous project's expansion over.
+  const [revealed, setRevealed] = useState<Partial<Record<BoardColumnKey, number>>>({});
+  useEffect(() => {
+    setRevealed({});
+  }, [selectedProjectId]);
+  const revealMore = useCallback((key: BoardColumnKey) => {
+    setRevealed((prev) => ({ ...prev, [key]: (prev[key] ?? BOARD_PAGE) + BOARD_PAGE }));
+  }, []);
 
   // Multi-select bulk actions (redesign E4 + quick-wins): a director can select several HELD
   // (gate-green) tasks to clear the review queue in one confirm (bulk approve), OR several BLOCKED
@@ -287,6 +304,10 @@ export function CommandCenter({
       <div className="cc-board" role="list" aria-label="Task board">
         {BOARD_COLUMNS.map((col) => {
           const cards = board.columns[col.key];
+          // The header count stays the TRUE total — the board must never make a queue look
+          // shorter than it is. Only the rendered slice is capped.
+          const shown = Math.min(revealed[col.key] ?? BOARD_PAGE, cards.length);
+          const hidden = cards.length - shown;
           return (
             <div
               key={col.key}
@@ -310,16 +331,29 @@ export function CommandCenter({
                     <span>No tasks</span>
                   </div>
                 ) : (
-                  cards.map((card) => (
-                    <BoardCardView
-                      key={card.task.id}
-                      card={card}
-                      {...(controls ? { controls } : {})}
-                      {...(onOpenSession ? { onOpenSession } : {})}
-                      selected={selected.has(selKey(card.task.project_id, card.task.id))}
-                      onToggleSelect={() => toggleSelect(card.task.project_id, card.task.id)}
-                    />
-                  ))
+                  <>
+                    {cards.slice(0, shown).map((card) => (
+                      <BoardCardView
+                        key={card.task.id}
+                        card={card}
+                        {...(controls ? { controls } : {})}
+                        {...(onOpenSession ? { onOpenSession } : {})}
+                        selected={selected.has(selKey(card.task.project_id, card.task.id))}
+                        onToggleSelect={() => toggleSelect(card.task.project_id, card.task.id)}
+                      />
+                    ))}
+                    {hidden > 0 && (
+                      <Button
+                        variant="ghost"
+                        className="cc-col-more"
+                        onClick={() => revealMore(col.key)}
+                        aria-label={`Show ${Math.min(hidden, BOARD_PAGE)} more of ${cards.length} in ${col.label}`}
+                      >
+                        Show {Math.min(hidden, BOARD_PAGE)} more
+                        <span className="cc-col-more-rest">{hidden} hidden</span>
+                      </Button>
+                    )}
+                  </>
                 )}
               </div>
             </div>

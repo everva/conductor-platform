@@ -303,6 +303,27 @@
   margin-top: var(--space-1);
 }
 
+/* "Show N more" — the tail of a long column, on request. Reads as a quiet continuation of the
+   stack, not as a primary action competing with the cards above it. */
+.cc-col-more {
+  width: 100%;
+  justify-content: space-between;
+  font-size: var(--text-xs);
+  color: var(--fg-2);
+  border: 1px dashed var(--border-1);
+  background: transparent;
+}
+
+.cc-col-more:hover {
+  color: var(--fg-1);
+  border-color: var(--border-2);
+}
+
+.cc-col-more-rest {
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Narrow viewports (a webview side panel): stack the columns. */
 @media (max-width: 760px) {
   .cc-board {

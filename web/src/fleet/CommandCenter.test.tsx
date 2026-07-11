@@ -347,3 +347,56 @@ describe("CommandCenter — scoped project Pause / Resume", () => {
     expect(screen.queryByRole("button", { name: /^pause$/i })).not.toBeInTheDocument();
   });
 });
+
+// A column is a queue, not an archive. On a mature project Done alone runs past a hundred cards,
+// which buries the columns a director actually acts on. Each column renders one page and offers the
+// rest on request — but the header count must keep telling the TRUTH, or the board would make a
+// queue look shorter than it is.
+describe("CommandCenter board paging", () => {
+  const many = (n: number, status: Task["status"]): Task[] =>
+    Array.from({ length: n }, (_, i) =>
+      task({ id: `T-${status}-${String(i).padStart(3, "0")}`, project_id: "p", status }),
+    );
+
+  function renderBoard(tasks: Task[]) {
+    return render(
+      <CommandCenter
+        tasksByProject={{ p: tasks }}
+        leasesByProject={{}}
+        hosts={[host("host-linux")]}
+        recentEvents={[]}
+      />,
+    );
+  }
+
+  it("renders only the first 20 cards of a long column, and says how many are hidden", () => {
+    renderBoard(many(53, "done"));
+
+    const done = col("Done");
+    expect(within(done).getAllByRole("button", { name: /^Task / })).toHaveLength(20);
+    // The count is the TRUE total, not the rendered slice.
+    expect(within(done).getByText("53")).toBeInTheDocument();
+    expect(within(done).getByText("33 hidden")).toBeInTheDocument();
+  });
+
+  it("reveals the next 20 on demand, and stops offering more once the tail is out", async () => {
+    const user = userEvent.setup();
+    renderBoard(many(25, "done"));
+
+    const done = col("Done");
+    expect(within(done).getAllByRole("button", { name: /^Task / })).toHaveLength(20);
+
+    await user.click(within(done).getByRole("button", { name: /Show 5 more/ }));
+
+    expect(within(col("Done")).getAllByRole("button", { name: /^Task / })).toHaveLength(25);
+    expect(within(col("Done")).queryByRole("button", { name: /more/ })).toBeNull();
+  });
+
+  it("does not offer 'show more' on a column that fits", () => {
+    renderBoard(many(20, "done"));
+
+    const done = col("Done");
+    expect(within(done).getAllByRole("button", { name: /^Task / })).toHaveLength(20);
+    expect(within(done).queryByRole("button", { name: /more/ })).toBeNull();
+  });
+});
