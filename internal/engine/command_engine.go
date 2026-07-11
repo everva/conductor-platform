@@ -285,6 +285,18 @@ func classifyOutput(stdout []byte, runErr error) error {
 			return fmt.Errorf("%w: %v", ErrNoVerdict, runErr)
 		}
 	}
+	// A WEEKLY limit is not an error at all: the performer answers "You've hit your weekly limit ·
+	// resets 11am (UTC)" in a normal, EXIT-ZERO turn and stops. The runErr-gated check above therefore
+	// never sees it, and the run goes on to fail as a "malformed verdict" — churning the task into
+	// `blocked` instead of backing off. That burned 15 backend tasks in half an hour (2026-07-11).
+	//
+	// Gate it on "produced no verdict" instead of "exited non-zero": a real run ALWAYS ends in a
+	// result-keyed object, so a limit marker with nothing to parse cannot be a narration.
+	if _, perr := lastResultObject(stdout); perr != nil {
+		if marker := detectRateLimitMarker(stdout); marker != "" {
+			return fmt.Errorf("%w: %s", ErrRateLimited, marker)
+		}
+	}
 	if len(bytes.TrimSpace(stdout)) == 0 {
 		return fmt.Errorf("%w: empty output", ErrNoVerdict)
 	}
@@ -325,6 +337,11 @@ var rateLimitMarkers = []string{
 	"claude usage limit",
 	"5-hour limit",
 	"rate_limit_error",
+	// The WEEKLY wall reads differently: "You've hit your weekly limit · resets 11am (UTC)". None of
+	// the markers above match it, so it was classified as a malformed verdict and churned 15 backend
+	// tasks into `blocked` in half an hour — false blocks, not code failures (2026-07-11).
+	"weekly limit",
+	"hit your limit",
 }
 
 // detectRateLimitMarker returns the first usage/rate-limit marker found in out, or "".
@@ -402,9 +419,31 @@ func lastResultObject(data []byte) ([]byte, error) {
 		last = span
 	}
 	if last == nil {
-		return nil, fmt.Errorf("%w: no result-keyed JSON object in output", ErrMalformedVerdict)
+		// Say WHAT the performer actually produced. Reporting only "no result-keyed JSON object"
+		// hides the reason behind a description of the parser's disappointment: when the account hit
+		// its weekly limit, every one of 15 blocked tasks read the same opaque line while the answer
+		// — "You've hit your weekly limit · resets 11am (UTC)" — sat unread in the output (2026-07-11).
+		return nil, fmt.Errorf("%w: no result-keyed JSON object in output; performer said: %s",
+			ErrMalformedVerdict, outputTail(data))
 	}
 	return last, nil
+}
+
+// outputTail returns the last non-empty line of a performer's output, bounded — the line that says
+// why it stopped.
+func outputTail(data []byte) string {
+	lines := bytes.Split(data, []byte("\n"))
+	for i := len(lines) - 1; i >= 0; i-- {
+		t := strings.TrimSpace(string(lines[i]))
+		if t == "" {
+			continue
+		}
+		if len(t) > 300 {
+			t = t[len(t)-300:]
+		}
+		return t
+	}
+	return "(no output)"
 }
 
 // balancedObjects returns every balanced top-level {...} byte span in data, in
