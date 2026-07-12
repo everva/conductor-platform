@@ -227,19 +227,29 @@ func TestRunOnce_Blocked(t *testing.T) {
 	}
 }
 
-func TestRunOnce_RunError_ReportsBlocked(t *testing.T) {
+// A broken run REPORTS NOTHING — it is neither a pass nor a defect.
+//
+// This test used to demand `blocked` on any run error, on the reasoning "never fake-green". The
+// no-fake-green half is right and still pinned below: a failed run must never be reported as pass.
+// But `blocked` was the wrong opposite. It means "the director must review this", and there is
+// nothing to review — the performer never judged the code. That reading is what let one walled
+// account write 21 non-defects into the review queue. The honest outcome for "we do not know" is
+// to say nothing and put the task back (see no_verdict_test.go for the full contract).
+func TestRunOnce_RunError_ReportsNoVerdict_AndNeverFakeGreen(t *testing.T) {
 	gw := &fakeGateway{leaseTask: leased(), resultDecision: "blocked"}
 	ex := &fakeExecutor{runErr: errors.New("provision exploded")}
 	out, err := newRunner(gw, ex).RunOnce(context.Background())
-	if err != nil || out != OutcomeBlocked {
-		t.Fatalf("out=%q err=%v, want blocked (never fake-green)", out, err)
+	if err != nil || out != OutcomeNoVerdict {
+		t.Fatalf("out=%q err=%v, want no-verdict (nothing was judged, so nothing is reviewable)", out, err)
 	}
-	// The reported verdict must be blocked, never a fabricated pass.
-	if gw.resultReport.Result != "blocked" {
-		t.Fatalf("run error reported as %q, want blocked", gw.resultReport.Result)
+	// NOTHING is reported: not a pass (that would be fake-green), and not a block (that would be a
+	// fabricated review item).
+	if gw.resultReport.Result != "" {
+		t.Fatalf("a run that produced no verdict reported %q — it must report no verdict at all", gw.resultReport.Result)
 	}
+	// The lease is still released, so the task reverts running→ready and is retried.
 	if !gw.released {
-		t.Fatalf("run error must still release the lease")
+		t.Fatalf("run error must still release the lease (task → ready)")
 	}
 }
 
