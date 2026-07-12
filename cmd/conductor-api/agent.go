@@ -143,6 +143,12 @@ func (s *apiServer) handleAgentLease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Free any task stranded in "running" with nothing behind it, BEFORE picking. This runs on
+	// every poll — including the polls that end in 204 "no work" — because a project whose every
+	// task is stranded never reaches PickReady at all, and a sweep placed after a successful pick
+	// could therefore never save it (see reapPhantomRunners).
+	s.reapPhantomRunners(ctx, id)
+
 	// Capability-routed pick over the shared store (same logic as the daemon).
 	reg := registry.NewRegistry(s.store, registry.WithCapabilities(req.Capabilities))
 	task, err := reg.PickReady(ctx, id)
@@ -357,6 +363,64 @@ func (s *apiServer) publishAgentEvent(ctx context.Context, project, task string,
 		return
 	}
 	_ = s.bus.Publish(ctx, ev)
+}
+
+// reapPhantomRunners reverts every task stranded in "running" with nothing behind it.
+//
+// THE INVARIANT: a lease is held per PROJECT (GetLease takes the project id), so at most ONE task
+// of a project can legitimately be running — the leased one. Any OTHER task sitting in "running" is
+// a phantom: its worker is gone and its lease is not.
+//
+// Why the phantom is otherwise unrecoverable. /retry takes only a blocked task (409 otherwise).
+// /agent/lease/release reverts the status only for the lease OWNER or when NO lease exists — so a
+// phantom that coexists with a live lease on a DIFFERENT task is a no-op there, and the free-lease
+// window between two tasks is sub-second, so no client can catch it by polling. The reconcile reaper
+// that would have cleaned this up (ADR-0016) lives in cmd/conductor, which THIS deployment does not
+// run: the gateway is the whole control plane. So nothing, anywhere, frees them.
+//
+// Observed live (2026-07-12): xirigo-vendor sat silent for 14 hours. V-21 and V-39 were stranded
+// "running" from an agent restart; V-40's dependency was V-39, so PickReady had nothing to give and
+// the agent polled into an empty room. The project looked "working" on the board — two tasks running
+// — while not a single process existed behind them. A phantom is worse than a blocked task: it
+// reports progress it is not making, and it takes its dependents down with it.
+//
+// The sweep is idempotent, needs no TTL or heartbeat, and cannot touch a live task: the leased task
+// is skipped by ID, and a task can only be running-and-unleased if nobody is running it.
+func (s *apiServer) reapPhantomRunners(ctx context.Context, projectID string) {
+	leasedTaskID := ""
+	if l, err := s.store.GetLease(ctx, projectID); err == nil {
+		leasedTaskID = l.TaskID
+	} else if !errors.Is(err, statestore.ErrNotFound) {
+		// Store trouble: leave the state alone rather than guess which task is live.
+		return
+	}
+
+	tasks, err := s.store.ListTasks(ctx, projectID)
+	if err != nil {
+		return
+	}
+	for _, t := range tasks {
+		if t.Status != registry.StatusRunning || t.ID == leasedTaskID {
+			continue
+		}
+		id := t.ID
+		if err := s.updateTask(ctx, id, func(t *statestore.Task) {
+			// Re-check under the read-modify-write: a lease may have been acquired in between.
+			if t.Status == registry.StatusRunning {
+				t.Status = registry.StatusReady
+			}
+		}); err != nil {
+			if s.logger != nil {
+				s.logger.WarnContext(ctx, "agent lease: could not revert phantom running task",
+					"project", projectID, "task", id, "err", err)
+			}
+			continue
+		}
+		if s.logger != nil {
+			s.logger.InfoContext(ctx, "agent lease: reverted a phantom running task (running, but no lease behind it)",
+				"project", projectID, "task", id)
+		}
+	}
 }
 
 // updateTask re-reads the task and applies mut, persisting the result (mirroring the
