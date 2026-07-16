@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/everva/conductor-platform/internal/events"
 	"github.com/everva/conductor-platform/internal/statestore"
@@ -500,6 +502,43 @@ func TestAgentResult_Blocked_PersistsFindingsToAcceptance(t *testing.T) {
 	sc2, _ := store.GetScenario(ctx, "S-1")
 	if len(sc2.Acceptance) != 3 {
 		t.Fatalf("re-post must be idempotent (deduped), got %v", sc2.Acceptance)
+	}
+}
+
+// TestAgentResult_Blocked_DecisionCarriesFindings proves the findings ride the KindDecision event,
+// not only the scenario acceptance: a held "needs user" task must be triage-able straight from the
+// event stream — the director sees WHY it blocked (the reviewer's actual "because X, Y"), not just
+// the one-line summary. Before this, the decision payload was {result, summary, checks} and the
+// director's "needs user" queue was a black box.
+func TestAgentResult_Blocked_DecisionCarriesFindings(t *testing.T) {
+	store := statestore.NewMemoryStore()
+	bus := events.NewMemoryBus()
+	s := &apiServer{store: store, bus: bus, token: testToken, clock: fixedClock}
+	ctx := context.Background()
+	mustCreate(t, store.CreateProject(ctx, statestore.Project{ID: "p", Repo: "o/p", BaseBranch: "main", Readiness: "ready"}))
+	mustCreate(t, store.CreateScenario(ctx, statestore.Scenario{ID: "S-1", ProjectID: "p", Title: "t", Acceptance: []string{"orig"}}))
+	mustCreate(t, store.CreateTask(ctx, statestore.Task{ID: "T-1", ProjectID: "p", Lane: "backend", Tier: "T2", Status: "running", ScenarioID: "S-1"}))
+
+	body := `{"result":"changes-requested","summary":"review unresolved","findings":["file.tsx:10 — fabricated count","file.tsx:20 — missing aria-checked"]}`
+	if rec := doBody(t, s, http.MethodPost, "/projects/p/agent/tasks/T-1/result", bearer(), body); rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	evs, err := bus.ListEvents(ctx, events.Filter{Task: "T-1", Kind: events.KindDecision}, time.Time{}, 10)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(evs) == 0 {
+		t.Fatal("no KindDecision event was published for the blocked task")
+	}
+	dec := evs[len(evs)-1]
+	raw, ok := dec.Payload["findings"]
+	if !ok {
+		t.Fatalf("decision payload carries no findings — the block is a black box; payload=%v", dec.Payload)
+	}
+	joined := fmt.Sprint(raw)
+	if !strings.Contains(joined, "fabricated count") || !strings.Contains(joined, "missing aria-checked") {
+		t.Fatalf("decision findings do not carry the reviewer's report: %v", raw)
 	}
 }
 
