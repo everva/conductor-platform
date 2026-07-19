@@ -480,8 +480,15 @@ func (s *apiServer) handleAgentResult(w http.ResponseWriter, r *http.Request) {
 	for _, c := range req.Checks {
 		checks = append(checks, map[string]any{"name": c.Name, "result": c.Result, "evidence": c.Evidence})
 	}
-	s.publishAgentEvent(ctx, id, taskID, events.PhaseReview, events.KindDecision,
-		map[string]any{"result": result, "summary": req.Summary, "checks": checks})
+	// Carry the unresolved reviewer/gate findings ON the decision so a held "needs user" task is
+	// triage-able straight from the event stream: the director sees WHY it blocked (the reviewer's
+	// actual "because X, Y"), not just the one-line summary. They are ALSO persisted onto the
+	// scenario acceptance below (for the next re-develop) — that seam did not surface them here.
+	decision := map[string]any{"result": result, "summary": req.Summary, "checks": checks}
+	if len(req.Findings) > 0 {
+		decision["findings"] = req.Findings
+	}
+	s.publishAgentEvent(ctx, id, taskID, events.PhaseReview, events.KindDecision, decision)
 
 	if result != "pass" {
 		// Never fake-green: a failed gate blocks the task (re-runnable), never done. Persist the
