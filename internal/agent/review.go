@@ -29,9 +29,11 @@ import (
 
 // MaxReviewRounds caps the re-develop → re-verify → re-review loop after the first review. A
 // genuinely-unresolved review (still changes-requested after the cap) holds for the director
-// rather than looping forever. Raised from 2 → 8: a task the third-eye rejects a couple of times
-// is normal and should keep self-correcting, not escalate to the director prematurely.
-const MaxReviewRounds = 8
+// rather than looping forever. Tuned to 4: 2 escalated prematurely (a couple of third-eye
+// rejections is normal and should keep self-correcting), but 8 wasted rounds grinding on a
+// genuinely-stuck task (a false-positive or an unsatisfiable finding no self-correction can
+// resolve) before finally holding — 4 mirrors the natural human convergence (3–4 attempts).
+const MaxReviewRounds = 4
 
 // reviewTimeout bounds a single third-eye review run (read the diff + acceptance, reason, emit the
 // verdict JSON). Tighter than develop/enhance — the reviewer only reads a bounded patch, it does
@@ -202,9 +204,10 @@ func writeReviewFeedback(wsPath string, r engine.ReviewResult) error {
 // MaxGateRounds caps the re-develop → re-verify self-correction loop after the DETERMINISTIC gate
 // (build/lint/parity) first rejects the change. The AGENT fixes the gate failure itself; if the
 // gate is still failing after the cap, it holds for the director (needs user) rather than looping
-// forever. Mirrors MaxReviewRounds. Raised from 2 → 8: the common backend failure is an invented
-// setup helper that takes several rounds to isolate — 2 rounds escalated too eagerly.
-const MaxGateRounds = 8
+// forever. Mirrors MaxReviewRounds. Tuned to 4: 2 escalated too eagerly (the common backend
+// failure — an invented setup helper — takes several rounds to isolate), but 8 spun uselessly on
+// a gate no self-correction could satisfy before finally holding. 4 matches human convergence.
+const MaxGateRounds = 4
 
 // writeGateFeedback writes the DETERMINISTIC gate's failure into the worktree as .conductor/GATE.md
 // so the re-develop performer reads exactly which build/lint/parity errors it MUST fix — and a
