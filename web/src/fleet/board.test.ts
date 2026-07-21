@@ -43,6 +43,7 @@ describe("buildBoard bucketing", () => {
         task({ id: "T-block", project_id: "p", status: "blocked" }),
         task({ id: "T-done", project_id: "p", status: "done" }),
         task({ id: "T-reject", project_id: "p", status: "rejected" }),
+        task({ id: "T-cancel", project_id: "p", status: "cancelled" }),
       ],
     };
     const board = buildBoard(tasks, {}, []);
@@ -55,6 +56,13 @@ describe("buildBoard bucketing", () => {
     // done + rejected are both terminal → the Done column (a rejected held task left the queue
     // WITHOUT merging, so it is NOT in Needs-Review and must not read as a fresh Ready task).
     expect(board.columns.done.map((c) => c.task.id)).toEqual(["T-done", "T-reject"]);
+    // A cancelled task is terminal debris — it must not appear in ANY column (regression:
+    // it used to fall through columnFor's default arm into Ready, so N cancelled orphans
+    // showed as "Ready N" of pure noise).
+    const allShown = Object.values(board.columns)
+      .flat()
+      .map((c) => c.task.id);
+    expect(allShown).not.toContain("T-cancel");
   });
 
   it("treats a leased task as running regardless of stored status, with its host", () => {
