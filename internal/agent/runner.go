@@ -159,6 +159,38 @@ const statusAwaitingApproval = "awaiting-approval"
 // wall no retry can clear. One free self-heal retry, then block for the director.
 const MaxMergeAttempts = 2
 
+// MaxNoVerdictAttempts caps how many CONSECUTIVE runs of ONE task may end with NO VERDICT before
+// the agent finally reports it blocked.
+//
+// A run that produces no verdict produces no EVIDENCE. The performer never judged the code — it
+// was walled by a usage limit, killed by the host's OOM/swap, cut off by a DNS blip, or timed out.
+// Reporting that as `blocked` tells the director "this task needs your review", which is a lie:
+// there is nothing to review. It also POISONS the queue — on 2026-07-11 a weekly usage limit turned
+// 21 backend tasks into `blocked` in half an hour, all with the same summary ("malformed verdict:
+// no result-keyed JSON object in output"), none of them a defect. The board said 25 need-review;
+// 21 of them were the wall, not the work.
+//
+// So: no verdict ⇒ no blocking. The task goes back to ready (the deferred lease-release reverts
+// running→ready) and is retried. Only when ONE task keeps producing nothing WHILE OTHER TASKS ARE
+// FINE — i.e. the environment is demonstrably healthy and this task alone is unworkable — is a
+// block honest, and then it carries the performer's actual last words as evidence.
+const MaxNoVerdictAttempts = 3
+
+// EnvSuspectTasks is how many DISTINCT tasks must fail with no verdict, back to back, before the
+// agent concludes the fault is the ENVIRONMENT rather than any task.
+//
+// This is the guard that makes MaxNoVerdictAttempts safe. Without it, a walled account would simply
+// burn every task's 3 attempts and block them all anyway — the same 21 fake reviews, three times
+// slower. Two different tasks failing to produce a verdict in a row is not a coincidence about the
+// code; it is a statement about the machine or the account. In that state the agent blocks NOTHING
+// and backs off, leaving the queue intact for when the wall clears.
+const EnvSuspectTasks = 2
+
+// noVerdictBackoff is the short pause after a SINGLE no-verdict run. The task went straight back to
+// ready, so without a pause the next lease re-picks it instantly and spins against whatever just
+// broke. Long enough to let a blip pass, short enough that a healthy fleet loses no throughput.
+const noVerdictBackoff = 90 * time.Second
+
 // Runner is the host-agent's one-task orchestrator.
 type Runner struct {
 	gw          Gateway
@@ -174,6 +206,13 @@ type Runner struct {
 	// Loop drives RunOnce sequentially.
 	mu         sync.Mutex
 	mergeFails map[string]int
+
+	// noVerdict counts CONSECUTIVE no-verdict runs per task ID, and noVerdictTasks holds the
+	// DISTINCT tasks in the current no-verdict streak. Both reset the moment any run produces a
+	// verdict — that success is the proof the environment works. Together they answer the only
+	// question that matters when a run comes back empty: is this task broken, or is the machine?
+	noVerdict      map[string]int
+	noVerdictTasks map[string]struct{}
 }
 
 // Outcome classifies what RunOnce did, for the loop + logging.
@@ -189,6 +228,10 @@ const (
 	// released WITHOUT a verdict (reverts running→ready, gateway M1) so it is re-picked after
 	// the window resets; the Loop backs off (RateLimitBackoff) before the next lease.
 	OutcomeRateLimited Outcome = "rate-limited"
+	// OutcomeNoVerdict: the run produced no verdict at all, so it produced no evidence. The task was
+	// released WITHOUT a verdict (reverts running→ready) and will be retried; nothing is blocked. The
+	// Loop backs off — briefly for a one-off, long once the environment itself looks suspect.
+	OutcomeNoVerdict Outcome = "no-verdict"
 )
 
 // New returns a Runner over the gateway + executor.
@@ -210,7 +253,7 @@ func New(gw Gateway, ex Executor, cfg Config) *Runner {
 		rateBackoff = 10 * time.Minute
 	}
 	return &Runner{gw: gw, ex: ex, cfg: cfg, log: log, poll: poll, progress: prog, rateBackoff: rateBackoff,
-		mergeFails: map[string]int{}}
+		mergeFails: map[string]int{}, noVerdict: map[string]int{}, noVerdictTasks: map[string]struct{}{}}
 }
 
 // RunOnce leases at most one task and drives it to a terminal outcome (merged,
@@ -262,10 +305,57 @@ func (r *Runner) RunOnce(ctx context.Context) (Outcome, error) {
 			r.report(ctx, task.ID, "develop", "rate-limited", map[string]any{"task": task.ID, "error": err.Error()})
 			return OutcomeRateLimited, nil
 		}
-		// An infra failure (provision/develop/verify error) is reported as blocked —
-		// never fake-green — so the task is re-runnable, not silently lost.
-		r.log.Warn("agent: run failed; reporting blocked", "task", task.ID, "err", err)
-		out = RunOutcome{Result: "blocked", Summary: "agent run failed: " + err.Error()}
+		// NO VERDICT ⇒ NO EVIDENCE ⇒ NO REVIEW. Reaching here means the pipeline broke before the
+		// performer judged anything: it was walled, killed, timed out or could not even provision.
+		// This used to be reported as `blocked`, which put the task in the director's review queue
+		// under a summary that describes the harness ("malformed verdict: no result-keyed JSON
+		// object in output"), not the code. It is not a defect and it is not reviewable.
+		//
+		// Decide which of two very different things just happened, and never guess:
+		//   * the ENVIRONMENT is down (account walled, host thrashing, DNS gone) — then more than
+		//     one task fails this way back to back, and NOTHING may be blocked; back off and wait.
+		//   * THIS task alone cannot produce a verdict while others are landing fine — then, and
+		//     only then, block it, carrying the performer's actual last words as the evidence.
+		r.mu.Lock()
+		r.noVerdict[task.ID]++
+		r.noVerdictTasks[task.ID] = struct{}{}
+		perTask, distinct := r.noVerdict[task.ID], len(r.noVerdictTasks)
+		r.mu.Unlock()
+
+		envSuspect := distinct >= EnvSuspectTasks
+		switch {
+		case envSuspect:
+			r.log.Warn("agent: no verdict, and it is not the task — the environment is failing; blocking NOTHING",
+				"task", task.ID, "distinct_tasks_failing", distinct, "err", err)
+			r.report(ctx, task.ID, "develop", "no-verdict", map[string]any{
+				"task": task.ID, "error": err.Error(), "distinct_tasks_failing": distinct,
+				"verdict": "environment suspected — task returned to ready, nothing blocked",
+			})
+			return OutcomeNoVerdict, nil
+		case perTask < MaxNoVerdictAttempts:
+			r.log.Warn("agent: no verdict; returning the task to ready and retrying (not a review item)",
+				"task", task.ID, "attempt", perTask, "of", MaxNoVerdictAttempts, "err", err)
+			r.report(ctx, task.ID, "develop", "no-verdict", map[string]any{
+				"task": task.ID, "error": err.Error(), "attempt": perTask, "max": MaxNoVerdictAttempts,
+			})
+			return OutcomeNoVerdict, nil
+		default:
+			// Earned: this task, and only this task, has come back empty MaxNoVerdictAttempts times
+			// in a row while the environment kept working. Now a human should look — and the summary
+			// says what the performer actually said, not what the parser wished for.
+			r.log.Warn("agent: this task alone never produces a verdict; reporting blocked",
+				"task", task.ID, "attempts", perTask, "err", err)
+			out = RunOutcome{Result: "blocked", Summary: fmt.Sprintf(
+				"no verdict in %d consecutive runs while other tasks succeeded — the developer never judged this task: %s",
+				perTask, err.Error())}
+		}
+	} else {
+		// A verdict exists. Whatever it says, the pipeline worked — which is the proof that the
+		// environment is healthy. Clear both counters so an old wall cannot leak into a later block.
+		r.mu.Lock()
+		delete(r.noVerdict, task.ID)
+		r.noVerdictTasks = map[string]struct{}{}
+		r.mu.Unlock()
 	}
 	// Review parity: publish the branch-vs-base diff so the director can SEE the change before
 	// approving. The bounded summary rides a KindDiff event (Session timeline + board diff size);
@@ -467,6 +557,21 @@ func (r *Runner) Loop(ctx context.Context, idle time.Duration) error {
 		case OutcomeRateLimited:
 			r.log.Warn("agent: rate-limited; backing off before next lease", "backoff", r.rateBackoff.String())
 			pause = r.rateBackoff
+		case OutcomeNoVerdict:
+			// The task is back in the queue, so looping straight into the next lease would re-pick it
+			// instantly and spin against whatever just broke. Back off — hard once a SECOND task has
+			// failed the same way, because then it is the environment and only time (or an operator)
+			// will fix it. A single blip only pauses briefly so a healthy fleet keeps its throughput.
+			r.mu.Lock()
+			distinct := len(r.noVerdictTasks)
+			r.mu.Unlock()
+			if distinct >= EnvSuspectTasks {
+				pause = r.rateBackoff
+				r.log.Warn("agent: no verdict from several tasks — treating the environment as down; backing off",
+					"distinct_tasks_failing", distinct, "backoff", pause.String())
+			} else {
+				pause = noVerdictBackoff
+			}
 		}
 		if pause > 0 {
 			select {

@@ -139,7 +139,9 @@ function leaseHostByTask(leasesByProject: Record<string, Lease[]>): Map<string, 
 // in-store "running" window is brief). Otherwise it maps by status: awaiting-
 // approval/blocked → the director's Needs-Review lane; done/rejected → Done (both
 // terminal — a rejected held task left the queue WITHOUT merging); everything else
-// (todo/ready/unknown) → Ready.
+// (todo/ready/unknown) → Ready. CANCELLED tasks never reach here — they are terminal
+// debris excluded from the board upstream (see buildBoard / needsReviewCount); were
+// they to fall through, the default arm would wrongly bucket them into Ready.
 function columnFor(task: Task, leased: boolean): BoardColumnKey {
   if (leased) {
     return "running";
@@ -170,6 +172,9 @@ export function needsReviewCount(
   let n = 0;
   for (const tasks of Object.values(tasksByProject)) {
     for (const t of tasks) {
+      if (t.status === "cancelled") {
+        continue;
+      }
       if (columnFor(t, hostByTask.has(t.id)) === "needs-review") {
         n++;
       }
@@ -199,6 +204,15 @@ export function buildBoard(
   const allTasks: Task[] = [];
   for (const tasks of Object.values(tasksByProject)) {
     for (const t of tasks) {
+      // Cancelled tasks are terminal debris — a mistakenly-filed or superseded task
+      // that was terminally cancelled (e.g. a re-drive landed the feature under a new
+      // id, leaving the original cancelled). They are NOT a lifecycle state a director
+      // acts on, so they never belong on the board. Without this guard, columnFor's
+      // default arm bucketed every cancelled task into Ready, so a project with N
+      // cancelled orphans showed "Ready N" of pure debris.
+      if (t.status === "cancelled") {
+        continue;
+      }
       allTasks.push(t);
     }
   }
