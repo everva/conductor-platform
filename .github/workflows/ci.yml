@@ -14,9 +14,23 @@ on:
 permissions:
   contents: read
 
+# FORK GUARD (2026-09-17) - every job below is gated so that a pull_request opened
+# from a FORK never executes on the org's self-hosted runners. This repository is
+# PUBLIC and the org runner group `linux` has allows_public_repositories: true, so an
+# unguarded fork PR would run attacker-controlled code on the k8s-2 hosts as the
+# (root-equivalent) self-hosted runner user.
+#
+# The `github.event_name != 'pull_request'` half is REQUIRED, not belt-and-braces:
+# outside a pull_request event `github.event.pull_request.head.repo.full_name` is
+# null, so the bare comparison on its own evaluates false and would silently disable
+# the push-triggered runs as well.
 jobs:
   gate:
     name: build / test / vet / lint
+    # Fork guard - see the FORK GUARD note above `jobs:`.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     # Organization-level self-hosted Linux runner (org-runner-1, labels
     # self-hosted/Linux/X64) instead of GitHub-hosted ubuntu-latest.
     runs-on: [self-hosted, Linux, X64]
@@ -66,6 +80,10 @@ jobs:
   # gateway/Postgres/claude is needed — the job is hermetic.
   frontend:
     name: web cockpit (tsc / eslint / vitest / build / e2e)
+    # Fork guard - see the FORK GUARD note above `jobs:`.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     # Same org-level self-hosted Linux runner as the Go gate.
     runs-on: [self-hosted, Linux, X64]
     defaults:
@@ -137,6 +155,10 @@ jobs:
   # opt-in smoke pattern used for the real-claude paths).
   editor:
     name: editor extension (tsc / eslint / vitest / esbuild)
+    # Fork guard - see the FORK GUARD note above `jobs:`.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64]
     defaults:
       run:
